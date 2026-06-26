@@ -255,6 +255,14 @@ static void* playback_thread(void *arg) {
                     current_frame = 0;
                     event_bus_publish(EV_PLAYBACK_STOP, NULL, 0);
                     goto next_song;
+                case CMD_PLAY:
+                    /* switch to new track */
+                    if (decoder) { decoder_close(decoder); decoder = NULL; }
+                    if (audio)   { audio_output_destroy(audio); audio = NULL; }
+                    state = PS_STOPPED;
+                    /* push a fresh CMD_PLAY for the outer loop */
+                    cmd_queue_push(&g_cmd_queue, &icmd);
+                    goto next_song;
                 case CMD_SEEK:
                     if (decoder && total_frames > 0) {
                         int target = icmd.seek_frame * samplerate;
