@@ -35,6 +35,7 @@ set(CORE_SOURCES
   src/core/decoder_manager.c
   src/core/audio_output_mgr.c
   src/core/playback_coordinator.c
+  src/core/playlist_manager.c
 )
 
 set(INFRA_SOURCES

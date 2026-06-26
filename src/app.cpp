@@ -20,6 +20,7 @@ extern "C" {
 #include "core/playback_coordinator.h"
 #include "core/music_source_manager.h"
 #include "core/music_source.h"
+#include "core/playlist_manager.h"
 #include "plugins/music_sources/local/local_source.h"
 }
 
@@ -75,6 +76,18 @@ static void ev_playback_stop(const BusEvent *ev, void *data) {
 
 static void ev_playback_finish(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
+    /* Check for auto-advance based on loop mode */
+    int next = playlist_manager_advance();
+    if (next >= 0) {
+        const SongInfo *song = playlist_manager_get(next);
+        if (song && song->id) {
+            StateStore::instance().set_selected_index(next);
+            StateStore::instance().set_current_song(*song);
+            event_bus_publish(EV_PLAYBACK_START,
+                              (void*)song->id, strlen(song->id) + 1);
+            return;
+        }
+    }
     StateStore::instance().set_playback_state(PlaybackState::Stopped);
 }
 
@@ -123,6 +136,11 @@ int run_app(int argc, char **argv) {
         int vol = config_get_int(cfg, "audio.volume", -1);
         if (vol >= 0 && vol <= 100)
             StateStore::instance().set_volume(vol);
+        int loop = config_get_int(cfg, "playback.loop_mode", 0);
+        if (loop >= 0 && loop <= 2) {
+            playlist_manager_set_loop_mode(loop);
+            StateStore::instance().set_loop_mode((LoopMode)loop);
+        }
     }
 
     /* music sources */
@@ -160,8 +178,24 @@ int run_app(int argc, char **argv) {
             }
         }
         if (!pl.empty()) {
-            StateStore::instance().set_playlist(pl, 0);
-            LOG_INFO("Auto-scanned %zu songs from config", pl.size());
+            size_t n = pl.size();
+            /* Transfer ownership to playlist_manager */
+            SongInfo *arr = (SongInfo*)malloc(n * sizeof(SongInfo));
+            for (size_t i = 0; i < n; i++) {
+                song_info_copy(&arr[i], &pl[i]);
+                song_info_free(&pl[i]);
+            }
+            pl.clear();
+            playlist_manager_set_playlist(arr, (int)n, "local");
+            /* Mirror to StateStore for UI */
+            std::vector<SongInfo> ui_pl;
+            for (size_t i = 0; i < n; i++) {
+                SongInfo copy;
+                song_info_copy(&copy, &arr[i]);
+                ui_pl.push_back(copy);
+            }
+            StateStore::instance().set_playlist(ui_pl, 0);
+            LOG_INFO("Auto-scanned %zu songs from config", n);
         }
     }
 
@@ -255,7 +289,9 @@ int run_app(int argc, char **argv) {
         if (event == ftxui::Event::Return) {
             const AppState &s = state.state();
             if (s.playlist.empty()) return true;
-            const SongInfo &sel = s.playlist[s.selected_index];
+            int idx = s.selected_index;
+            playlist_manager_set_index(idx);
+            const SongInfo &sel = s.playlist[idx];
             const char *path = sel.id ? sel.id : "";
             StateStore::instance().set_current_song(sel);
             event_bus_publish(EV_PLAYBACK_START,
@@ -291,33 +327,29 @@ int run_app(int argc, char **argv) {
             return true;
         }
 
-        /* next / prev track — save index before mutating state */
+        /* next / prev track — route through playlist_manager */
         if (event == ftxui::Event::Character('n')) {
-            const AppState &s = state.state();
-            int cur = s.selected_index;
-            if (!s.playlist.empty() && cur < (int)s.playlist.size() - 1) {
-                int next = cur + 1;
-                StateStore::instance().set_selected_index(next);
-                const char *path = s.playlist[next].id;
-                if (path) {
-                    StateStore::instance().set_current_song(s.playlist[next]);
+            int next = playlist_manager_advance();
+            if (next >= 0) {
+                const SongInfo *song = playlist_manager_get(next);
+                if (song && song->id) {
+                    StateStore::instance().set_selected_index(next);
+                    StateStore::instance().set_current_song(*song);
                     event_bus_publish(EV_PLAYBACK_START,
-                                      (void*)path, strlen(path) + 1);
+                                      (void*)song->id, strlen(song->id) + 1);
                 }
             }
             return true;
         }
         if (event == ftxui::Event::Character('p')) {
-            const AppState &s = state.state();
-            int cur = s.selected_index;
-            if (cur > 0) {
-                int prev = cur - 1;
-                StateStore::instance().set_selected_index(prev);
-                const char *path = s.playlist[prev].id;
-                if (path) {
-                    StateStore::instance().set_current_song(s.playlist[prev]);
+            int prev = playlist_manager_retreat();
+            if (prev >= 0) {
+                const SongInfo *song = playlist_manager_get(prev);
+                if (song && song->id) {
+                    StateStore::instance().set_selected_index(prev);
+                    StateStore::instance().set_current_song(*song);
                     event_bus_publish(EV_PLAYBACK_START,
-                                      (void*)path, strlen(path) + 1);
+                                      (void*)song->id, strlen(song->id) + 1);
                 }
             }
             return true;
