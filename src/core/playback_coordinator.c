@@ -119,6 +119,20 @@ static void on_seek(const BusEvent *ev, void *ud) {
 /* ── Playback thread ────────────────────────────────── */
 typedef enum { PS_STOPPED, PS_PLAYING, PS_PAUSED } PlayState;
 
+/* ── Try to pop a command without blocking. Returns false if empty. ── */
+static bool cmd_queue_try_pop(CmdQueue *q, Command *out) {
+    bool got = false;
+    pthread_mutex_lock(&q->mutex);
+    if (q->count > 0) {
+        *out = q->items[q->head];
+        q->head = (q->head + 1) % CMD_QUEUE_SIZE;
+        q->count--;
+        got = true;
+    }
+    pthread_mutex_unlock(&q->mutex);
+    return got;
+}
+
 static void* playback_thread(void *arg) {
     (void)arg;
     LOG_INFO("Playback thread started");
@@ -126,100 +140,138 @@ static void* playback_thread(void *arg) {
     Decoder      *decoder = NULL;
     AudioOutput  *audio   = NULL;
     PlayState     state   = PS_STOPPED;
-    /* read defaults from config, overridden per-file */
     Config *cfg = config_global();
     int     samplerate  = cfg ? config_get_int(cfg, "audio.sample_rate", 44100) : 44100;
     int     channels    = cfg ? config_get_int(cfg, "audio.channels", 2) : 2;
     int     current_frame = 0;
     int     total_frames  = -1;
 
-    int16_t      *pcm_buf = (int16_t*)malloc(
-                               (size_t)FRAMES_PER_CHUNK * 2 * sizeof(int16_t));
+    int16_t *pcm_buf = (int16_t*)malloc(
+        (size_t)FRAMES_PER_CHUNK * 2 * sizeof(int16_t));
     if (!pcm_buf) {
         LOG_ERROR("OOM in playback thread");
         return NULL;
     }
 
     while (g_running) {
-        Command cmd = cmd_queue_pop(&g_cmd_queue);
+        /* ── Wait for next command (blocking when not playing) ── */
+        Command cmd;
+        bool has_cmd;
 
-        switch (cmd.type) {
-        case CMD_QUIT:
-            goto cleanup;
-        case CMD_STOP:
-            if (decoder) { decoder_close(decoder); decoder = NULL; }
-            if (audio)   { audio_output_destroy(audio); audio = NULL; }
-            state = PS_STOPPED;
-            current_frame = 0;
-            event_bus_publish(EV_PLAYBACK_STOP, NULL, 0);
-            break;
-
-        case CMD_PLAY: {
-            /* close previous */
-            if (decoder) { decoder_close(decoder); decoder = NULL; }
-            if (audio)   { audio_output_destroy(audio); audio = NULL; }
-
-            decoder = decoder_open(cmd.path);
-            if (!decoder) {
-                LOG_ERROR("Cannot open: %s", cmd.path);
-                event_bus_publish(EV_PLAYBACK_ERROR, NULL, 0);
-                break;
-            }
-            DecoderInfo info;
-            decoder_get_info(decoder, &info);
-            samplerate  = info.sample_rate;
-            channels    = info.channels;
-            total_frames = info.total_frames;
-            current_frame = 0;
-
-            audio = audio_output_create(samplerate, channels);
-            if (!audio) {
-                decoder_close(decoder);
-                decoder = NULL;
-                event_bus_publish(EV_PLAYBACK_ERROR, NULL, 0);
-                break;
-            }
-
-            state = PS_PLAYING;
-            event_bus_publish(EV_PLAYBACK_START, NULL, 0);
-            break;
+        if (state == PS_PLAYING) {
+            has_cmd = cmd_queue_try_pop(&g_cmd_queue, &cmd);
+        } else {
+            cmd = cmd_queue_pop(&g_cmd_queue);
+            has_cmd = true;
         }
 
-        case CMD_PAUSE:
-            if (state == PS_PLAYING) {
-                state = PS_PAUSED;
-                event_bus_publish(EV_PLAYBACK_PAUSE, NULL, 0);
-            }
-            break;
+        if (has_cmd) {
+            switch (cmd.type) {
+            case CMD_QUIT:
+                goto cleanup;
+            case CMD_STOP:
+                if (decoder) { decoder_close(decoder); decoder = NULL; }
+                if (audio)   { audio_output_destroy(audio); audio = NULL; }
+                state = PS_STOPPED;
+                current_frame = 0;
+                event_bus_publish(EV_PLAYBACK_STOP, NULL, 0);
+                continue;
 
-        case CMD_RESUME:
-            if (state == PS_PAUSED) {
+            case CMD_PLAY: {
+                if (decoder) { decoder_close(decoder); decoder = NULL; }
+                if (audio)   { audio_output_destroy(audio); audio = NULL; }
+
+                decoder = decoder_open(cmd.path);
+                if (!decoder) {
+                    LOG_ERROR("Cannot open: %s", cmd.path);
+                    event_bus_publish(EV_PLAYBACK_ERROR, NULL, 0);
+                    continue;
+                }
+                DecoderInfo info;
+                decoder_get_info(decoder, &info);
+                samplerate   = info.sample_rate;
+                channels     = info.channels;
+                total_frames = info.total_frames;
+                current_frame = 0;
+
+                audio = audio_output_create(samplerate, channels);
+                if (!audio) {
+                    decoder_close(decoder);
+                    decoder = NULL;
+                    event_bus_publish(EV_PLAYBACK_ERROR, NULL, 0);
+                    continue;
+                }
+
                 state = PS_PLAYING;
-                event_bus_publish(EV_PLAYBACK_RESUME, NULL, 0);
+                event_bus_publish(EV_PLAYBACK_START, NULL, 0);
+                continue;
             }
-            break;
 
-        case CMD_SEEK:
-            if (decoder && total_frames > 0) {
-                int target = cmd.seek_frame * samplerate;
-                if (target < 0) target = 0;
-                if (target >= total_frames) target = total_frames - 1;
-                decoder_seek(decoder, target);
-                current_frame = target;
+            case CMD_PAUSE:
+                if (state == PS_PLAYING) {
+                    state = PS_PAUSED;
+                    event_bus_publish(EV_PLAYBACK_PAUSE, NULL, 0);
+                }
+                continue;
+            case CMD_RESUME:
+                if (state == PS_PAUSED) {
+                    state = PS_PLAYING;
+                    event_bus_publish(EV_PLAYBACK_RESUME, NULL, 0);
+                }
+                continue;
+            case CMD_SEEK:
+                /* seek has no effect when not playing */
+                continue;
+            default:
+                break;
             }
-            break;
-
-        case CMD_NONE:
-            break;
         }
 
-        /* ── Decode loop (while playing, yield to commands periodically) ── */
+        /* ── Decode + handle commands inline ── */
+        /* This loop runs while playing. Commands are peeked (non-blocking)
+           and processed inline — the loop never exits just to "check for
+           commands", avoiding audio starvation. */
         int64_t last_progress_ms = 0;
 
         while (state == PS_PLAYING && decoder && audio && g_running) {
+            /* Peek for commands (non-blocking) */
+            Command icmd;
+            if (cmd_queue_try_pop(&g_cmd_queue, &icmd)) {
+                switch (icmd.type) {
+                case CMD_PAUSE:
+                    state = PS_PAUSED;
+                    event_bus_publish(EV_PLAYBACK_PAUSE, NULL, 0);
+                    goto next_song;
+                case CMD_RESUME:
+                    /* should not happen while playing */
+                    break;
+                case CMD_STOP:
+                    if (decoder) { decoder_close(decoder); decoder = NULL; }
+                    if (audio)   { audio_output_destroy(audio); audio = NULL; }
+                    state = PS_STOPPED;
+                    current_frame = 0;
+                    event_bus_publish(EV_PLAYBACK_STOP, NULL, 0);
+                    goto next_song;
+                case CMD_SEEK:
+                    if (decoder && total_frames > 0) {
+                        int target = icmd.seek_frame * samplerate;
+                        if (target < 0) target = 0;
+                        if (target >= total_frames)
+                            target = total_frames - 1;
+                        decoder_seek(decoder, target);
+                        current_frame = target;
+                    }
+                    break;
+                case CMD_QUIT:
+                    goto cleanup;
+                default:
+                    break;
+                }
+            }
+
+            /* Decode next chunk */
             int frames = decoder_decode(decoder, pcm_buf, FRAMES_PER_CHUNK);
             if (frames <= 0) {
-                /* EOF */
                 state = PS_STOPPED;
                 event_bus_publish(EV_PLAYBACK_FINISH, NULL, 0);
                 break;
@@ -229,26 +281,21 @@ static void* playback_thread(void *arg) {
             if (written > 0)
                 current_frame += written;
 
-            /* check for new commands (non-blocking) */
-            pthread_mutex_lock(&g_cmd_queue.mutex);
-            if (g_cmd_queue.count > 0) {
-                pthread_mutex_unlock(&g_cmd_queue.mutex);
-                break; /* exit decode loop to process command */
-            }
-            pthread_mutex_unlock(&g_cmd_queue.mutex);
-
-            /* progress event */
+            /* Progress event */
             int64_t now_ms = (int64_t)((double)current_frame / samplerate * 1000);
             if (now_ms - last_progress_ms >= PROGRESS_INTERVAL_MS) {
                 last_progress_ms = now_ms;
-                /* pack progress as two ints: current_sec, total_sec */
                 int progress_data[2] = {
                     current_frame / samplerate,
                     total_frames > 0 ? total_frames / samplerate : 0
                 };
-                event_bus_publish(EV_PROGRESS_UPDATE, progress_data, sizeof(progress_data));
+                event_bus_publish(EV_PROGRESS_UPDATE,
+                                  progress_data, sizeof(progress_data));
             }
         }
+
+next_song:
+        ; /* fall through to outer loop — wait for next command */
     }
 
 cleanup:
