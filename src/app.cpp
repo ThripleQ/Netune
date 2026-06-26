@@ -127,7 +127,10 @@ int run_app(int argc, char **argv) {
     auto screen = ScreenInteractive::Fullscreen();
     auto &state = StateStore::instance();
 
+    /* Poll event bus every render frame — essential for key events to reach
+       the playback coordinator thread. */
     auto component = Renderer([&]() -> Element {
+        event_bus_poll();
         const AppState &s = state.state();
 
         /* state label */
@@ -197,17 +200,16 @@ int run_app(int argc, char **argv) {
                 }
             }
             if (scan_dirs.empty()) {
-                /* fallback to HOME */
                 const char *home = getenv("HOME");
                 if (home) scan_dirs.push_back(home);
             }
-            bool found = false;
+            /* scan ALL dirs, aggregate results */
+            std::vector<SongInfo> pl;
+            int total = 0;
             for (auto &dir : scan_dirs) {
                 SearchResult result;
                 memset(&result, 0, sizeof(result));
-                if (music_source_search("local", dir.c_str(), 0, 0, &result) == 0
-                    && result.count > 0) {
-                    std::vector<SongInfo> pl;
+                if (music_source_search("local", dir.c_str(), 0, 0, &result) == 0) {
                     for (int j = 0; j < result.count; j++) {
                         SongInfo copy;
                         song_info_copy(&copy, &result.songs[j]);
@@ -215,14 +217,15 @@ int run_app(int argc, char **argv) {
                         song_info_free(&result.songs[j]);
                     }
                     free(result.songs);
-                    StateStore::instance().set_playlist(pl, 0);
-                    LOG_INFO("Scanned %s: %zu songs", dir.c_str(), pl.size());
-                    found = true;
-                    break;
+                    total += result.count;
                 }
             }
-            if (!found)
+            if (pl.empty()) {
                 LOG_WARN("No music files found");
+            } else {
+                StateStore::instance().set_playlist(pl, 0);
+                LOG_INFO("Scanned %d dirs: %zu songs", (int)scan_dirs.size(), pl.size());
+            }
             return true;
         }
 
