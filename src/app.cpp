@@ -240,7 +240,7 @@ int run_app(int argc, char **argv) {
             text(" Playlist:") | bold,
             vbox(std::move(entries)) | yframe | flex,
             separator(),
-            text(" [Enter]play  [Space]pause  [j/k]nav  [q]quit") | dim,
+            text(" [Enter]play  [Space]pause  [j/k]nav  [n/p]track  [q]quit") | dim,
         }) | border;
     });
 
@@ -288,6 +288,33 @@ int run_app(int argc, char **argv) {
             const AppState &s = state.state();
             if (s.selected_index > 0)
                 StateStore::instance().set_selected_index(s.selected_index - 1);
+            return true;
+        }
+
+        /* next / prev track */
+        if (event == ftxui::Event::Character('n')) {
+            const AppState &s = state.state();
+            if (!s.playlist.empty() &&
+                s.selected_index < (int)s.playlist.size() - 1) {
+                StateStore::instance().set_selected_index(s.selected_index + 1);
+                const SongInfo &sel = s.playlist[s.selected_index + 1];
+                const char *path = sel.id ? sel.id : "";
+                StateStore::instance().set_current_song(sel);
+                event_bus_publish(EV_PLAYBACK_START,
+                                  (void*)path, strlen(path) + 1);
+            }
+            return true;
+        }
+        if (event == ftxui::Event::Character('p')) {
+            const AppState &s = state.state();
+            if (s.selected_index > 0) {
+                StateStore::instance().set_selected_index(s.selected_index - 1);
+                const SongInfo &sel = s.playlist[s.selected_index - 1];
+                const char *path = sel.id ? sel.id : "";
+                StateStore::instance().set_current_song(sel);
+                event_bus_publish(EV_PLAYBACK_START,
+                                  (void*)path, strlen(path) + 1);
+            }
             return true;
         }
 
