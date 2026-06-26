@@ -247,6 +247,14 @@ int run_app(int argc, char **argv) {
         snprintf(buf, sizeof(buf), "%02d:%02d / %02d:%02d", m, sec, tm, tsec);
         std::string time_str = buf;
 
+        /* loop mode */
+        std::string loop_str;
+        switch (s.loop_mode) {
+        case LoopMode::None:     loop_str = "[\u2192]"; break;  /* → normal */
+        case LoopMode::Track:    loop_str = "[\u21BA]"; break;  /* ↺ track */
+        case LoopMode::Playlist: loop_str = "[\u21BB]"; break;  /* ↻ list */
+        }
+
         /* title */
         std::string title = s.current_song.title
             ? std::string(s.current_song.title) : "No track loaded";
@@ -268,13 +276,13 @@ int run_app(int argc, char **argv) {
             text(" LMusic v2.0.0 ") | bold | center,
             separator(),
             text(" " + title) | bold,
-            text(" " + state_str + "  |  " + time_str) | dim,
+            text(" " + state_str + "  " + loop_str + "  |  " + time_str) | dim,
             gauge(s.progress),
             separator(),
             text(" Playlist:") | bold,
             vbox(std::move(entries)) | yframe | flex,
             separator(),
-            text(" [Enter]play  [Space]pause  [j/k]nav  [n/p]track  [←/→]seek  [q]quit") | dim,
+            text(" [Enter]play  [Space]pause  [j/k]nav  [n/p]track  [←/→]seek  [l]loop  [q]quit") | dim,
         }) | border;
     });
 
@@ -348,6 +356,16 @@ int run_app(int argc, char **argv) {
                 if (target > s.total_time_sec) target = s.total_time_sec;
                 event_bus_publish(EV_BUFFERING_UPDATE, &target, sizeof(target));
             }
+            return true;
+        }
+
+        /* loop mode: cycle through None → Track → Playlist */
+        if (event == ftxui::Event::Character('l')) {
+            const AppState &s = state.state();
+            int next = ((int)s.loop_mode + 1) % 3;
+            playlist_manager_set_loop_mode(next);
+            StateStore::instance().set_loop_mode((LoopMode)next);
+            LOG_INFO("Loop mode: %d", next);
             return true;
         }
 
