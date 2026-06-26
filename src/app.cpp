@@ -10,6 +10,8 @@
 #include <cstring>
 #include <vector>
 #include <string>
+#include <thread>
+#include <chrono>
 
 extern "C" {
 #include "infra/log.h"
@@ -125,6 +127,18 @@ int run_app(int argc, char **argv) {
 
     /* ── FTXUI UI ───────────────────────────────── */
     auto screen = ScreenInteractive::Fullscreen();
+
+    /* UI refresh timer: FTXUI only redraws on terminal events.
+       Without this, progress bar freezes and event_bus_poll()
+       never runs during playback. */
+    std::atomic<bool> timer_active{true};
+    std::thread refresh_timer([&]() {
+        while (timer_active.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            screen.RequestAnimationFrame();
+        }
+    });
+
     auto &state = StateStore::instance();
 
     /* Poll event bus every render frame — essential for key events to reach
@@ -273,6 +287,8 @@ int run_app(int argc, char **argv) {
 
     /* ── Shutdown ───────────────────────────────── */
     LOG_INFO("Shutting down");
+    timer_active.store(false);
+    refresh_timer.join();
     event_bus_publish(EV_APP_SHUTDOWN, NULL, 0);
     playback_coordinator_shutdown();
     music_source_manager_shutdown();
