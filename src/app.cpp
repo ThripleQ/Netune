@@ -185,7 +185,7 @@ int run_app(int argc, char **argv) {
     std::atomic<bool> timer_active{true};
     std::thread refresh_timer([&]() {
         while (timer_active.load()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::this_thread::sleep_for(std::chrono::milliseconds(16)); /* ~60fps */
             screen.RequestAnimationFrame();
         }
     });

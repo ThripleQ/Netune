@@ -13,7 +13,7 @@
 
 /* ── Constants ──────────────────────────────────────── */
 #define FRAMES_PER_CHUNK 4096
-#define PROGRESS_INTERVAL_MS 100
+#define PROGRESS_INTERVAL_MS 16
 
 /* ── Commands ───────────────────────────────────────── */
 typedef enum {
