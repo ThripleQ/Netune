@@ -76,15 +76,15 @@ static void ev_playback_stop(const BusEvent *ev, void *data) {
 
 static void ev_playback_finish(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
-    /* Check for auto-advance based on loop mode */
     int next = playlist_manager_advance();
     if (next >= 0) {
-        const SongInfo *song = playlist_manager_get(next);
-        if (song && song->id) {
+        const auto &st = StateStore::instance().state();
+        if (next < (int)st.playlist.size() && st.playlist[next].id) {
             StateStore::instance().set_selected_index(next);
-            StateStore::instance().set_current_song(*song);
+            StateStore::instance().set_current_song(st.playlist[next]);
             event_bus_publish(EV_PLAYBACK_START,
-                              (void*)song->id, strlen(song->id) + 1);
+                              (void*)st.playlist[next].id,
+                              strlen(st.playlist[next].id) + 1);
             return;
         }
     }
@@ -178,24 +178,14 @@ int run_app(int argc, char **argv) {
             }
         }
         if (!pl.empty()) {
-            size_t n = pl.size();
-            /* Transfer ownership to playlist_manager */
-            SongInfo *arr = (SongInfo*)malloc(n * sizeof(SongInfo));
-            for (size_t i = 0; i < n; i++) {
-                song_info_copy(&arr[i], &pl[i]);
-                song_info_free(&pl[i]);
-            }
+            /* playlist_manager: just the count, no song data */
+            playlist_manager_set_count((int)pl.size());
+            /* StateStore: single source of truth for song data */
+            StateStore::instance().set_playlist(pl, 0);
+            /* pl items were deep-copied by set_playlist; free originals */
+            for (auto &s : pl) song_info_free(&s);
             pl.clear();
-            playlist_manager_set_playlist(arr, (int)n, "local");
-            /* Mirror to StateStore for UI */
-            std::vector<SongInfo> ui_pl;
-            for (size_t i = 0; i < n; i++) {
-                SongInfo copy;
-                song_info_copy(&copy, &arr[i]);
-                ui_pl.push_back(copy);
-            }
-            StateStore::instance().set_playlist(ui_pl, 0);
-            LOG_INFO("Auto-scanned %zu songs from config", n);
+            LOG_INFO("Auto-scanned %zu songs from config", pl.size());
         }
     }
 
@@ -373,12 +363,13 @@ int run_app(int argc, char **argv) {
         if (event == ftxui::Event::Character('n')) {
             int next = playlist_manager_advance();
             if (next >= 0) {
-                const SongInfo *song = playlist_manager_get(next);
-                if (song && song->id) {
+                const AppState &st = state.state();
+                if (next < (int)st.playlist.size() && st.playlist[next].id) {
                     StateStore::instance().set_selected_index(next);
-                    StateStore::instance().set_current_song(*song);
+                    StateStore::instance().set_current_song(st.playlist[next]);
                     event_bus_publish(EV_PLAYBACK_START,
-                                      (void*)song->id, strlen(song->id) + 1);
+                                      (void*)st.playlist[next].id,
+                                      strlen(st.playlist[next].id) + 1);
                 }
             }
             return true;
@@ -386,12 +377,13 @@ int run_app(int argc, char **argv) {
         if (event == ftxui::Event::Character('p')) {
             int prev = playlist_manager_retreat();
             if (prev >= 0) {
-                const SongInfo *song = playlist_manager_get(prev);
-                if (song && song->id) {
+                const AppState &st = state.state();
+                if (prev < (int)st.playlist.size() && st.playlist[prev].id) {
                     StateStore::instance().set_selected_index(prev);
-                    StateStore::instance().set_current_song(*song);
+                    StateStore::instance().set_current_song(st.playlist[prev]);
                     event_bus_publish(EV_PLAYBACK_START,
-                                      (void*)song->id, strlen(song->id) + 1);
+                                      (void*)st.playlist[prev].id,
+                                      strlen(st.playlist[prev].id) + 1);
                 }
             }
             return true;

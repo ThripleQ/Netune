@@ -4,36 +4,42 @@
 extern "C" {
 #endif
 
-#include "music_source.h"
-#include <stdbool.h>
-
 /* ── Loop mode (mirrors C++ LoopMode values 0-2) ── */
 #define LOOP_NONE      0
 #define LOOP_TRACK     1
 #define LOOP_PLAYLIST  2
 
-/* ── API ───────────────────────────────────────────── */
+/* ── API ─────────────────────────────────────────────
+ *
+ * playlist_manager is a lightweight navigation helper.
+ * It ONLY manages index and loop_mode — it does NOT
+ * store song data. Song data lives in StateStore (the
+ * single source of truth).
+ *
+ * Call flow:
+ *   idx = playlist_manager_advance();
+ *   if (idx >= 0) {
+ *       song = StateStore.playlist[idx];  // read data
+ *       play(song);
+ *   }
+ * ──────────────────────────────────────────────── */
+
 int  playlist_manager_init(void);
 
-/* Replace entire playlist (takes ownership of songs array) */
-void playlist_manager_set_playlist(SongInfo *songs, int count,
-                                   const char *source_name);
+void playlist_manager_set_count(int count);
+int  playlist_manager_get_count(void);
+
+/* Current index */
+void playlist_manager_set_index(int idx);
+int  playlist_manager_get_index(void);
+
+/* Loop mode */
 void playlist_manager_set_loop_mode(int mode);
 int  playlist_manager_get_loop_mode(void);
 
-/* Playlist navigation */
-int  playlist_manager_count(void);
-int  playlist_manager_current_index(void);
-const SongInfo* playlist_manager_current(void);
-const SongInfo* playlist_manager_get(int idx);
-void playlist_manager_set_index(int idx);
-
-/* Advance: returns the index of the next track to play.
-   Returns -1 if there is no next track (playlist empty or end reached
-   with LOOP_NONE). Updates internal index. */
+/* Navigation: return next/prev index, or -1 if cannot move.
+   Updates internal index on success. */
 int  playlist_manager_advance(void);
-
-/* Retreat (prev), similar logic. Returns -1 if cannot go back. */
 int  playlist_manager_retreat(void);
 
 #ifdef __cplusplus
