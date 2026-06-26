@@ -220,8 +220,11 @@ int run_app(int argc, char **argv) {
         Elements left_els;
         for (size_t i = 0; i < s.groups.size(); i++) {
             std::string label = s.groups[i].name;
-            if ((int)i == s.group_index)
-                left_els.push_back(text("> " + label) | bold | (s.active_panel == 0 ? inverted : nothing));
+            bool sel = ((int)i == s.group_index);
+            if (s.active_panel == 0 && sel)
+                left_els.push_back(text("> " + label) | bold | inverted);
+            else if (s.active_panel == 1 && sel)
+                left_els.push_back(text("  " + label) | bold);
             else
                 left_els.push_back(text("  " + label));
         }
@@ -230,8 +233,11 @@ int run_app(int argc, char **argv) {
         Elements right_els;
         for (size_t i = 0; i < s.playlist.size(); i++) {
             std::string label = s.playlist[i].title ? s.playlist[i].title : "(unknown)";
-            if ((int)i == s.selected_index)
-                right_els.push_back(text("> " + label) | bold | (s.active_panel == 1 ? inverted : nothing));
+            bool sel = ((int)i == s.selected_index);
+            if (s.active_panel == 1 && sel)
+                right_els.push_back(text("> " + label) | bold | inverted);
+            else if (s.active_panel == 0 && sel)
+                right_els.push_back(text("  " + label));
             else
                 right_els.push_back(text("  " + label));
         }
@@ -243,7 +249,7 @@ int run_app(int argc, char **argv) {
             gauge(s.progress),
             separator(),
             hbox(Elements{
-                vbox(std::move(left_els)) | yframe | flex | border,
+                vbox(std::move(left_els)) | yframe | size(WIDTH, EQUAL, 20) | border,
                 separator(),
                 vbox(std::move(right_els)) | yframe | flex | border,
             }) | flex,
@@ -267,13 +273,27 @@ int run_app(int argc, char **argv) {
 
         if (cur.active_panel == 0) {
             if (event == ftxui::Event::Character('j') || event == ftxui::Event::ArrowDown) {
-                if (cur.group_index < (int)cur.groups.size() - 1)
-                    StateStore::instance().set_group_index(cur.group_index + 1);
+                int next_grp = cur.group_index + 1;
+                if (next_grp < (int)cur.groups.size()) {
+                    StateStore::instance().set_group_index(next_grp);
+                    /* sync new group's paths to backend */
+                    std::vector<const char*> paths;
+                    for (auto &s : cur.groups[next_grp].songs) paths.push_back(s.id);
+                    playlist_manager_sync(paths.data(), (int)paths.size());
+                    playlist_manager_set_index(0);
+                }
                 return true;
             }
             if (event == ftxui::Event::Character('k') || event == ftxui::Event::ArrowUp) {
-                if (cur.group_index > 0)
-                    StateStore::instance().set_group_index(cur.group_index - 1);
+                int next_grp = cur.group_index - 1;
+                if (next_grp >= 0) {
+                    StateStore::instance().set_group_index(next_grp);
+                    /* sync new group's paths to backend */
+                    std::vector<const char*> paths;
+                    for (auto &s : cur.groups[next_grp].songs) paths.push_back(s.id);
+                    playlist_manager_sync(paths.data(), (int)paths.size());
+                    playlist_manager_set_index(0);
+                }
                 return true;
             }
         } else {
