@@ -19,7 +19,7 @@
   "music_sources": {
     "local": {
       "enabled": true,
-      "dirs": ["~/Music"]
+      "dirs": ["/home/liu/Music"]
     },
     "netease": {
       "enabled": false

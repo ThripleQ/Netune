@@ -58,11 +58,24 @@ static yyjson_val* resolve(Config *cfg, const char *key) {
     char *k = strdup(key);
     char *tok = strtok(k, ".");
     while (tok && v) {
+        /* check for array index: key[idx] */
+        int idx = -1;
+        char *bracket = strchr(tok, '[');
+        if (bracket) {
+            *bracket = '\0';
+            idx = atoi(bracket + 1);
+        }
+
         if (yyjson_is_obj(v)) {
             v = yyjson_obj_get(v, tok);
         } else {
             v = NULL;
         }
+
+        /* if array index, index into array */
+        if (v && idx >= 0 && yyjson_is_arr(v))
+            v = yyjson_arr_get(v, (size_t)idx);
+
         tok = strtok(NULL, ".");
     }
     free(k);

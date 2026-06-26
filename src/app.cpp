@@ -100,6 +100,13 @@ int run_app(int argc, char **argv) {
     event_bus_subscribe(EV_PLAYBACK_STOP,     ev_playback_stop, NULL);
     event_bus_subscribe(EV_PLAYBACK_FINISH,   ev_playback_finish, NULL);
 
+    /* load config values into state */
+    if (cfg) {
+        int vol = config_get_int(cfg, "audio.volume", -1);
+        if (vol >= 0 && vol <= 100)
+            StateStore::instance().set_volume(vol);
+    }
+
     /* music sources */
     music_source_manager_init();
     local_source_register();
@@ -177,17 +184,27 @@ int run_app(int argc, char **argv) {
 
         /* scan directory */
         if (event == ftxui::Event::Character('s')) {
-            const char *dirs[] = {
-                getenv("HOME"),
-                "/home/liu/Music",
-                "/run/media/liu",
-                NULL
-            };
+            /* build dir list from config + fallback */
+            std::vector<std::string> scan_dirs;
+            int ndirs = cfg ? config_get_array_size(cfg, "music_sources.local.dirs") : 0;
+            if (ndirs > 0) {
+                for (int i = 0; i < ndirs; i++) {
+                    char key[64];
+                    snprintf(key, sizeof(key), "music_sources.local.dirs[%d]", i);
+                    const char *d = config_get_str(cfg, key, NULL);
+                    if (d) scan_dirs.push_back(d);
+                }
+            }
+            if (scan_dirs.empty()) {
+                /* fallback to HOME */
+                const char *home = getenv("HOME");
+                if (home) scan_dirs.push_back(home);
+            }
             bool found = false;
-            for (int i = 0; dirs[i]; i++) {
+            for (auto &dir : scan_dirs) {
                 SearchResult result;
                 memset(&result, 0, sizeof(result));
-                if (music_source_search("local", dirs[i], 0, 0, &result) == 0
+                if (music_source_search("local", dir.c_str(), 0, 0, &result) == 0
                     && result.count > 0) {
                     std::vector<SongInfo> pl;
                     for (int j = 0; j < result.count; j++) {
@@ -198,7 +215,7 @@ int run_app(int argc, char **argv) {
                     }
                     free(result.songs);
                     StateStore::instance().set_playlist(pl, 0);
-                    LOG_INFO("Scanned %s: %zu songs", dirs[i], pl.size());
+                    LOG_INFO("Scanned %s: %zu songs", dir.c_str(), pl.size());
                     found = true;
                     break;
                 }
