@@ -93,26 +93,32 @@ void audio_output_destroy(AudioOutput *ao) {
     LOG_DEBUG("Audio output destroyed");
 }
 
+/* reusable scratch buffer for software volume scaling */
+static int16_t *g_scale_buf = NULL;
+static size_t   g_scale_cap = 0;
+
 int audio_output_write(AudioOutput *ao, const int16_t *pcm, int frames) {
     if (!ao || !g_active || !g_active->write) return -1;
 
     size_t bytes = (size_t)frames * ao->channels * sizeof(int16_t);
 
     if (ao->volume < 100) {
-        /* software volume: apply gain to PCM samples */
         size_t samples = (size_t)frames * ao->channels;
-        int16_t *scaled = (int16_t*)malloc(bytes);
-        if (!scaled) return -1;
+        /* ensure scratch buffer is big enough */
+        if (samples > g_scale_cap) {
+            free(g_scale_buf);
+            g_scale_cap = samples;
+            g_scale_buf = (int16_t*)malloc(g_scale_cap * sizeof(int16_t));
+            if (!g_scale_buf) { g_scale_cap = 0; return -1; }
+        }
         double gain = (double)ao->volume / 100.0;
         for (size_t i = 0; i < samples; i++) {
             double v = (double)pcm[i] * gain;
             if (v > 32767.0) v = 32767.0;
             if (v < -32768.0) v = -32768.0;
-            scaled[i] = (int16_t)v;
+            g_scale_buf[i] = (int16_t)v;
         }
-        int rc = g_active->write((const uint8_t*)scaled, bytes);
-        free(scaled);
-        return rc;
+        return g_active->write((const uint8_t*)g_scale_buf, bytes);
     }
 
     return g_active->write((const uint8_t*)pcm, bytes);

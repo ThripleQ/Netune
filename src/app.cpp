@@ -26,8 +26,12 @@ extern "C" {
 }
 
 #include "ui/state_store.h"
+#include "ui/keybindings.h"
 
 using namespace ftxui;
+
+/* ── Global keybinding manager ──────────────────────── */
+static KeybindingManager g_keybindings;
 
 static volatile bool g_running = true;
 
@@ -125,6 +129,12 @@ int run_app(int argc, char **argv) {
             StateStore::instance().set_loop_mode((LoopMode)loop);
         }
     }
+
+    /* load keybindings */
+    const char *kb_name = config_get_str(cfg, "ui.keybindings", NULL);
+    const char *kb_path = "data/keybindings/default.yaml";
+    if (kb_name && strcmp(kb_name, "default") != 0) kb_path = kb_name;
+    g_keybindings.load(kb_path);
 
     music_source_manager_init();
     local_source_register();
@@ -261,94 +271,113 @@ int run_app(int argc, char **argv) {
     });
 
     component |= CatchEvent([&](ftxui::Event event) -> bool {
-        if (event == ftxui::Event::Character('q') || event == ftxui::Event::Escape) {
-            screen.ExitLoopClosure()(); return true;
-        }
+        std::string ev_key;
+        if (event.is_character()) {
+            ev_key = event.character();
+        } else if (event == ftxui::Event::Tab) { ev_key = "tab"; }
+        else if (event == ftxui::Event::Return) { ev_key = "enter"; }
+        else if (event == ftxui::Event::Escape) { ev_key = "escape"; }
+        else if (event == ftxui::Event::ArrowUp) { ev_key = "up"; }
+        else if (event == ftxui::Event::ArrowDown) { ev_key = "down"; }
+        else if (event == ftxui::Event::ArrowLeft) { ev_key = "left"; }
+        else if (event == ftxui::Event::ArrowRight) { ev_key = "right"; }
+        if (ev_key.empty()) return false;
 
-        if (event == ftxui::Event::Tab) {
-            const AppState &s = state.state();
-            StateStore::instance().set_active_panel(s.active_panel ? 0 : 1);
-            return true;
-        }
+        auto action = g_keybindings.lookup(ev_key);
+        if (!action.has_value()) return false;
 
         const AppState &cur = state.state();
 
-        if (cur.active_panel == 0) {
-            if (event == ftxui::Event::Character('j') || event == ftxui::Event::ArrowDown) {
+        switch (action.value()) {
+
+        case Action::Quit:
+            screen.ExitLoopClosure()();
+            return true;
+
+        case Action::PanelSwitch:
+            StateStore::instance().set_active_panel(cur.active_panel ? 0 : 1);
+            return true;
+
+        case Action::MoveDown:
+            if (cur.active_panel == 0) {
                 int next_grp = cur.group_index + 1;
                 if (next_grp < (int)cur.groups.size()) {
                     StateStore::instance().set_group_index(next_grp);
-                    /* sync new group's paths to backend */
                     std::vector<const char*> paths;
                     for (auto &s : cur.groups[next_grp].songs) paths.push_back(s.id);
                     playlist_manager_sync(paths.data(), (int)paths.size());
                     playlist_manager_set_index(0);
                 }
-                return true;
+            } else {
+                if (!cur.playlist.empty() && cur.selected_index < (int)cur.playlist.size() - 1)
+                    StateStore::instance().set_selected_index(cur.selected_index + 1);
             }
-            if (event == ftxui::Event::Character('k') || event == ftxui::Event::ArrowUp) {
+            return true;
+
+        case Action::MoveUp:
+            if (cur.active_panel == 0) {
                 int next_grp = cur.group_index - 1;
                 if (next_grp >= 0) {
                     StateStore::instance().set_group_index(next_grp);
-                    /* sync new group's paths to backend */
                     std::vector<const char*> paths;
                     for (auto &s : cur.groups[next_grp].songs) paths.push_back(s.id);
                     playlist_manager_sync(paths.data(), (int)paths.size());
                     playlist_manager_set_index(0);
                 }
-                return true;
-            }
-        } else {
-            if (event == ftxui::Event::Character('j') || event == ftxui::Event::ArrowDown) {
-                if (!cur.playlist.empty() && cur.selected_index < (int)cur.playlist.size() - 1)
-                    StateStore::instance().set_selected_index(cur.selected_index + 1);
-                return true;
-            }
-            if (event == ftxui::Event::Character('k') || event == ftxui::Event::ArrowUp) {
+            } else {
                 if (cur.selected_index > 0)
                     StateStore::instance().set_selected_index(cur.selected_index - 1);
-                return true;
             }
-            if (event == ftxui::Event::Return) {
-                if (cur.playlist.empty()) return true;
+            return true;
+
+        case Action::PlayPause:
+            if (cur.playback_state == PlaybackState::Playing)
+                event_bus_publish(EV_PLAYBACK_PAUSE, NULL, 0);
+            else if (cur.playback_state == PlaybackState::Paused)
+                event_bus_publish(EV_PLAYBACK_RESUME, NULL, 0);
+            return true;
+
+        case Action::PlaySelected:
+            if (cur.playlist.empty()) return true;
+            if (cur.active_panel == 1) {
                 int idx = cur.selected_index;
                 playlist_manager_set_index(idx);
                 const auto &sel = cur.playlist[idx];
                 const char *path = sel.id ? sel.id : "";
                 StateStore::instance().set_current_song(sel);
                 event_bus_publish(EV_PLAYBACK_START, (void*)path, strlen(path) + 1);
-                return true;
             }
-            if (event == ftxui::Event::Character('n')) {
-                int next = playlist_manager_advance();
-                if (next >= 0) {
-                    const char *path = playlist_manager_get_path(next);
-                    if (path) {
-                        StateStore::instance().set_selected_index(next);
-                        if (next < (int)cur.playlist.size())
-                            StateStore::instance().set_current_song(cur.playlist[next]);
-                        event_bus_publish(EV_PLAYBACK_START, (void*)path, strlen(path) + 1);
-                    }
+            return true;
+
+        case Action::NextTrack: {
+            int next = playlist_manager_advance();
+            if (next >= 0) {
+                const char *path = playlist_manager_get_path(next);
+                if (path) {
+                    StateStore::instance().set_selected_index(next);
+                    if (next < (int)cur.playlist.size())
+                        StateStore::instance().set_current_song(cur.playlist[next]);
+                    event_bus_publish(EV_PLAYBACK_START, (void*)path, strlen(path) + 1);
                 }
-                return true;
             }
-            if (event == ftxui::Event::Character('p')) {
-                int prev = playlist_manager_retreat();
-                if (prev >= 0) {
-                    const char *path = playlist_manager_get_path(prev);
-                    if (path) {
-                        StateStore::instance().set_selected_index(prev);
-                        if (prev < (int)cur.playlist.size())
-                            StateStore::instance().set_current_song(cur.playlist[prev]);
-                        event_bus_publish(EV_PLAYBACK_START, (void*)path, strlen(path) + 1);
-                    }
-                }
-                return true;
-            }
+            return true;
         }
 
-        /* volume */
-        if (event == ftxui::Event::Character('+') || event == ftxui::Event::Character('=')) {
+        case Action::PrevTrack: {
+            int prev = playlist_manager_retreat();
+            if (prev >= 0) {
+                const char *path = playlist_manager_get_path(prev);
+                if (path) {
+                    StateStore::instance().set_selected_index(prev);
+                    if (prev < (int)cur.playlist.size())
+                        StateStore::instance().set_current_song(cur.playlist[prev]);
+                    event_bus_publish(EV_PLAYBACK_START, (void*)path, strlen(path) + 1);
+                }
+            }
+            return true;
+        }
+
+        case Action::VolumeUp: {
             int vol = audio_output_get_volume();
             if (vol >= 0) {
                 vol = (vol + 5 > 100) ? 100 : vol + 5;
@@ -357,7 +386,8 @@ int run_app(int argc, char **argv) {
             }
             return true;
         }
-        if (event == ftxui::Event::Character('-')) {
+
+        case Action::VolumeDown: {
             int vol = audio_output_get_volume();
             if (vol >= 0) {
                 vol = (vol - 5 < 0) ? 0 : vol - 5;
@@ -367,23 +397,7 @@ int run_app(int argc, char **argv) {
             return true;
         }
 
-        if (event == ftxui::Event::Character(' ')) {
-            if (cur.playback_state == PlaybackState::Playing)
-                event_bus_publish(EV_PLAYBACK_PAUSE, NULL, 0);
-            else if (cur.playback_state == PlaybackState::Paused)
-                event_bus_publish(EV_PLAYBACK_RESUME, NULL, 0);
-            return true;
-        }
-        if (event == ftxui::Event::ArrowLeft) {
-            if (cur.playback_state != PlaybackState::Stopped) {
-                int step = config_get_int(config_global(), "playback.seek_step_sec", 5);
-                int target = cur.current_time_sec - step;
-                if (target < 0) target = 0;
-                event_bus_publish(EV_BUFFERING_UPDATE, &target, sizeof(target));
-            }
-            return true;
-        }
-        if (event == ftxui::Event::ArrowRight) {
+        case Action::SeekForward: {
             if (cur.playback_state != PlaybackState::Stopped) {
                 int step = config_get_int(config_global(), "playback.seek_step_sec", 5);
                 int target = cur.current_time_sec + step;
@@ -392,13 +406,27 @@ int run_app(int argc, char **argv) {
             }
             return true;
         }
-        if (event == ftxui::Event::Character('l')) {
+
+        case Action::SeekBackward: {
+            if (cur.playback_state != PlaybackState::Stopped) {
+                int step = config_get_int(config_global(), "playback.seek_step_sec", 5);
+                int target = cur.current_time_sec - step;
+                if (target < 0) target = 0;
+                event_bus_publish(EV_BUFFERING_UPDATE, &target, sizeof(target));
+            }
+            return true;
+        }
+
+        case Action::CycleLoop: {
             int next = ((int)cur.loop_mode + 1) % 3;
             playlist_manager_set_loop_mode(next);
             StateStore::instance().set_loop_mode((LoopMode)next);
             return true;
         }
-        return false;
+
+        default:
+            return false;
+        }
     });
 
     screen.Loop(component);

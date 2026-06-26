@@ -59,6 +59,7 @@ set(PLUGIN_MUSIC_SOURCES
 
 set(UI_SOURCES
   src/ui/state_store.cpp
+  src/ui/keybindings.cpp
 )
 
 set(ALL_SOURCES
