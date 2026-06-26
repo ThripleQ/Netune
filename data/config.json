@@ -1,32 +1,61 @@
 {
+  "version": "1.0",
+  "_comment": "LMusic v2.0 全局配置 — 所有设置集中于此",
+
   "audio": {
     "backend": "auto",
     "sample_rate": 44100,
-    "buffer_frames": 8192,
-    "volume": 80
+    "channels": 2,
+    "bits_per_sample": 16,
+    "buffer_frames": 4096,
+    "volume": 80,
+    "device": "default"
   },
+
+  "playback": {
+    "loop_mode": 0,
+    "gapless": true,
+    "crossfade_sec": 0,
+    "resume_on_startup": false,
+    "seek_step_sec": 5
+  },
+
   "ui": {
     "theme": "default",
     "layout": "default",
     "keybindings": "default",
-    "show_lyric": true
+    "show_lyric": true,
+    "show_cover": false,
+    "show_status_bar": true
   },
-  "playback": {
-    "loop_mode": 0,
-    "gapless": true,
-    "resume_on_startup": false
-  },
+
   "music_sources": {
     "local": {
       "enabled": true,
-      "dirs": ["/home/liu/Music"]
+      "dirs": ["/home/liu/Music"],
+      "recursive": true,
+      "show_hidden": false
     },
     "netease": {
-      "enabled": false
+      "enabled": false,
+      "quality": "standard",
+      "cookie_file": ""
     }
   },
+
   "network": {
+    "proxy": "",
     "timeout_sec": 10,
-    "max_retries": 2
+    "max_retries": 2,
+    "user_agent": "LMusic/2.0"
+  },
+
+  "plugins": {
+    "decoders": {
+      "preferred": ["dr_mp3", "dr_flac", "dr_wav"]
+    },
+    "audio_outputs": {
+      "preferred": ["alsa", "pulseaudio", "sdl"]
+    }
   }
 }

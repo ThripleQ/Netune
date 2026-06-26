@@ -13,6 +13,10 @@ typedef struct Config Config;
 Config* config_load(const char *file);       /* NULL on failure */
 void    config_free(Config *cfg);
 
+/* global singleton — set by app, read by anyone */
+void    config_set_global(Config *cfg);
+Config* config_global(void);
+
 /* scalar access (key="section.field") */
 const char* config_get_str(Config *cfg, const char *key, const char *fallback);
 int         config_get_int(Config *cfg, const char *key, int fallback);

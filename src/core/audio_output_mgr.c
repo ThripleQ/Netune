@@ -1,5 +1,6 @@
 #include "audio_output_mgr.h"
 #include "infra/log.h"
+#include "infra/config.h"
 #include <stdlib.h>
 
 #define MAX_BACKENDS 4
@@ -54,11 +55,12 @@ AudioOutput* audio_output_create(int sample_rate, int channels) {
         return NULL;
     }
 
+    Config *gcfg = config_global();
     AudioConfig cfg;
     cfg.sample_rate = sample_rate;
     cfg.channels = channels;
     cfg.bits_per_sample = 16;
-    cfg.buffer_frames = 4096;
+    cfg.buffer_frames = gcfg ? config_get_int(gcfg, "audio.buffer_frames", 4096) : 4096;
 
     if (chosen->init && chosen->init(&cfg) != 0) {
         LOG_ERROR("Backend %s init failed", chosen->name);

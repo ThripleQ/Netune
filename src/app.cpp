@@ -88,6 +88,7 @@ int run_app(int argc, char **argv) {
     if (argc > 1) cfg_path = argv[1];
     cfg = config_load(cfg_path);
     if (!cfg) LOG_WARN("No config loaded, using defaults");
+    config_set_global(cfg);  /* make accessible everywhere */
 
     /* event bus */
     event_bus_init();

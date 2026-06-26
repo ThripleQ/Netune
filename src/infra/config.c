@@ -5,6 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* ── Global singleton ──────────────────────────────── */
+static Config *g_config = NULL;
+
+void config_set_global(Config *cfg) { g_config = cfg; }
+Config* config_global(void) { return g_config; }
+
 struct Config {
     yyjson_doc  *doc;
     yyjson_val  *root;

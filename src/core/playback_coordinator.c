@@ -1,6 +1,7 @@
 #include "playback_coordinator.h"
 #include "core/decoder_manager.h"
 #include "core/audio_output_mgr.h"
+#include "infra/config.h"
 #include "core/event_bus.h"
 #include "infra/log.h"
 
@@ -125,10 +126,12 @@ static void* playback_thread(void *arg) {
     Decoder      *decoder = NULL;
     AudioOutput  *audio   = NULL;
     PlayState     state   = PS_STOPPED;
-    int           samplerate  = 44100;
-    int           channels    = 2;
-    int           current_frame = 0;
-    int           total_frames  = -1;
+    /* read defaults from config, overridden per-file */
+    Config *cfg = config_global();
+    int     samplerate  = cfg ? config_get_int(cfg, "audio.sample_rate", 44100) : 44100;
+    int     channels    = cfg ? config_get_int(cfg, "audio.channels", 2) : 2;
+    int     current_frame = 0;
+    int     total_frames  = -1;
 
     int16_t      *pcm_buf = (int16_t*)malloc(
                                (size_t)FRAMES_PER_CHUNK * 2 * sizeof(int16_t));
