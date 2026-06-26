@@ -1,0 +1,535 @@
+# LMusic v2\.0 架构设计方案
+
+> 版本：v2\.0（精简版）
+> 日期：2026\-06\-26
+> 状态：核心框架已定，实现细节由用户指导
+> 
+> 
+
+---
+
+## 一、项目目标
+
+重写 LMusic 终端音乐播放器，核心追求：
+
+1. **UI 开发效率高** —— 组件化、声明式，加新功能快
+
+2. **高度可定制** —— 主题、快捷键、布局、插件，用户想怎么改怎么改
+
+3. **架构优雅** —— 完全解耦，模块化，可扩展
+
+---
+
+## 二、整体架构
+
+### 2\.1 分层架构图
+
+```C
+┌─────────────────────────────────────────┐
+│              UI 层 (FTXUI)              │
+│  组件化 + 主题 + 快捷键 + 布局 + 插件    │
+└───────────────┬─────────────────────────┘
+                │
+        ┌───────▼───────┐
+        │   事件总线     │  ← 系统唯一通信通道
+        └───────┬───────┘
+                │
+┌───────────────▼─────────────────────────┐
+│              核心层                     │
+│  播放协调器 + 播放列表 + 搜索 + 缓存     │
+└───────────────┬─────────────────────────┘
+                │
+┌───────────────▼─────────────────────────┐
+│              插件层                     │
+│  音乐源 + 音频输出 + 解码器 + UI 插件    │
+└─────────────────────────────────────────┘
+```
+
+### 2\.2 核心设计原则
+
+- **UI 优先**：业务逻辑为 UI 服务，不是反过来
+
+- **完全解耦**：模块之间只通过接口 / 事件通信
+
+- **数据驱动**：状态是唯一真相源，UI 跟着数据走
+
+- **插件化**：音乐源、音频输出、解码器全是插件
+
+- **可配置**：主题、快捷键、布局全用配置文件
+
+---
+
+## 三、技术选型
+
+|模块|技术|说明|
+|---|---|---|
+|核心语言|C11|核心层纯 C|
+|UI 语言|C\+\+17|FTXUI 需要，std::string/vector 提升效率|
+|UI 框架|FTXUI|组件化、声明式、开发效率高|
+|构建系统|CMake|工业标准|
+|网络|libcurl|功能全，稳定|
+|JSON|yyjson|最快的 C JSON 库|
+|配置格式|YAML|可读性好|
+|音频后端|ALSA \+ PulseAudio \+ PipeWire \+ SDL2|多后端，自动探测|
+|解码|minimp3 \+ dr\_flac \+ dr\_ogg|单文件库，无依赖|
+
+---
+
+## 四、核心模块设计
+
+### 4\.1 事件总线（Event Bus）
+
+**整个系统的唯一通信通道，所有模块通过它交换信息。**
+
+```c
+// 事件类型定义
+typedef enum {
+    // 播放事件
+    EV_PLAYBACK_START,
+    EV_PLAYBACK_PAUSE,
+    EV_PLAYBACK_RESUME,
+    EV_PLAYBACK_STOP,
+    EV_PLAYBACK_FINISH,
+    EV_PLAYBACK_ERROR,
+    EV_PROGRESS_UPDATE,
+    EV_BUFFERING_UPDATE,
+    
+    // 播放列表事件
+    EV_PLAYLIST_CHANGED,
+    EV_TRACK_CHANGED,
+    
+    // 音量事件
+    EV_VOLUME_CHANGED,
+    EV_MUTE_CHANGED,
+    
+    // 元数据事件
+    EV_METADATA_LOADED,
+    EV_LYRIC_LOADED,
+    
+    // 搜索事件
+    EV_SEARCH_START,
+    EV_SEARCH_RESULT,
+    EV_SEARCH_ERROR,
+    
+    // 配置事件
+    EV_CONFIG_CHANGED,
+    EV_THEME_CHANGED,
+    
+    // 系统事件
+    EV_APP_STARTUP,
+    EV_APP_SHUTDOWN,
+} EventType;
+
+// 核心 API
+int  event_bus_init(void);
+void event_bus_shutdown(void);
+int  event_bus_subscribe(EventType type, EventCallback callback, void *user_data);
+int  event_bus_publish(EventType type, void *data, size_t data_size);
+```
+
+---
+
+### 4\.2 状态管理（State Store）
+
+**UI 的唯一真相源。UI 只从这里读数据，通过事件修改。**
+
+```cpp
+// 全局状态
+struct AppState {
+    // 播放
+    PlaybackState playback_state;
+    SongInfo current_song;
+    double progress;          // 0.0 ~ 1.0
+    int current_time_sec;
+    int total_time_sec;
+    
+    // 音量
+    int volume;               // 0 ~ 100
+    bool muted;
+    
+    // 播放列表
+    Playlist active_playlist;
+    
+    // 播放模式
+    LoopMode loop_mode;
+    
+    // 搜索
+    std::string search_keyword;
+    std::vector<SongInfo> search_results;
+    
+    // 配置 & 主题
+    Config config;
+    Theme theme;
+    
+    // UI 状态
+    std::string active_panel;
+    int selected_index;
+};
+
+// 状态存储
+class StateStore {
+public:
+    static StateStore& instance();
+    const AppState& state() const;
+    int subscribe(StateChangeCallback callback);
+};
+```
+
+---
+
+### 4\.3 音乐源插件化
+
+**每个音乐源是独立插件，接口统一，可插拔。**
+
+```c
+// 音乐源插件接口
+typedef struct {
+    const char *name;           // 插件名："netease", "local", "qq"
+    int priority;               // 优先级，自动降级用
+    
+    int (*init)(void *config);
+    void (*shutdown)(void);
+    
+    // 搜索
+    int (*search)(const char *keyword, int page, int page_size, 
+                  SearchResult *result);
+    
+    // 获取歌曲详情
+    int (*get_song_detail)(const char *song_id, SongInfo *detail);
+    
+    // 获取播放链接
+    int (*get_play_url)(const char *song_id, int quality, 
+                        char *url, size_t url_size);
+    
+    // 获取歌词
+    int (*get_lyric)(const char *song_id, char *lyric_text, size_t text_size);
+    
+    // 获取封面
+    int (*get_cover)(const char *song_id, char *cover_url, size_t url_size);
+    
+    // 检查是否可用
+    bool (*is_available)(void);
+} MusicSource;
+
+// 管理器 API
+int music_source_register(MusicSource *source);
+MusicSource *music_source_get(const char *name);
+int music_source_search(const char *source_name, const char *keyword, ...);
+```
+
+---
+
+### 4\.4 音频输出插件化
+
+**多后端支持，自动探测可用后端。**
+
+```c
+// 音频输出后端接口
+typedef struct {
+    const char *name;           // "alsa", "pulseaudio", "sdl"
+    
+    bool (*probe)(void);        // 探测是否可用
+    int (*init)(AudioConfig *config);
+    void (*shutdown)(void);
+    
+    // 写入 PCM 数据
+    int (*write)(const uint8_t *data, size_t size);       // 阻塞
+    int (*write_nonblock)(const uint8_t *data, size_t size);  // 非阻塞
+    
+    // 控制
+    int (*start)(void);
+    int (*stop)(void);
+    int (*pause)(void);
+    int (*resume)(void);
+    
+    // 音量
+    int (*set_volume)(int volume);
+    int (*get_volume)(void);
+    
+    // 精确延迟（用于进度计算）
+    int (*get_delay_us)(uint64_t *delay);
+} AudioOutputBackend;
+```
+
+---
+
+### 4\.5 主题系统
+
+**YAML 配置驱动，用户可完全自定义。**
+
+```cpp
+// 颜色
+struct Color {
+    uint8_t r, g, b;
+};
+
+// 组件样式
+struct ComponentStyle {
+    Color background;
+    Color foreground;
+    Color border;
+    Color accent;
+    bool bold, dim, italic, underline;
+    int padding_left, padding_right, padding_top, padding_bottom;
+};
+
+// 主题
+struct Theme {
+    std::string name;
+    
+    // 全局颜色
+    Color bg, fg, accent, secondary;
+    Color warning, error, success;
+    
+    // 各组件样式
+    ComponentStyle button, button_hover, button_active;
+    ComponentStyle list, list_selected, list_hover;
+    ComponentStyle progress_bar, progress_bar_fill;
+    ComponentStyle status_bar, title_bar;
+};
+
+// 主题管理器
+class ThemeManager {
+public:
+    bool load_theme(const std::string& file);
+    bool switch_theme(const std::string& name);
+    const Theme& current_theme() const;
+};
+```
+
+**主题文件示例（YAML）：**
+
+```yaml
+name: "Catppuccin Mocha"
+colors:
+  bg: "#1e1e2e"
+  fg: "#cdd6f4"
+  accent: "#89b4fa"
+components:
+  list_selected:
+    background: "accent"
+    foreground: "bg"
+    bold: true
+```
+
+---
+
+### 4\.6 快捷键系统
+
+**动作（Action）与按键分离，用户可完全自定义。**
+
+```cpp
+// 动作定义
+enum class Action {
+    PlayPause,
+    Stop,
+    NextTrack,
+    PrevTrack,
+    SeekForward,
+    SeekBackward,
+    VolumeUp,
+    VolumeDown,
+    ToggleMute,
+    MoveUp,
+    MoveDown,
+    PlaySelected,
+    OpenSearch,
+    ToggleLyric,
+    Quit,
+    ShowHelp,
+    // ... 更多动作
+};
+
+// 快捷键管理器
+class KeybindingManager {
+public:
+    bool load_keybindings(const std::string& config_file);
+    std::optional<Action> lookup(const KeyCombo& key) const;
+    void set_keycombo(Action action, const KeyCombo& combo);
+};
+```
+
+**快捷键配置示例（YAML）：**
+
+```yaml
+keybindings:
+  play_pause: ["space", "p"]
+  move_up: ["up", "k"]
+  move_down: ["down", "j"]
+  open_search: "/"
+  quit: ["q", "ctrl+c"]
+```
+
+---
+
+### 4\.7 布局引擎
+
+**配置文件定义 UI 布局，用户可自定义界面排布。**
+
+```cpp
+// 布局节点类型
+enum class LayoutNodeType {
+    Component,    // 具体组件
+    Horizontal,   // 水平排列
+    Vertical,     // 垂直排列
+    Split,        // 可调整分割
+    Tabs,         // 标签页
+};
+
+// 布局节点
+struct LayoutNode {
+    LayoutNodeType type;
+    std::string component_name;      // type=Component 时有效
+    std::vector<LayoutNode> children;
+    
+    int width = 0;       // 固定宽度，0=自动
+    int height = 0;      // 固定高度，0=自动
+    float flex = 1.0f;   // 弹性比例
+    int min_width = 0;
+    int min_height = 0;
+};
+
+// 布局引擎
+class LayoutEngine {
+public:
+    bool load_layout(const std::string& config_file);
+    ftxui::Component build_ui() const;
+    
+    // 预设布局
+    static LayoutNode default_layout();
+    static LayoutNode minimal_layout();
+    static LayoutNode classic_layout();  // cmus 风格
+};
+```
+
+**布局配置示例（YAML）：**
+
+```yaml
+layout:
+  type: "vertical"
+  children:
+    - component: "top_bar"
+      height: 1
+    - type: "horizontal"
+      flex: 1
+      children:
+        - component: "playlist"
+          width: "40%"
+        - component: "lyric"
+          flex: 1
+    - component: "player_controls"
+      height: 2
+    - component: "status_bar"
+      height: 1
+```
+
+---
+
+## 五、数据流
+
+### 场景：用户按播放键
+
+```Plain
+用户按键
+  ↓
+KeybindingManager 识别 → Action::PlayPause
+  ↓
+发布播放命令事件
+  ↓
+播放协调器收到事件 → 执行播放/暂停逻辑
+  ↓
+播放状态变化 → 发布状态变更事件
+  ↓
+StateStore 收到事件 → 更新内部状态
+  ↓
+通知所有 UI 订阅者
+  ↓
+所有绑定了播放状态的组件自动刷新
+```
+
+---
+
+## 六、目录结构
+
+```Plain
+lmusic/
+├── CMakeLists.txt
+├── README.md
+│
+├── src/
+│   ├── main.cpp
+│   ├── app.h / app.cpp
+│   │
+│   ├── core/               # 核心层
+│   │   ├── event_bus.h/.c
+│   │   ├── playback_coordinator.h/.c
+│   │   ├── playlist_manager.h/.c
+│   │   ├── search_manager.h/.c
+│   │   ├── music_source.h
+│   │   ├── music_source_manager.c
+│   │   ├── audio_output.h
+│   │   ├── audio_output_manager.c
+│   │   ├── decoder.h
+│   │   ├── decoder_manager.c
+│   │   └── cache_manager.h/.c
+│   │
+│   ├── plugins/            # 插件层
+│   │   ├── music_sources/
+│   │   │   ├── netease/
+│   │   │   └── local/
+│   │   ├── audio_outputs/
+│   │   │   ├── alsa/
+│   │   │   ├── pulseaudio/
+│   │   │   └── sdl/
+│   │   └── decoders/
+│   │       ├── minimp3/
+│   │       └── dr_flac/
+│   │
+│   ├── ui/                 # UI 层
+│   │   ├── state_store.h/.cpp
+│   │   ├── theme.h/.cpp
+│   │   ├── keybindings.h/.cpp
+│   │   ├── layout_engine.h/.cpp
+│   │   ├── components/     # 基础组件
+│   │   ├── widgets/        # 业务组件
+│   │   └── screens/        # 页面
+│   │
+│   └── infra/              # 基础设施
+│       ├── log.h/.c
+│       ├── config.h/.c
+│       ├── ring_buffer.h/.c
+│       ├── thread_pool.h/.c
+│       └── utils/
+│
+├── data/                   # 数据文件
+│   ├── themes/
+│   ├── keybindings/
+│   └── layouts/
+│
+├── tests/                  # 单元测试
+└── docs/                   # 文档
+```
+
+---
+
+## 七、开发阶段（大方向）
+
+|阶段|目标|核心产出|
+|---|---|---|
+|**Phase 0**|搭架子|项目结构、日志、配置、事件总线、基础数据结构|
+|**Phase 1**|MVP|能播本地 mp3，最简 UI（播放按钮 \+ 进度条）|
+|**Phase 2**|核心功能|播放列表、快进快退、音量、循环模式|
+|**Phase 3**|UI 系统|主题、快捷键、布局引擎、主要 UI 组件|
+|**Phase 4**|网络功能|音乐源抽象、网易云、搜索、缓存、流式播放|
+|**Phase 5**|高级功能|歌词、封面、歌单、收藏、插件系统|
+|**Phase 6**|优化发布|性能优化、测试、文档、打包发布|
+
+> **说明**：每个阶段的具体任务拆分、实现细节、验收标准，由用户指导 OpenClaw 执行。本文档只定核心框架和大方向。
+> 
+> 
+
+---
+
+*文档结束*
+
+> （注：部分内容可能由 AI 生成）
