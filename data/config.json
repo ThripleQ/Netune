@@ -32,7 +32,7 @@
   "music_sources": {
     "local": {
       "enabled": true,
-      "dirs": ["/home/liu/Music"],
+      "dirs": ["/home/liu/Music/pop", "/home/liu/Music/rock", "/home/liu/Music/jazz"],
       "recursive": true,
       "show_hidden": false
     },
