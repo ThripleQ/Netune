@@ -22,7 +22,7 @@
 
   "ui": {
     "theme": "default",
-    "layout": "default",
+    "layout": "data/layouts/default.yaml",
     "keybindings": "default",
     "show_lyric": true,
     "show_cover": false,

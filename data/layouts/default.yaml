@@ -1,0 +1,12 @@
+layout:
+  type: "vertical"
+  children:
+    - component: "status_bar"
+      height: 1
+    - type: "horizontal"
+      flex: 1
+      children:
+        - component: "group_list"
+          width: 20
+        - component: "song_list"
+          flex: 1

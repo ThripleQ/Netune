@@ -31,6 +31,7 @@ extern "C" {
 #include "ui/components/group_list.h"
 #include "ui/components/song_list.h"
 #include "ui/theme.h"
+#include "ui/layout_engine.h"
 
 using namespace ftxui;
 
@@ -146,6 +147,16 @@ int run_app(int argc, char **argv) {
     if (t_name && strcmp(t_name, "default") != 0) t_path = t_name;
     ThemeManager::instance().load(t_path);
 
+    /* layout engine */
+    LayoutEngine layout_engine;
+    layout_engine.register_component("status_bar", render_status_bar);
+    layout_engine.register_component("group_list", render_group_list);
+    layout_engine.register_component("song_list", render_song_list);
+    const char *l_name = config_get_str(cfg, "ui.layout", NULL);
+    const char *l_path = "data/layouts/default.yaml";
+    if (l_name && strcmp(l_name, "default") != 0) l_path = l_name;
+    layout_engine.load(l_path);
+
     music_source_manager_init();
     local_source_register();
 
@@ -221,13 +232,7 @@ int run_app(int argc, char **argv) {
         return vbox(Elements{
             text(" LMusic v2.0.0 ") | bold | center,
             separator(),
-            render_status_bar(s),
-            separator(),
-            hbox(Elements{
-                render_group_list(s),
-                separator(),
-                render_song_list(s),
-            }) | flex,
+            layout_engine.build(s) | flex,
             separator(),
             text(" [Tab]panel  [j/k]nav  [Enter]play  [Space]pause  [+/-]vol  [l]loop  [q]quit") | dim,
         });

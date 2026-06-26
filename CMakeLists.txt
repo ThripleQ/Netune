@@ -61,6 +61,7 @@ set(UI_SOURCES
   src/ui/state_store.cpp
   src/ui/keybindings.cpp
   src/ui/theme.cpp
+  src/ui/layout_engine.cpp
   src/ui/components/theme_util.cpp
   src/ui/components/group_list.cpp
   src/ui/components/song_list.cpp
