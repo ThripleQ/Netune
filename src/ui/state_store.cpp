@@ -86,7 +86,7 @@ void StateStore::set_playlist(const std::vector<SongInfo> &list, int index) {
         copy_song_info(copy, s);
         state_.playlist.push_back(copy);
     }
-    state_.playlist_index = index;
+    state_.selected_index = index;
     notify();
 }
 
@@ -109,6 +109,44 @@ void StateStore::set_search_results(const std::string &keyword,
 
 void StateStore::set_selected_index(int idx) {
     state_.selected_index = idx;
+    notify();
+}
+
+void StateStore::set_groups(const std::vector<SongGroup> &grps) {
+    /* free old groups */
+    for (auto &g : state_.groups) {
+        for (auto &s : g.songs) song_info_free(&s);
+    }
+    state_.groups.clear();
+    state_.group_index = 0;
+    state_.selected_index = 0;
+
+    /* copy new */
+    for (auto &g : grps) {
+        SongGroup copy;
+        copy.name = g.name;
+        for (auto &s : g.songs) {
+            SongInfo si = {};
+            copy_song_info(si, s);
+            copy.songs.push_back(si);
+        }
+        state_.groups.push_back(std::move(copy));
+    }
+
+    /* update right panel to first group */
+    set_group_index(0);
+}
+
+void StateStore::set_group_index(int idx) {
+    if (idx < 0 || idx >= (int)state_.groups.size()) return;
+    state_.group_index = idx;
+    /* update right panel from this group */
+    auto &grp = state_.groups[idx];
+    set_playlist(grp.songs, 0);
+}
+
+void StateStore::set_active_panel(int panel) {
+    state_.active_panel = (panel == 0 || panel == 1) ? panel : 0;
     notify();
 }
 
