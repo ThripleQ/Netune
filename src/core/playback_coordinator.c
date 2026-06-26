@@ -203,7 +203,10 @@ static void* playback_thread(void *arg) {
                 }
 
                 state = PS_PLAYING;
-                event_bus_publish(EV_PLAYBACK_START, NULL, 0);
+                /* Don't publish EV_PLAYBACK_START here — that would trigger
+                   on_play_start() again, causing a CMD_PLAY feedback loop.
+                   The UI already set StateStore to Playing when it sent the
+                   command; this thread just starts actual decoding. */
                 continue;
             }
 

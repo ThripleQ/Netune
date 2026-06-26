@@ -71,6 +71,13 @@ static void ev_playback_finish(const BusEvent *ev, void *data) {
     StateStore::instance().set_playback_state(PlaybackState::Stopped);
 }
 
+static void ev_playback_error(const BusEvent *ev, void *data) {
+    (void)ev; (void)data;
+    LOG_WARN("Playback error, resetting state");
+    StateStore::instance().set_playback_state(PlaybackState::Stopped);
+    StateStore::instance().set_progress(0.0, 0, 0);
+}
+
 /* ── App entry point ─────────────────────────────────── */
 int run_app(int argc, char **argv) {
     log_init(NULL);
@@ -102,6 +109,7 @@ int run_app(int argc, char **argv) {
     event_bus_subscribe(EV_PLAYBACK_RESUME,   ev_playback_resume, NULL);
     event_bus_subscribe(EV_PLAYBACK_STOP,     ev_playback_stop, NULL);
     event_bus_subscribe(EV_PLAYBACK_FINISH,   ev_playback_finish, NULL);
+    event_bus_subscribe(EV_PLAYBACK_ERROR,    ev_playback_error, NULL);
 
     /* load config values into state */
     if (cfg) {
