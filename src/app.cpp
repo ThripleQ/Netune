@@ -241,31 +241,25 @@ int run_app(int argc, char **argv) {
             return true;
         }
 
-        /* play / pause / switch track */
-        if (event == ftxui::Event::Return ||
-            event == ftxui::Event::Character(' ')) {
+        /* Enter: play selected track (always plays the selected song) */
+        if (event == ftxui::Event::Return) {
             const AppState &s = state.state();
             if (s.playlist.empty()) return true;
-
-            /* Check if selected song is the same as currently playing */
             const SongInfo &sel = s.playlist[s.selected_index];
-            bool same_song = (s.current_song.id && sel.id &&
-                strcmp(s.current_song.id, sel.id) == 0);
+            const char *path = sel.id ? sel.id : "";
+            StateStore::instance().set_current_song(sel);
+            event_bus_publish(EV_PLAYBACK_START,
+                              (void*)path, strlen(path) + 1);
+            return true;
+        }
 
-            if (same_song && s.playback_state == PlaybackState::Playing) {
-                /* Toggle pause on current song */
+        /* Space: pause/resume current playback only */
+        if (event == ftxui::Event::Character(' ')) {
+            const AppState &s = state.state();
+            if (s.playback_state == PlaybackState::Playing) {
                 event_bus_publish(EV_PLAYBACK_PAUSE, NULL, 0);
-            } else if (same_song && s.playback_state == PlaybackState::Paused) {
-                /* Resume current song */
+            } else if (s.playback_state == PlaybackState::Paused) {
                 event_bus_publish(EV_PLAYBACK_RESUME, NULL, 0);
-            } else {
-                /* Different song or stopped — play selected.
-                   CMD_PLAY in the coordinator already closes the
-                   previous decoder/audio before opening new ones. */
-                const char *path = sel.id ? sel.id : "";
-                StateStore::instance().set_current_song(sel);
-                event_bus_publish(EV_PLAYBACK_START,
-                                  (void*)path, strlen(path) + 1);
             }
             return true;
         }
