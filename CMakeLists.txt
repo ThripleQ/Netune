@@ -60,6 +60,9 @@ set(PLUGIN_MUSIC_SOURCES
 set(UI_SOURCES
   src/ui/state_store.cpp
   src/ui/keybindings.cpp
+  src/ui/components/group_list.cpp
+  src/ui/components/song_list.cpp
+  src/ui/components/status_bar.cpp
 )
 
 set(ALL_SOURCES

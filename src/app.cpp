@@ -27,6 +27,9 @@ extern "C" {
 
 #include "ui/state_store.h"
 #include "ui/keybindings.h"
+#include "ui/components/status_bar.h"
+#include "ui/components/group_list.h"
+#include "ui/components/song_list.h"
 
 using namespace ftxui;
 
@@ -208,62 +211,15 @@ int run_app(int argc, char **argv) {
         event_bus_poll();
         const AppState &s = state.state();
 
-        /* status line */
-        std::string state_str;
-        switch (s.playback_state) {
-        case PlaybackState::Playing: state_str = "\u25B6"; break;
-        case PlaybackState::Paused:  state_str = "\u23F8"; break;
-        default:                     state_str = "\u25A0"; break;
-        }
-        char buf[64];
-        int m = s.current_time_sec / 60, sc = s.current_time_sec % 60;
-        snprintf(buf, sizeof(buf), "%02d:%02d", m, sc);
-        std::string time_str = buf;
-        std::string loop_str;
-        switch (s.loop_mode) {
-        case LoopMode::None:     loop_str = "\u2192"; break;
-        case LoopMode::Track:    loop_str = "\u21BA"; break;
-        case LoopMode::Playlist: loop_str = "\u21BB"; break;
-        }
-        std::string vol_str = "Vol:" + std::to_string(s.volume);
-        std::string title = s.current_song.title ? s.current_song.title : "";
-
-        /* left panel — groups */
-        Elements left_els;
-        for (size_t i = 0; i < s.groups.size(); i++) {
-            std::string label = s.groups[i].name;
-            bool sel = ((int)i == s.group_index);
-            if (s.active_panel == 0 && sel)
-                left_els.push_back(text("> " + label) | bold | inverted);
-            else if (s.active_panel == 1 && sel)
-                left_els.push_back(text("  " + label) | bold);
-            else
-                left_els.push_back(text("  " + label));
-        }
-
-        /* right panel — songs */
-        Elements right_els;
-        for (size_t i = 0; i < s.playlist.size(); i++) {
-            std::string label = s.playlist[i].title ? s.playlist[i].title : "(unknown)";
-            bool sel = ((int)i == s.selected_index);
-            if (s.active_panel == 1 && sel)
-                right_els.push_back(text("> " + label) | bold | inverted);
-            else if (s.active_panel == 0 && sel)
-                right_els.push_back(text("  " + label));
-            else
-                right_els.push_back(text("  " + label));
-        }
-
         return vbox(Elements{
             text(" LMusic v2.0.0 ") | bold | center,
             separator(),
-            text(" " + state_str + " " + loop_str + "  " + time_str + "  " + vol_str + "  " + title) | dim,
-            gauge(s.progress),
+            render_status_bar(s),
             separator(),
             hbox(Elements{
-                vbox(std::move(left_els)) | yframe | size(WIDTH, EQUAL, 20) | border,
+                render_group_list(s),
                 separator(),
-                vbox(std::move(right_els)) | yframe | flex | border,
+                render_song_list(s),
             }) | flex,
             separator(),
             text(" [Tab]panel  [j/k]nav  [Enter]play  [Space]pause  [+/-]vol  [l]loop  [q]quit") | dim,
