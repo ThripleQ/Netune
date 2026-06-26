@@ -122,6 +122,42 @@ int run_app(int argc, char **argv) {
     music_source_manager_init();
     local_source_register();
 
+    /* auto-scan: read configured dirs and build initial playlist */
+    {
+        std::vector<std::string> scan_dirs;
+        int ndirs = cfg ? config_get_array_size(cfg, "music_sources.local.dirs") : 0;
+        if (ndirs > 0) {
+            for (int i = 0; i < ndirs; i++) {
+                char key[64];
+                snprintf(key, sizeof(key), "music_sources.local.dirs[%d]", i);
+                const char *d = config_get_str(cfg, key, NULL);
+                if (d) scan_dirs.push_back(d);
+            }
+        }
+        if (scan_dirs.empty()) {
+            const char *home = getenv("HOME");
+            if (home) scan_dirs.push_back(home);
+        }
+        std::vector<SongInfo> pl;
+        for (auto &dir : scan_dirs) {
+            SearchResult result;
+            memset(&result, 0, sizeof(result));
+            if (music_source_search("local", dir.c_str(), 0, 0, &result) == 0) {
+                for (int j = 0; j < result.count; j++) {
+                    SongInfo copy;
+                    song_info_copy(&copy, &result.songs[j]);
+                    pl.push_back(copy);
+                    song_info_free(&result.songs[j]);
+                }
+                free(result.songs);
+            }
+        }
+        if (!pl.empty()) {
+            StateStore::instance().set_playlist(pl, 0);
+            LOG_INFO("Auto-scanned %zu songs from config", pl.size());
+        }
+    }
+
     /* playback coordinator */
     playback_coordinator_init();
 
@@ -197,7 +233,7 @@ int run_app(int argc, char **argv) {
             text(" Playlist:") | bold,
             vbox(std::move(entries)) | yframe | flex,
             separator(),
-            text(" [s]can dir  [Enter]play  [Space]pause  [j/k]nav  [q]quit") | dim,
+            text(" [Enter]play  [Space]pause  [j/k]nav  [q]quit") | dim,
         }) | border;
     });
 
@@ -205,47 +241,6 @@ int run_app(int argc, char **argv) {
         if (event == ftxui::Event::Character('q') ||
             event == ftxui::Event::Escape) {
             screen.ExitLoopClosure()();
-            return true;
-        }
-
-        /* scan directory */
-        if (event == ftxui::Event::Character('s')) {
-            /* build dir list from config + fallback */
-            std::vector<std::string> scan_dirs;
-            int ndirs = cfg ? config_get_array_size(cfg, "music_sources.local.dirs") : 0;
-            if (ndirs > 0) {
-                for (int i = 0; i < ndirs; i++) {
-                    char key[64];
-                    snprintf(key, sizeof(key), "music_sources.local.dirs[%d]", i);
-                    const char *d = config_get_str(cfg, key, NULL);
-                    if (d) scan_dirs.push_back(d);
-                }
-            }
-            if (scan_dirs.empty()) {
-                const char *home = getenv("HOME");
-                if (home) scan_dirs.push_back(home);
-            }
-            /* scan ALL dirs, aggregate results */
-            std::vector<SongInfo> pl;
-            for (auto &dir : scan_dirs) {
-                SearchResult result;
-                memset(&result, 0, sizeof(result));
-                if (music_source_search("local", dir.c_str(), 0, 0, &result) == 0) {
-                    for (int j = 0; j < result.count; j++) {
-                        SongInfo copy;
-                        song_info_copy(&copy, &result.songs[j]);
-                        pl.push_back(copy);
-                        song_info_free(&result.songs[j]);
-                    }
-                    free(result.songs);
-                }
-            }
-            if (pl.empty()) {
-                LOG_WARN("No music files found");
-            } else {
-                StateStore::instance().set_playlist(pl, 0);
-                LOG_INFO("Scanned %d dirs: %zu songs", (int)scan_dirs.size(), pl.size());
-            }
             return true;
         }
 
