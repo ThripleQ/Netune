@@ -9,6 +9,7 @@ static AudioOutputBackend *g_backends[MAX_BACKENDS];
 static int                 g_count = 0;
 
 static AudioOutputBackend *g_active = NULL;
+static AudioOutput       *g_active_ao = NULL;
 
 int audio_output_register_backend(AudioOutputBackend *backend) {
     if (!backend || !backend->name) return -1;
@@ -31,6 +32,7 @@ static void register_builtins(void) {
 struct AudioOutput {
     int sample_rate;
     int channels;
+    int volume;  /* 0-100, applied as software gain */
 };
 
 AudioOutput* audio_output_create(int sample_rate, int channels) {
@@ -74,6 +76,10 @@ AudioOutput* audio_output_create(int sample_rate, int channels) {
     AudioOutput *ao = (AudioOutput*)malloc(sizeof(AudioOutput));
     ao->sample_rate = sample_rate;
     ao->channels = channels;
+    ao->volume = 80;
+    Config *gcfg2 = config_global();
+    if (gcfg2) ao->volume = config_get_int(gcfg2, "audio.volume", 80);
+    g_active_ao = ao;
     return ao;
 }
 
@@ -82,15 +88,34 @@ void audio_output_destroy(AudioOutput *ao) {
     if (g_active && g_active->shutdown)
         g_active->shutdown();
     g_active = NULL;
+    g_active_ao = NULL;
     free(ao);
     LOG_DEBUG("Audio output destroyed");
 }
 
 int audio_output_write(AudioOutput *ao, const int16_t *pcm, int frames) {
     if (!ao || !g_active || !g_active->write) return -1;
-    return g_active->write(
-        (const uint8_t*)pcm,
-        (size_t)frames * ao->channels * sizeof(int16_t));
+
+    size_t bytes = (size_t)frames * ao->channels * sizeof(int16_t);
+
+    if (ao->volume < 100) {
+        /* software volume: apply gain to PCM samples */
+        size_t samples = (size_t)frames * ao->channels;
+        int16_t *scaled = (int16_t*)malloc(bytes);
+        if (!scaled) return -1;
+        double gain = (double)ao->volume / 100.0;
+        for (size_t i = 0; i < samples; i++) {
+            double v = (double)pcm[i] * gain;
+            if (v > 32767.0) v = 32767.0;
+            if (v < -32768.0) v = -32768.0;
+            scaled[i] = (int16_t)v;
+        }
+        int rc = g_active->write((const uint8_t*)scaled, bytes);
+        free(scaled);
+        return rc;
+    }
+
+    return g_active->write((const uint8_t*)pcm, bytes);
 }
 
 int audio_output_delay_us(AudioOutput *ao, uint64_t *delay_us) {
@@ -105,12 +130,17 @@ int audio_output_flush(AudioOutput *ao) {
     return -1;
 }
 
+/* Volume is stored in the AudioOutput struct and applied as
+   software gain in audio_output_write(). Does NOT touch system mixer. */
 int audio_output_set_volume(int vol) {
-    if (!g_active || !g_active->set_volume) return -1;
-    return g_active->set_volume(vol);
+    if (!g_active_ao) return -1;
+    if (vol < 0) vol = 0;
+    if (vol > 100) vol = 100;
+    g_active_ao->volume = vol;
+    return 0;
 }
 
 int audio_output_get_volume(void) {
-    if (!g_active || !g_active->get_volume) return -1;
-    return g_active->get_volume();
+    if (!g_active_ao) return -1;
+    return g_active_ao->volume;
 }
