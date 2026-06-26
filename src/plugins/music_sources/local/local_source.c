@@ -1,5 +1,6 @@
 #include "local_source.h"
 #include "core/decoder_manager.h"
+#include "core/music_source_manager.h"
 #include "infra/log.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,12 +16,6 @@ typedef struct {
     int       capacity;
 } SongArray;
 
-static void song_array_init(SongArray *a) {
-    a->items = NULL;
-    a->count = 0;
-    a->capacity = 0;
-}
-
 static char* sdup(const char *s) {
     if (!s) return NULL;
     size_t len = strlen(s) + 1;
@@ -29,13 +24,18 @@ static char* sdup(const char *s) {
     return cpy;
 }
 
+static void song_array_init(SongArray *a) {
+    a->items = NULL;
+    a->count = 0;
+    a->capacity = 0;
+}
+
 static void song_array_push(SongArray *a, const SongInfo *s) {
     if (a->count >= a->capacity) {
         a->capacity = a->capacity ? a->capacity * 2 : 64;
         a->items = (SongInfo*)realloc(a->items,
                       (size_t)a->capacity * sizeof(SongInfo));
     }
-    /* shallow copy, then deep-dup strings */
     int idx = a->count++;
     a->items[idx] = *s;
     a->items[idx].id        = sdup(s->id);
@@ -45,14 +45,6 @@ static void song_array_push(SongArray *a, const SongInfo *s) {
     a->items[idx].album     = sdup(s->album);
     a->items[idx].cover_url = sdup(s->cover_url);
     a->items[idx].aux_label = sdup(s->aux_label);
-}
-
-static void song_array_free(SongArray *a) {
-    for (int i = 0; i < a->count; i++)
-        song_info_free(&a->items[i]);
-    free(a->items);
-    a->items = NULL;
-    a->count = a->capacity = 0;
 }
 
 /* ── File scanning ──────────────────────────────────── */
@@ -79,22 +71,21 @@ static void scan_dir(const char *dir_path, SongArray *arr) {
         if (stat(full, &st) != 0) continue;
 
         if (S_ISDIR(st.st_mode)) {
-            scan_dir(full, arr); /* recurse */
+            scan_dir(full, arr);
         } else if (S_ISREG(st.st_mode) && has_music_ext(entry->d_name)) {
             SongInfo s = {0};
-            s.id   = strdup(full);
-            s.source = strdup("local");
-            s.title  = strdup(entry->d_name);
-            s.artist = strdup("");
-            s.album  = strdup("");
+            s.id     = sdup(full);
+            s.source = sdup("local");
+            s.title  = sdup(entry->d_name);
+            s.artist = sdup("");
+            s.album  = sdup("");
 
-            /* probe duration via decoder */
             Decoder *d = decoder_open(full);
             if (d) {
                 DecoderInfo info;
                 decoder_get_info(d, &info);
-                if (info.total_frames > 0 && info.samplerate > 0)
-                    s.duration_sec = info.total_frames / info.samplerate;
+                if (info.total_frames > 0 && info.sample_rate > 0)
+                    s.duration_sec = info.total_frames / info.sample_rate;
                 decoder_close(d);
             }
 
@@ -116,7 +107,7 @@ static void local_shutdown(void) {
 
 static int local_search(const char *keyword, int page, int page_size,
                         SearchResult *out) {
-    /* For local files, "keyword" is the directory path to scan */
+    (void)page; (void)page_size;
     if (!keyword || !out) return -1;
     SongArray arr;
     song_array_init(&arr);
@@ -125,12 +116,10 @@ static int local_search(const char *keyword, int page, int page_size,
     out->songs = arr.items;
     out->count = arr.count;
     out->total = arr.count;
-    /* song_array items are now owned by caller */
     return 0;
 }
 
 static int local_get_song_detail(const char *song_id, SongInfo *out) {
-    /* For local files, song_id is the file path */
     Decoder *d = decoder_open(song_id);
     if (!d) return -1;
 
@@ -140,12 +129,13 @@ static int local_get_song_detail(const char *song_id, SongInfo *out) {
     const char *fname = strrchr(song_id, '/');
     fname = fname ? fname + 1 : song_id;
 
-    /* fill basic info */
-    free(out->id); out->id = strdup(song_id);
-    free(out->source); out->source = strdup("local");
-    free(out->title);  out->title  = strdup(fname);
-    if (info.total_frames > 0 && info.samplerate > 0)
-        out->duration_sec = info.total_frames / info.samplerate;
+    out->id          = sdup(song_id);
+    out->source      = sdup("local");
+    out->title       = sdup(fname);
+    out->artist      = sdup("");
+    out->album       = sdup("");
+    if (info.total_frames > 0 && info.sample_rate > 0)
+        out->duration_sec = info.total_frames / info.sample_rate;
 
     decoder_close(d);
     return 0;
@@ -161,7 +151,7 @@ static int local_get_play_url(const char *song_id, int quality,
 static int local_get_lyric(const char *song_id, char *buf, size_t buf_size) {
     (void)song_id;
     if (buf_size > 0) buf[0] = '\0';
-    return 0; /* no lyrics for local files */
+    return 0;
 }
 
 static int local_get_cover_url(const char *song_id, char *buf, size_t buf_size) {
@@ -175,21 +165,20 @@ static bool local_is_available(void) {
 }
 
 static MusicSource g_local_source = {
-    .name           = "local",
-    .priority       = 10,
-    .init           = local_init,
-    .shutdown       = local_shutdown,
-    .search         = local_search,
+    .name            = "local",
+    .priority        = 10,
+    .init            = local_init,
+    .shutdown        = local_shutdown,
+    .search          = local_search,
     .get_song_detail = local_get_song_detail,
-    .get_play_url   = local_get_play_url,
-    .get_lyric      = local_get_lyric,
-    .get_cover_url  = local_get_cover_url,
-    .is_available   = local_is_available,
+    .get_play_url    = local_get_play_url,
+    .get_lyric       = local_get_lyric,
+    .get_cover_url   = local_get_cover_url,
+    .is_available    = local_is_available,
 };
 
 void local_source_register(void) {
-    /* just expose the static instance */
-    LOG_INFO("Local source plugin ready");
+    music_source_register(&g_local_source);
 }
 
 MusicSource* local_source_create(void) {

@@ -71,6 +71,7 @@ public:
     void set_playlist(const std::vector<SongInfo> &list, int index);
     void set_search_results(const std::string &keyword,
                             const std::vector<SongInfo> &results);
+    void set_selected_index(int idx);
 
     /* subscribe to state changes */
     void subscribe(StateChangeCallback cb);

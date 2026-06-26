@@ -6,9 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h>
 #include <cstring>
-#include <algorithm>
 #include <vector>
 #include <string>
 
@@ -17,80 +15,65 @@ extern "C" {
 #include "infra/config.h"
 #include "core/event_bus.h"
 #include "core/playback_coordinator.h"
+#include "core/music_source_manager.h"
 #include "core/music_source.h"
 #include "plugins/music_sources/local/local_source.h"
 }
 
+#include "ui/state_store.h"
+
 using namespace ftxui;
 
-/* ── Global state bridge (C++ side) ─────────────────── */
-enum class PlayState { Stopped, Playing, Paused };
-
-static struct {
-    PlayState play_state = PlayState::Stopped;
-    std::string current_path;
-    std::string current_title;
-    double      progress = 0.0;
-    int         time_sec = 0;
-    int         total_sec = 0;
-    std::vector<SongInfo> playlist;
-    int         selected = 0;
-} g_state;
-
+/* ── Signal handler ──────────────────────────────── */
 static volatile bool g_running = true;
 
-/* ── Signal handler ──────────────────────────────── */
 static void on_signal(int sig) {
     (void)sig;
     g_running = false;
 }
 
-/* ── Event bus callbacks ──────────────────────────── */
+/* ── Event bus → StateStore bridge ────────────────── */
 static void ev_progress(const BusEvent *ev, void *data) {
     (void)data;
     if (ev->data_size == sizeof(int[2])) {
         int *p = (int*)ev->data;
-        g_state.time_sec = p[0];
-        g_state.total_sec = p[1];
-        g_state.progress = (g_state.total_sec > 0)
-            ? (double)g_state.time_sec / g_state.total_sec : 0.0;
+        double prog = (p[1] > 0) ? (double)p[0] / p[1] : 0.0;
+        StateStore::instance().set_progress(prog, p[0], p[1]);
     }
 }
 
 static void ev_playback_start(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
-    g_state.play_state = PlayState::Playing;
+    StateStore::instance().set_playback_state(PlaybackState::Playing);
 }
 
 static void ev_playback_pause(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
-    g_state.play_state = PlayState::Paused;
+    StateStore::instance().set_playback_state(PlaybackState::Paused);
 }
 
 static void ev_playback_resume(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
-    g_state.play_state = PlayState::Playing;
+    StateStore::instance().set_playback_state(PlaybackState::Playing);
 }
 
 static void ev_playback_stop(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
-    g_state.play_state = PlayState::Stopped;
-    g_state.progress = 0.0;
-    g_state.time_sec = 0;
+    StateStore::instance().set_playback_state(PlaybackState::Stopped);
+    StateStore::instance().set_progress(0.0, 0, 0);
 }
 
 static void ev_playback_finish(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
-    g_state.play_state = PlayState::Stopped;
+    StateStore::instance().set_playback_state(PlaybackState::Stopped);
 }
 
 /* ── Main ────────────────────────────────────────────── */
 int main(int argc, char **argv) {
-    /* logging */
     log_init(NULL);
     LOG_INFO("LMusic v2.0.0 starting");
 
-    /* quick --help */
+    /* --help */
     if (argc > 1 && (strcmp(argv[1], "--help") == 0 ||
                      strcmp(argv[1], "-h") == 0)) {
         printf("LMusic v2.0.0 — Terminal music player\n");
@@ -108,15 +91,16 @@ int main(int argc, char **argv) {
     /* event bus */
     event_bus_init();
 
-    /* subscribe UI callbacks */
-    event_bus_subscribe(EV_PROGRESS_UPDATE, ev_progress, NULL);
-    event_bus_subscribe(EV_PLAYBACK_START, ev_playback_start, NULL);
-    event_bus_subscribe(EV_PLAYBACK_PAUSE, ev_playback_pause, NULL);
-    event_bus_subscribe(EV_PLAYBACK_RESUME, ev_playback_resume, NULL);
-    event_bus_subscribe(EV_PLAYBACK_STOP, ev_playback_stop, NULL);
-    event_bus_subscribe(EV_PLAYBACK_FINISH, ev_playback_finish, NULL);
+    /* subscribe → StateStore */
+    event_bus_subscribe(EV_PROGRESS_UPDATE,   ev_progress, NULL);
+    event_bus_subscribe(EV_PLAYBACK_START,    ev_playback_start, NULL);
+    event_bus_subscribe(EV_PLAYBACK_PAUSE,    ev_playback_pause, NULL);
+    event_bus_subscribe(EV_PLAYBACK_RESUME,   ev_playback_resume, NULL);
+    event_bus_subscribe(EV_PLAYBACK_STOP,     ev_playback_stop, NULL);
+    event_bus_subscribe(EV_PLAYBACK_FINISH,   ev_playback_finish, NULL);
 
-    /* register plugins */
+    /* music sources */
+    music_source_manager_init();
     local_source_register();
 
     /* playback coordinator */
@@ -130,50 +114,51 @@ int main(int argc, char **argv) {
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 
-    /* ── UI ────────────────────────────────────── */
+    /* ── FTXUI UI ───────────────────────────────── */
     auto screen = ScreenInteractive::Fullscreen();
+    auto &state = StateStore::instance();
 
-    /* build the renderer component */
     auto component = Renderer([&]() -> Element {
-        /* progress text */
-        char buf[64];
-        int m = g_state.time_sec / 60, s = g_state.time_sec % 60;
-        int tm = g_state.total_sec / 60, ts = g_state.total_sec % 60;
-        snprintf(buf, sizeof(buf), "%02d:%02d / %02d:%02d", m, s, tm, ts);
-        std::string progress_str = buf;
+        const AppState &s = state.state();
 
         /* state label */
         std::string state_str;
-        switch (g_state.play_state) {
-        case PlayState::Playing: state_str = "\u25B6 Playing"; break;
-        case PlayState::Paused:  state_str = "\u23F8 Paused";  break;
-        default:                 state_str = "\u25A0 Stopped"; break;
+        switch (s.playback_state) {
+        case PlaybackState::Playing: state_str = "\u25B6 Playing"; break;
+        case PlaybackState::Paused:  state_str = "\u23F8 Paused";  break;
+        default:                     state_str = "\u25A0 Stopped"; break;
         }
 
-        /* title */
-        std::string title = g_state.current_title.empty()
-            ? "No track loaded" : g_state.current_title;
+        /* time */
+        char buf[64];
+        int m = s.current_time_sec / 60, sec = s.current_time_sec % 60;
+        int tm = s.total_time_sec / 60, tsec = s.total_time_sec % 60;
+        snprintf(buf, sizeof(buf), "%02d:%02d / %02d:%02d", m, sec, tm, tsec);
+        std::string time_str = buf;
 
-        /* playlist entries */
+        /* title */
+        std::string title = s.current_song.title
+            ? std::string(s.current_song.title) : "No track loaded";
+
+        /* playlist */
         Elements entries;
-        for (size_t i = 0; i < g_state.playlist.size(); i++) {
-            auto &s = g_state.playlist[i];
-            std::string label = s.title ? s.title : "(unknown)";
-            if (s.artist && s.artist[0])
-                label = std::string(s.artist) + " - " + label;
-            if ((int)i == g_state.selected)
+        for (size_t i = 0; i < s.playlist.size(); i++) {
+            std::string label = s.playlist[i].title
+                ? s.playlist[i].title : "(unknown)";
+            if (s.playlist[i].artist && s.playlist[i].artist[0])
+                label = std::string(s.playlist[i].artist) + " - " + label;
+            if ((int)i == s.selected_index)
                 entries.push_back(text(label) | bold | inverted);
             else
                 entries.push_back(text(label));
         }
 
-        /* assemble layout */
         return vbox(Elements{
             text(" LMusic v2.0.0 ") | bold | center,
             separator(),
             text(" " + title) | bold,
-            text(" " + state_str + "  |  " + progress_str) | dim,
-            gauge(g_state.progress),
+            text(" " + state_str + "  |  " + time_str) | dim,
+            gauge(s.progress),
             separator(),
             text(" Playlist:") | bold,
             vbox(std::move(entries)) | yframe | flex,
@@ -182,7 +167,6 @@ int main(int argc, char **argv) {
         }) | border;
     });
 
-    /* key bindings */
     component |= CatchEvent([&](ftxui::Event event) -> bool {
         if (event == ftxui::Event::Character('q') ||
             event == ftxui::Event::Escape) {
@@ -192,7 +176,6 @@ int main(int argc, char **argv) {
 
         /* scan directory */
         if (event == ftxui::Event::Character('s')) {
-            /* try common music dirs */
             const char *dirs[] = {
                 getenv("HOME"),
                 "/home/liu/Music",
@@ -201,42 +184,43 @@ int main(int argc, char **argv) {
             };
             bool found = false;
             for (int i = 0; dirs[i]; i++) {
-                MusicSource *src = local_source_create();
                 SearchResult result;
                 memset(&result, 0, sizeof(result));
-                if (src->search(dirs[i], 0, 0, &result) == 0 && result.count > 0) {
-                    /* transfer songs to playlist */
+                if (music_source_search("local", dirs[i], 0, 0, &result) == 0
+                    && result.count > 0) {
+                    std::vector<SongInfo> pl;
                     for (int j = 0; j < result.count; j++) {
                         SongInfo copy;
                         song_info_copy(&copy, &result.songs[j]);
-                        g_state.playlist.push_back(copy);
+                        pl.push_back(copy);
                         song_info_free(&result.songs[j]);
                     }
                     free(result.songs);
+                    StateStore::instance().set_playlist(pl, 0);
+                    LOG_INFO("Scanned %s: %zu songs", dirs[i], pl.size());
                     found = true;
-                    LOG_INFO("Scanned %s: %d songs", dirs[i], result.count);
                     break;
                 }
             }
             if (!found)
-                LOG_WARN("No music files found in standard dirs");
+                LOG_WARN("No music files found");
             return true;
         }
 
         /* play / pause */
         if (event == ftxui::Event::Character('\r') ||
             event == ftxui::Event::Character(' ')) {
-            if (g_state.playlist.empty()) return true;
+            const AppState &s = state.state();
+            if (s.playlist.empty()) return true;
 
-            if (g_state.play_state == PlayState::Playing) {
+            if (s.playback_state == PlaybackState::Playing) {
                 event_bus_publish(EV_PLAYBACK_PAUSE, NULL, 0);
-            } else if (g_state.play_state == PlayState::Paused) {
+            } else if (s.playback_state == PlaybackState::Paused) {
                 event_bus_publish(EV_PLAYBACK_RESUME, NULL, 0);
             } else {
-                const SongInfo &s = g_state.playlist[g_state.selected];
-                const char *path = s.id ? s.id : "";
-                g_state.current_path = path;
-                g_state.current_title = s.title ? s.title : path;
+                const SongInfo &song = s.playlist[s.selected_index];
+                const char *path = song.id ? song.id : "";
+                StateStore::instance().set_current_song(song);
                 event_bus_publish(EV_PLAYBACK_START,
                                   (void*)path, strlen(path) + 1);
             }
@@ -246,15 +230,17 @@ int main(int argc, char **argv) {
         /* navigation */
         if (event == ftxui::Event::Character('j') ||
             event == ftxui::Event::ArrowDown) {
-            if (!g_state.playlist.empty() &&
-                g_state.selected < (int)g_state.playlist.size() - 1)
-                g_state.selected++;
+            const AppState &s = state.state();
+            if (!s.playlist.empty() &&
+                s.selected_index < (int)s.playlist.size() - 1)
+                StateStore::instance().set_selected_index(s.selected_index + 1);
             return true;
         }
         if (event == ftxui::Event::Character('k') ||
             event == ftxui::Event::ArrowUp) {
-            if (g_state.selected > 0)
-                g_state.selected--;
+            const AppState &s = state.state();
+            if (s.selected_index > 0)
+                StateStore::instance().set_selected_index(s.selected_index - 1);
             return true;
         }
 
@@ -267,6 +253,7 @@ int main(int argc, char **argv) {
     LOG_INFO("Shutting down");
     event_bus_publish(EV_APP_SHUTDOWN, NULL, 0);
     playback_coordinator_shutdown();
+    music_source_manager_shutdown();
     event_bus_shutdown();
     config_free(cfg);
     log_shutdown();

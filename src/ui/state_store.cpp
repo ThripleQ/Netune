@@ -107,6 +107,11 @@ void StateStore::set_search_results(const std::string &keyword,
     notify();
 }
 
+void StateStore::set_selected_index(int idx) {
+    state_.selected_index = idx;
+    notify();
+}
+
 void StateStore::subscribe(StateChangeCallback cb) {
     subscribers_.push_back(std::move(cb));
 }

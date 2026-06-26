@@ -164,7 +164,7 @@ static void* playback_thread(void *arg) {
             }
             DecoderInfo info;
             decoder_get_info(decoder, &info);
-            samplerate  = info.samplerate;
+            samplerate  = info.sample_rate;
             channels    = info.channels;
             total_frames = info.total_frames;
             current_frame = 0;
