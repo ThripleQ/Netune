@@ -1,0 +1,32 @@
+{
+  "audio": {
+    "backend": "auto",
+    "sample_rate": 44100,
+    "buffer_frames": 8192,
+    "volume": 80
+  },
+  "ui": {
+    "theme": "default",
+    "layout": "default",
+    "keybindings": "default",
+    "show_lyric": true
+  },
+  "playback": {
+    "loop_mode": 0,
+    "gapless": true,
+    "resume_on_startup": false
+  },
+  "music_sources": {
+    "local": {
+      "enabled": true,
+      "dirs": ["~/Music"]
+    },
+    "netease": {
+      "enabled": false
+    }
+  },
+  "network": {
+    "timeout_sec": 10,
+    "max_retries": 2
+  }
+}
