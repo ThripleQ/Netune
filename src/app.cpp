@@ -219,7 +219,6 @@ int run_app(int argc, char **argv) {
             }
             /* scan ALL dirs, aggregate results */
             std::vector<SongInfo> pl;
-            int total = 0;
             for (auto &dir : scan_dirs) {
                 SearchResult result;
                 memset(&result, 0, sizeof(result));
@@ -231,7 +230,6 @@ int run_app(int argc, char **argv) {
                         song_info_free(&result.songs[j]);
                     }
                     free(result.songs);
-                    total += result.count;
                 }
             }
             if (pl.empty()) {
@@ -243,20 +241,29 @@ int run_app(int argc, char **argv) {
             return true;
         }
 
-        /* play / pause */
-        if (event == ftxui::Event::Character('\r') ||
+        /* play / pause / switch track */
+        if (event == ftxui::Event::Return ||
             event == ftxui::Event::Character(' ')) {
             const AppState &s = state.state();
             if (s.playlist.empty()) return true;
 
-            if (s.playback_state == PlaybackState::Playing) {
+            /* Check if selected song is the same as currently playing */
+            const SongInfo &sel = s.playlist[s.selected_index];
+            bool same_song = (s.current_song.id && sel.id &&
+                strcmp(s.current_song.id, sel.id) == 0);
+
+            if (same_song && s.playback_state == PlaybackState::Playing) {
+                /* Toggle pause on current song */
                 event_bus_publish(EV_PLAYBACK_PAUSE, NULL, 0);
-            } else if (s.playback_state == PlaybackState::Paused) {
+            } else if (same_song && s.playback_state == PlaybackState::Paused) {
+                /* Resume current song */
                 event_bus_publish(EV_PLAYBACK_RESUME, NULL, 0);
             } else {
-                const SongInfo &song = s.playlist[s.selected_index];
-                const char *path = song.id ? song.id : "";
-                StateStore::instance().set_current_song(song);
+                /* Different song or stopped — play selected.
+                   CMD_PLAY in the coordinator already closes the
+                   previous decoder/audio before opening new ones. */
+                const char *path = sel.id ? sel.id : "";
+                StateStore::instance().set_current_song(sel);
                 event_bus_publish(EV_PLAYBACK_START,
                                   (void*)path, strlen(path) + 1);
             }
