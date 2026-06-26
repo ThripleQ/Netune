@@ -291,29 +291,34 @@ int run_app(int argc, char **argv) {
             return true;
         }
 
-        /* next / prev track */
+        /* next / prev track — save index before mutating state */
         if (event == ftxui::Event::Character('n')) {
             const AppState &s = state.state();
-            if (!s.playlist.empty() &&
-                s.selected_index < (int)s.playlist.size() - 1) {
-                StateStore::instance().set_selected_index(s.selected_index + 1);
-                const SongInfo &sel = s.playlist[s.selected_index + 1];
-                const char *path = sel.id ? sel.id : "";
-                StateStore::instance().set_current_song(sel);
-                event_bus_publish(EV_PLAYBACK_START,
-                                  (void*)path, strlen(path) + 1);
+            int cur = s.selected_index;
+            if (!s.playlist.empty() && cur < (int)s.playlist.size() - 1) {
+                int next = cur + 1;
+                StateStore::instance().set_selected_index(next);
+                const char *path = s.playlist[next].id;
+                if (path) {
+                    StateStore::instance().set_current_song(s.playlist[next]);
+                    event_bus_publish(EV_PLAYBACK_START,
+                                      (void*)path, strlen(path) + 1);
+                }
             }
             return true;
         }
         if (event == ftxui::Event::Character('p')) {
             const AppState &s = state.state();
-            if (s.selected_index > 0) {
-                StateStore::instance().set_selected_index(s.selected_index - 1);
-                const SongInfo &sel = s.playlist[s.selected_index - 1];
-                const char *path = sel.id ? sel.id : "";
-                StateStore::instance().set_current_song(sel);
-                event_bus_publish(EV_PLAYBACK_START,
-                                  (void*)path, strlen(path) + 1);
+            int cur = s.selected_index;
+            if (cur > 0) {
+                int prev = cur - 1;
+                StateStore::instance().set_selected_index(prev);
+                const char *path = s.playlist[prev].id;
+                if (path) {
+                    StateStore::instance().set_current_song(s.playlist[prev]);
+                    event_bus_publish(EV_PLAYBACK_START,
+                                      (void*)path, strlen(path) + 1);
+                }
             }
             return true;
         }
