@@ -20,6 +20,8 @@ void         audio_output_destroy(AudioOutput *ao);
 int          audio_output_write(AudioOutput *ao, const int16_t *pcm, int frames);
 int          audio_output_delay_us(AudioOutput *ao, uint64_t *delay_us);
 int          audio_output_flush(AudioOutput *ao);
+int          audio_output_set_volume(int vol);  /* 0-100 */
+int          audio_output_get_volume(void);       /* -1 if unsupported */
 
 #ifdef __cplusplus
 }

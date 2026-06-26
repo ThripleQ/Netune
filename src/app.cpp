@@ -21,6 +21,7 @@ extern "C" {
 #include "core/music_source_manager.h"
 #include "core/music_source.h"
 #include "core/playlist_manager.h"
+#include "core/audio_output_mgr.h"
 #include "plugins/music_sources/local/local_source.h"
 }
 
@@ -214,6 +215,7 @@ int run_app(int argc, char **argv) {
         case LoopMode::Track:    loop_str = "\u21BA"; break;
         case LoopMode::Playlist: loop_str = "\u21BB"; break;
         }
+        std::string vol_str = "Vol:" + std::to_string(s.volume);
         std::string title = s.current_song.title ? s.current_song.title : "";
 
         /* left panel — groups */
@@ -245,7 +247,7 @@ int run_app(int argc, char **argv) {
         return vbox(Elements{
             text(" LMusic v2.0.0 ") | bold | center,
             separator(),
-            text(" " + state_str + " " + loop_str + "  " + time_str + "  " + title) | dim,
+            text(" " + state_str + " " + loop_str + "  " + time_str + "  " + vol_str + "  " + title) | dim,
             gauge(s.progress),
             separator(),
             hbox(Elements{
@@ -254,7 +256,7 @@ int run_app(int argc, char **argv) {
                 vbox(std::move(right_els)) | yframe | flex | border,
             }) | flex,
             separator(),
-            text(" [Tab]panel  [j/k]nav  [Enter]play  [Space]pause  [l]loop  [q]quit") | dim,
+            text(" [Tab]panel  [j/k]nav  [Enter]play  [Space]pause  [+/-]vol  [l]loop  [q]quit") | dim,
         });
     });
 
@@ -343,6 +345,26 @@ int run_app(int argc, char **argv) {
                 }
                 return true;
             }
+        }
+
+        /* volume */
+        if (event == ftxui::Event::Character('+') || event == ftxui::Event::Character('=')) {
+            int vol = audio_output_get_volume();
+            if (vol >= 0) {
+                vol = (vol + 5 > 100) ? 100 : vol + 5;
+                if (audio_output_set_volume(vol) == 0)
+                    StateStore::instance().set_volume(vol);
+            }
+            return true;
+        }
+        if (event == ftxui::Event::Character('-')) {
+            int vol = audio_output_get_volume();
+            if (vol >= 0) {
+                vol = (vol - 5 < 0) ? 0 : vol - 5;
+                if (audio_output_set_volume(vol) == 0)
+                    StateStore::instance().set_volume(vol);
+            }
+            return true;
         }
 
         if (event == ftxui::Event::Character(' ')) {

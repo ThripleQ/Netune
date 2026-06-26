@@ -104,3 +104,13 @@ int audio_output_flush(AudioOutput *ao) {
     if (g_active->flush) return g_active->flush();
     return -1;
 }
+
+int audio_output_set_volume(int vol) {
+    if (!g_active || !g_active->set_volume) return -1;
+    return g_active->set_volume(vol);
+}
+
+int audio_output_get_volume(void) {
+    if (!g_active || !g_active->get_volume) return -1;
+    return g_active->get_volume();
+}
