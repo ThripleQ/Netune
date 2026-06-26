@@ -78,13 +78,14 @@ static void ev_playback_finish(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
     int next = playlist_manager_advance();
     if (next >= 0) {
-        const auto &st = StateStore::instance().state();
-        if (next < (int)st.playlist.size() && st.playlist[next].id) {
+        const char *path = playlist_manager_get_path(next);
+        if (path) {
+            const auto &st = StateStore::instance().state();
             StateStore::instance().set_selected_index(next);
-            StateStore::instance().set_current_song(st.playlist[next]);
+            if (next < (int)st.playlist.size())
+                StateStore::instance().set_current_song(st.playlist[next]);
             event_bus_publish(EV_PLAYBACK_START,
-                              (void*)st.playlist[next].id,
-                              strlen(st.playlist[next].id) + 1);
+                              (void*)path, strlen(path) + 1);
             return;
         }
     }
@@ -178,14 +179,19 @@ int run_app(int argc, char **argv) {
             }
         }
         if (!pl.empty()) {
-            /* playlist_manager: just the count, no song data */
-            playlist_manager_set_count((int)pl.size());
-            /* StateStore: single source of truth for song data */
+            /* 1. Backend: sync paths (minimal, for navigation decisions) */
+            std::vector<const char*> paths;
+            for (const auto &s : pl) paths.push_back(s.id);
+            playlist_manager_sync(paths.data(), (int)paths.size());
+
+            /* 2. StateStore: full metadata for UI display */
             StateStore::instance().set_playlist(pl, 0);
-            /* pl items were deep-copied by set_playlist; free originals */
+
+            /* 3. Free scan result */
+            size_t scan_count = pl.size();
             for (auto &s : pl) song_info_free(&s);
             pl.clear();
-            LOG_INFO("Auto-scanned %zu songs from config", pl.size());
+            LOG_INFO("Auto-scanned %zu songs from config", scan_count);
         }
     }
 
@@ -359,17 +365,18 @@ int run_app(int argc, char **argv) {
             return true;
         }
 
-        /* next / prev track — route through playlist_manager */
+        /* next / prev track — backend decides, UI follows */
         if (event == ftxui::Event::Character('n')) {
             int next = playlist_manager_advance();
             if (next >= 0) {
-                const AppState &st = state.state();
-                if (next < (int)st.playlist.size() && st.playlist[next].id) {
+                const char *path = playlist_manager_get_path(next);
+                if (path) {
+                    const AppState &st = state.state();
                     StateStore::instance().set_selected_index(next);
-                    StateStore::instance().set_current_song(st.playlist[next]);
+                    if (next < (int)st.playlist.size())
+                        StateStore::instance().set_current_song(st.playlist[next]);
                     event_bus_publish(EV_PLAYBACK_START,
-                                      (void*)st.playlist[next].id,
-                                      strlen(st.playlist[next].id) + 1);
+                                      (void*)path, strlen(path) + 1);
                 }
             }
             return true;
@@ -377,13 +384,14 @@ int run_app(int argc, char **argv) {
         if (event == ftxui::Event::Character('p')) {
             int prev = playlist_manager_retreat();
             if (prev >= 0) {
-                const AppState &st = state.state();
-                if (prev < (int)st.playlist.size() && st.playlist[prev].id) {
+                const char *path = playlist_manager_get_path(prev);
+                if (path) {
+                    const AppState &st = state.state();
                     StateStore::instance().set_selected_index(prev);
-                    StateStore::instance().set_current_song(st.playlist[prev]);
+                    if (prev < (int)st.playlist.size())
+                        StateStore::instance().set_current_song(st.playlist[prev]);
                     event_bus_publish(EV_PLAYBACK_START,
-                                      (void*)st.playlist[prev].id,
-                                      strlen(st.playlist[prev].id) + 1);
+                                      (void*)path, strlen(path) + 1);
                 }
             }
             return true;

@@ -11,33 +11,31 @@ extern "C" {
 
 /* ── API ─────────────────────────────────────────────
  *
- * playlist_manager is a lightweight navigation helper.
- * It ONLY manages index and loop_mode — it does NOT
- * store song data. Song data lives in StateStore (the
- * single source of truth).
+ * playlist_manager is the playback decision backend.
+ * It owns a copy of song paths (not full metadata) and
+ * handles all navigation logic independently from the UI.
  *
- * Call flow:
- *   idx = playlist_manager_advance();
- *   if (idx >= 0) {
- *       song = StateStore.playlist[idx];  // read data
- *       play(song);
- *   }
+ * UI syncs paths here when playing a new playlist.
+ * Backend returns decisions (index + path), UI applies them.
  * ──────────────────────────────────────────────── */
 
 int  playlist_manager_init(void);
 
-void playlist_manager_set_count(int count);
-int  playlist_manager_get_count(void);
+/* Sync a playlist to the backend. Owners the paths.
+   count=0 clears the list. */
+void playlist_manager_sync(const char **paths, int count);
 
-/* Current index */
-void playlist_manager_set_index(int idx);
+int  playlist_manager_count(void);
 int  playlist_manager_get_index(void);
+void playlist_manager_set_index(int idx);
 
-/* Loop mode */
+/* Get the path at given index (owned internally, do not free). */
+const char* playlist_manager_get_path(int idx);
+
 void playlist_manager_set_loop_mode(int mode);
 int  playlist_manager_get_loop_mode(void);
 
-/* Navigation: return next/prev index, or -1 if cannot move.
+/* Advance/Retreat: return new index (or -1 if stuck).
    Updates internal index on success. */
 int  playlist_manager_advance(void);
 int  playlist_manager_retreat(void);
