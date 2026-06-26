@@ -223,7 +223,15 @@ static void* playback_thread(void *arg) {
                 }
                 continue;
             case CMD_SEEK:
-                /* seek has no effect when not playing */
+                /* seek while paused — update decoder position */
+                if (decoder && total_frames > 0) {
+                    int target = cmd.seek_frame * samplerate;
+                    if (target < 0) target = 0;
+                    if (target >= total_frames)
+                        target = total_frames - 1;
+                    decoder_seek(decoder, target);
+                    current_frame = target;
+                }
                 continue;
             default:
                 break;
@@ -273,6 +281,8 @@ static void* playback_thread(void *arg) {
                         current_frame = target;
                         /* flush residual audio from output buffer */
                         if (audio) audio_output_flush(audio);
+                        /* force progress update — now_ms went backward */
+                        last_progress_ms = -PROGRESS_INTERVAL_MS;
                     }
                     break;
                 case CMD_QUIT:
