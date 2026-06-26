@@ -1,4 +1,5 @@
 #include "ui/components/status_bar.h"
+#include "ui/components/theme_util.h"
 #include <cstdio>
 using namespace ftxui;
 
@@ -23,8 +24,9 @@ Element render_status_bar(const AppState &s) {
     std::string vol_str = "Vol:" + std::to_string(s.volume);
     std::string title = s.current_song.title ? s.current_song.title : "";
 
-    return vbox(Elements{
-        text(" " + state_str + " " + loop_str + "  " + time_str + "  " + vol_str + "  " + title) | dim,
-        gauge(s.progress),
-    });
+    return theme_bg(vbox(Elements{
+        theme_fg(text(" " + state_str + " " + loop_str + "  " + time_str
+                      + "  " + vol_str + "  " + title)) | dim,
+        gauge(s.progress) | theme_accent,
+    }));
 }

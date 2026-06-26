@@ -1,0 +1,5 @@
+name: "Default Light"
+colors:
+  bg: "#000000"
+  fg: "#aaaaaa"
+  accent: "#ffffff"

@@ -30,6 +30,7 @@ extern "C" {
 #include "ui/components/status_bar.h"
 #include "ui/components/group_list.h"
 #include "ui/components/song_list.h"
+#include "ui/theme.h"
 
 using namespace ftxui;
 
@@ -138,6 +139,12 @@ int run_app(int argc, char **argv) {
     const char *kb_path = "data/keybindings/default.yaml";
     if (kb_name && strcmp(kb_name, "default") != 0) kb_path = kb_name;
     g_keybindings.load(kb_path);
+
+    /* load theme */
+    const char *t_name = config_get_str(cfg, "ui.theme", NULL);
+    const char *t_path = "data/themes/default.yaml";
+    if (t_name && strcmp(t_name, "default") != 0) t_path = t_name;
+    ThemeManager::instance().load(t_path);
 
     music_source_manager_init();
     local_source_register();

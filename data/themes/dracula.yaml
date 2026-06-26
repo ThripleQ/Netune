@@ -1,0 +1,5 @@
+name: "Dracula"
+colors:
+  bg: "#282a36"
+  fg: "#f8f8f2"
+  accent: "#bd93f9"

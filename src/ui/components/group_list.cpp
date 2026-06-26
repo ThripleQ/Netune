@@ -1,4 +1,5 @@
 #include "ui/components/group_list.h"
+#include "ui/components/theme_util.h"
 using namespace ftxui;
 
 Element render_group_list(const AppState &s) {
@@ -7,11 +8,11 @@ Element render_group_list(const AppState &s) {
         std::string label = s.groups[i].name;
         bool sel = ((int)i == s.group_index);
         if (s.active_panel == 0 && sel)
-            els.push_back(text("> " + label) | bold | inverted);
+            els.push_back(theme_accent(text("> " + label) | bold | inverted));
         else if (s.active_panel == 1 && sel)
-            els.push_back(text("  " + label) | bold);
+            els.push_back(theme_fg(text("  " + label) | bold));
         else
-            els.push_back(text("  " + label));
+            els.push_back(theme_fg(text("  " + label)));
     }
-    return vbox(std::move(els)) | yframe | size(WIDTH, EQUAL, 20) | border;
+    return theme_bg(vbox(std::move(els)) | yframe | size(WIDTH, EQUAL, 20) | border);
 }
