@@ -271,6 +271,8 @@ static void* playback_thread(void *arg) {
                             target = total_frames - 1;
                         decoder_seek(decoder, target);
                         current_frame = target;
+                        /* flush residual audio from output buffer */
+                        if (audio) audio_output_flush(audio);
                     }
                     break;
                 case CMD_QUIT:

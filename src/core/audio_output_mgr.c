@@ -97,3 +97,10 @@ int audio_output_delay_us(AudioOutput *ao, uint64_t *delay_us) {
     if (!ao || !g_active || !g_active->get_delay_us) return -1;
     return g_active->get_delay_us(delay_us);
 }
+
+int audio_output_flush(AudioOutput *ao) {
+    (void)ao;
+    if (!g_active) return -1;
+    if (g_active->flush) return g_active->flush();
+    return -1;
+}

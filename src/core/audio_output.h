@@ -40,6 +40,9 @@ typedef struct AudioOutputBackend {
 
     /* get precise delay in microseconds for a/v sync */
     int  (*get_delay_us)(uint64_t *delay_us);
+
+    /* flush/drop pending audio buffer (e.g. on seek) */
+    int  (*flush)(void);
 } AudioOutputBackend;
 
 #ifdef __cplusplus

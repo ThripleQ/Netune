@@ -128,6 +128,13 @@ static int alsa_get_delay_us(uint64_t *delay_us) {
     return 0;
 }
 
+static int alsa_flush(void) {
+    if (!g_pcm) return -1;
+    snd_pcm_drop(g_pcm);
+    snd_pcm_prepare(g_pcm);
+    return 0;
+}
+
 AudioOutputBackend g_alsa_backend = {
     .name           = "alsa",
     .probe          = alsa_probe,
@@ -142,4 +149,5 @@ AudioOutputBackend g_alsa_backend = {
     .set_volume     = alsa_set_volume,
     .get_volume     = alsa_get_volume,
     .get_delay_us   = alsa_get_delay_us,
+    .flush          = alsa_flush,
 };

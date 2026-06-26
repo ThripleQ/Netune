@@ -274,7 +274,7 @@ int run_app(int argc, char **argv) {
             text(" Playlist:") | bold,
             vbox(std::move(entries)) | yframe | flex,
             separator(),
-            text(" [Enter]play  [Space]pause  [j/k]nav  [n/p]track  [q]quit") | dim,
+            text(" [Enter]play  [Space]pause  [j/k]nav  [n/p]track  [←/→]seek  [q]quit") | dim,
         }) | border;
     });
 
@@ -324,6 +324,30 @@ int run_app(int argc, char **argv) {
             const AppState &s = state.state();
             if (s.selected_index > 0)
                 StateStore::instance().set_selected_index(s.selected_index - 1);
+            return true;
+        }
+
+        /* seek backward / forward */
+        if (event == ftxui::Event::ArrowLeft) {
+            const AppState &s = state.state();
+            if (s.playback_state != PlaybackState::Stopped) {
+                int step = config_get_int(config_global(),
+                                         "playback.seek_step_sec", 5);
+                int target = s.current_time_sec - step;
+                if (target < 0) target = 0;
+                event_bus_publish(EV_BUFFERING_UPDATE, &target, sizeof(target));
+            }
+            return true;
+        }
+        if (event == ftxui::Event::ArrowRight) {
+            const AppState &s = state.state();
+            if (s.playback_state != PlaybackState::Stopped) {
+                int step = config_get_int(config_global(),
+                                         "playback.seek_step_sec", 5);
+                int target = s.current_time_sec + step;
+                if (target > s.total_time_sec) target = s.total_time_sec;
+                event_bus_publish(EV_BUFFERING_UPDATE, &target, sizeof(target));
+            }
             return true;
         }
 
