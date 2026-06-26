@@ -13,7 +13,7 @@
 
 /* ── Constants ──────────────────────────────────────── */
 #define FRAMES_PER_CHUNK 4096
-#define PROGRESS_INTERVAL_MS 250
+#define PROGRESS_INTERVAL_MS 100
 
 /* ── Commands ───────────────────────────────────────── */
 typedef enum {
@@ -288,9 +288,11 @@ static void* playback_thread(void *arg) {
             int64_t now_ms = (int64_t)((double)current_frame / samplerate * 1000);
             if (now_ms - last_progress_ms >= PROGRESS_INTERVAL_MS) {
                 last_progress_ms = now_ms;
-                int progress_data[2] = {
-                    current_frame / samplerate,
-                    total_frames > 0 ? total_frames / samplerate : 0
+                /* Send exact frames for smooth progress bar */
+                int progress_data[3] = {
+                    current_frame,          /* exact frame position */
+                    total_frames,           /* total frames          */
+                    samplerate              /* for time calculation  */
                 };
                 event_bus_publish(EV_PROGRESS_UPDATE,
                                   progress_data, sizeof(progress_data));

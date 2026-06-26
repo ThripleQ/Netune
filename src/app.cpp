@@ -38,10 +38,17 @@ static void on_signal(int sig) {
 /* ── Event bus → StateStore bridge ────────────────── */
 static void ev_progress(const BusEvent *ev, void *data) {
     (void)data;
-    if (ev->data_size == sizeof(int[2])) {
+    if (ev->data_size == sizeof(int[3])) {
         int *p = (int*)ev->data;
-        double prog = (p[1] > 0) ? (double)p[0] / p[1] : 0.0;
-        StateStore::instance().set_progress(prog, p[0], p[1]);
+        int frame_pos   = p[0];   /* exact PCM frame */
+        int total_frames = p[1];
+        int samplerate   = p[2];
+        double prog = (total_frames > 0)
+            ? (double)frame_pos / total_frames : 0.0;
+        int time_sec  = (samplerate > 0) ? frame_pos / samplerate : 0;
+        int total_sec = (samplerate > 0 && total_frames > 0)
+            ? total_frames / samplerate : 0;
+        StateStore::instance().set_progress(prog, time_sec, total_sec);
     }
 }
 
