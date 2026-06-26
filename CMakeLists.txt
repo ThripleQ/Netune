@@ -43,9 +43,9 @@ set(INFRA_SOURCES
 )
 
 set(PLUGIN_DECODER_SOURCES
-  src/plugins/decoders/dr_libs/mp3_decoder.c
-  src/plugins/decoders/dr_libs/flac_decoder.c
-  src/plugins/decoders/dr_libs/wav_decoder.c
+  src/plugins/decoders/dr_mp3/mp3_decoder.c
+  src/plugins/decoders/dr_flac/flac_decoder.c
+  src/plugins/decoders/dr_flac/wav_decoder.c
 )
 
 set(PLUGIN_AUDIO_SOURCES
@@ -61,6 +61,7 @@ set(UI_SOURCES
 )
 
 set(ALL_SOURCES
+  src/app.cpp
   src/main.cpp
   ${CORE_SOURCES}
   ${INFRA_SOURCES}
