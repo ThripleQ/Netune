@@ -404,40 +404,46 @@ int run_app(int argc, char **argv) {
                 StateStore::instance().set_search_selected(idx);
                 return true;
             }
-            /* Navigate to selected result in its folder */
-            if ((ev_key == "enter" || ev_key == "\r") && !cur.search_results.empty()) {
-                const auto &sel = cur.search_results[cur.search_selected];
-                if (sel.source && strcmp(sel.source, "local") == 0 &&
-                    sel.id && sel.id[0]) {
-                    int target_group = -1;
-                    int target_song = -1;
-                    for (int gi = 0; gi < (int)cur.groups.size() && target_group < 0; gi++) {
-                        for (int si = 0; si < (int)cur.groups[gi].songs.size(); si++) {
-                            if (strcmp(cur.groups[gi].songs[si].id, sel.id) == 0) {
-                                target_group = gi;
-                                target_song = si;
-                                break;
+            /* Enter: submit search in netease mode, navigate in local mode */
+            if (ev_key == "enter" || ev_key == "\r") {
+                if (cur.music_mode == MusicMode::Netease) {
+                    if (!cur.search_query.empty()) {
+                        /* submit search to API */
+                        do_netease_search(cur.search_query.c_str());
+                    }
+                    return true;
+                }
+                /* Local mode: navigate to selected result's folder */
+                if (!cur.search_results.empty()) {
+                    const auto &sel = cur.search_results[cur.search_selected];
+                    if (sel.source && strcmp(sel.source, "local") == 0 &&
+                        sel.id && sel.id[0]) {
+                        int target_group = -1;
+                        int target_song = -1;
+                        for (int gi = 0; gi < (int)cur.groups.size() && target_group < 0; gi++) {
+                            for (int si = 0; si < (int)cur.groups[gi].songs.size(); si++) {
+                                if (strcmp(cur.groups[gi].songs[si].id, sel.id) == 0) {
+                                    target_group = gi;
+                                    target_song = si;
+                                    break;
+                                }
                             }
                         }
+                        if (target_group >= 0) {
+                            std::vector<const char*> paths;
+                            for (auto &s : cur.groups[target_group].songs)
+                                paths.push_back(s.id);
+                            playlist_manager_sync(paths.data(), (int)paths.size());
+                            playlist_manager_set_index(target_song);
+                            StateStore::instance().set_group_index(target_group);
+                            StateStore::instance().set_selected_index(target_song >= 0 ? target_song : 0);
+                            StateStore::instance().set_active_panel(1);
+                        }
                     }
-                    LOG_INFO("Search Enter: group=%d song=%d id='%s'",
-                              target_group, target_song,
-                              sel.id ? sel.id : "null");
-                    if (target_group >= 0) {
-                        /* sync backend paths */
-                        std::vector<const char*> paths;
-                        for (auto &s : cur.groups[target_group].songs)
-                            paths.push_back(s.id);
-                        playlist_manager_sync(paths.data(), (int)paths.size());
-                        playlist_manager_set_index(target_song);
-                        StateStore::instance().set_group_index(target_group);
-                        StateStore::instance().set_selected_index(target_song >= 0 ? target_song : 0);
-                        StateStore::instance().set_active_panel(1);
-                    }
+                    search_manager_clear();
+                    StateStore::instance().set_search_active(false);
+                    StateStore::instance().set_search_query("");
                 }
-                search_manager_clear();
-                StateStore::instance().set_search_active(false);
-                StateStore::instance().set_search_query("");
                 return true;
             }
             if (ev_key == "escape") {
@@ -448,22 +454,18 @@ int run_app(int argc, char **argv) {
                 return true;
             }
             if (ev_key == "backspace") {
-                /* remove last char and re-search */
+                /* remove last char (UTF-8 safe) */
                 std::string q = cur.search_query;
                 if (!q.empty()) {
-                    /* pop last UTF-8 character, not just last byte */
                     int n = (int)q.size() - 1;
                     while (n > 0 && ((unsigned char)q[n] & 0xC0) == 0x80) n--;
                     q.resize((size_t)n);
                 }
                 StateStore::instance().set_search_query(q);
                 StateStore::instance().set_search_results({}, 0);
-                if (!q.empty()) {
-                    if (cur.music_mode == MusicMode::Netease)
-                        do_netease_search(q.c_str());
-                    else
-                        search_manager_search_source("local", q.c_str(), 0);
-                }
+                /* Local: real-time; Netease: wait for Enter */
+                if (!q.empty() && cur.music_mode != MusicMode::Netease)
+                    search_manager_search_source("local", q.c_str(), 0);
                 return true;
             }
             /* Regular ASCII or UTF-8 character: append to query */
@@ -475,9 +477,10 @@ int run_app(int argc, char **argv) {
                 std::string q = cur.search_query + ch;
                 StateStore::instance().set_search_query(q);
                 StateStore::instance().set_search_results({}, 0);
-                if (cur.music_mode == MusicMode::Netease)
-                    do_netease_search(q.c_str());
-                else
+                /* Local: real-time; Netease: wait for Enter */
+                if (q.size() == 1 && cur.music_mode != MusicMode::Netease)
+                    search_manager_search_source("local", q.c_str(), 0);
+                if (cur.music_mode != MusicMode::Netease && q.size() > 1)
                     search_manager_search_source("local", q.c_str(), 0);
                 return true;
             }

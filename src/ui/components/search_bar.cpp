@@ -10,6 +10,8 @@ Element render_search_bar(const AppState &s) {
     Elements result_els;
     if (s.search_query.empty()) {
         result_els.push_back(theme_fg(text(" Type to search... ")) | dim);
+    } else if (s.music_mode == MusicMode::Netease && s.search_results.empty()) {
+        result_els.push_back(theme_fg(text(" Press [Enter] to search Netease ")) | dim);
     } else if (s.search_results.empty()) {
         result_els.push_back(theme_fg(text(" No results. ")) | dim);
     } else {
@@ -42,7 +44,14 @@ Element render_search_bar(const AppState &s) {
     col.push_back(separator());
     col.push_back(vbox(std::move(result_els)) | yframe | flex);
     col.push_back(separator());
-    col.push_back(text(" [↑↓]select  [Enter]play  [Esc]close") | dim | center);
+    std::string hint;
+    if (s.music_mode == MusicMode::Netease)
+        hint = s.search_results.empty() ?
+            " [Enter]search  [Esc]close" :
+            " [↑↓]select  [Enter]play  [Esc]close";
+    else
+        hint = " [↑↓]select  [Enter]open  [Esc]close";
+    col.push_back(theme_fg(text(hint)) | dim | center);
 
     auto box = vbox(std::move(col));
     return box | border | center | clear_under | bgcolor(Color::RGB(15, 15, 25));
