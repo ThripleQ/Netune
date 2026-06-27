@@ -98,12 +98,19 @@ static yyjson_doc* parse_ok(WriteBuf *buf) {
 }
 
 /* ── Server lifecycle ────────────────────────────────── */
-/* Quick check if server is responding */
+/* Quick check if server is responding (silent — no warnings) */
 static int server_alive(void) {
-    WriteBuf buf = {0};
-    int rc = api_get("/search?keywords=ping&limit=1", &buf);
-    if (buf.data) free(buf.data);
-    return (rc == 0) ? 0 : -1;
+    CURL *c = curl_easy_init();
+    if (!c) return -1;
+    curl_easy_setopt(c, CURLOPT_URL, "http://localhost:10000");
+    curl_easy_setopt(c, CURLOPT_TIMEOUT, 2L);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_cb);  /* discard response */
+    WriteBuf dummy = {0};
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &dummy);
+    CURLcode res = curl_easy_perform(c);
+    if (dummy.data) free(dummy.data);
+    curl_easy_cleanup(c);
+    return (res == CURLE_OK) ? 0 : -1;
 }
 
 /* Start the Node.js API server as a child process */
