@@ -13,6 +13,9 @@
 static char g_base_url[256] = "http://localhost:10000";
 static pid_t g_server_pid = 0;
 
+/* ── Cookie file path ───────────────────────────────── */
+static char g_cookie_path[512] = {0};
+
 /* Path to the Node.js API server */
 #define SERVER_DIR  "/home/liu/Projects/netease-api-local/node_modules/NeteaseCloudMusicApi"
 #define SERVER_PORT "10000"
@@ -97,6 +100,43 @@ static yyjson_doc* parse_ok(WriteBuf *buf) {
     return doc;
 }
 
+/* ── Cookie persistence ─────────────────────────────── */
+static void cookie_set_path(void) {
+    if (g_cookie_path[0]) return;
+    const char *home = getenv("HOME");
+    if (home)
+        snprintf(g_cookie_path, sizeof(g_cookie_path), "%s/.cache/lmusic/netease_cookie.txt", home);
+    else
+        snprintf(g_cookie_path, sizeof(g_cookie_path), "/tmp/netease_cookie.txt");
+}
+
+static void cookie_save(void) {
+    cookie_set_path();
+    FILE *fp = fopen(g_cookie_path, "w");
+    if (!fp) return;
+    fprintf(fp, "%s\n", g_cookie);
+    if (g_account_name[0])
+        fprintf(fp, "%s\n", g_account_name);
+    fclose(fp);
+}
+
+static void cookie_load(void) {
+    cookie_set_path();
+    FILE *fp = fopen(g_cookie_path, "r");
+    if (!fp) return;
+    if (fgets(g_cookie, sizeof(g_cookie), fp)) {
+        size_t n = strlen(g_cookie);
+        if (n > 0 && g_cookie[n-1] == '\n') g_cookie[n-1] = '\0';
+    }
+    if (fgets(g_account_name, sizeof(g_account_name), fp)) {
+        size_t n = strlen(g_account_name);
+        if (n > 0 && g_account_name[n-1] == '\n') g_account_name[n-1] = '\0';
+    }
+    fclose(fp);
+    if (g_cookie[0])
+        LOG_INFO("Netease cookie restored: %s", g_account_name);
+}
+
 /* ── Server lifecycle ────────────────────────────────── */
 /* Quick check if server is responding (silent — no warnings) */
 static int server_alive(void) {
@@ -169,6 +209,9 @@ int netease_api_init(void) {
             LOG_WARN("API server unavailable; Netease features disabled");
         }
     }
+
+    /* Restore persisted cookie */
+    cookie_load();
 
     LOG_INFO("Netease API client ready");
     return 0;
@@ -346,8 +389,8 @@ int netease_qr_poll(const char *unikey) {
             snprintf(g_account_name, sizeof(g_account_name), "%s",
                      yyjson_get_str(nick));
             LOG_INFO("Netease login: %s", g_account_name);
+            cookie_save();
         }
-        /* API server stores cookies internally; we also save */
     }
 
     yyjson_doc_free(doc);
