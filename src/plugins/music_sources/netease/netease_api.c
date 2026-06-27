@@ -55,8 +55,9 @@ static int api_get(const char *path, WriteBuf *out) {
     curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, write_cb);
     curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, out);
     curl_easy_setopt(g_curl, CURLOPT_HTTPGET, 1L);
-    if (g_cookie[0])
-        curl_easy_setopt(g_curl, CURLOPT_COOKIE, g_cookie);
+    /* Rely on curl's built-in cookie engine (enabled via COOKIEFILE in init).
+       Do NOT set CURLOPT_COOKIE here - it overrides the engine and breaks
+       login flow (803→802 handshake requires fresh cookies). */
 
     /* Suppress curl output */
     curl_easy_setopt(g_curl, CURLOPT_VERBOSE, 0L);
@@ -359,8 +360,19 @@ int netease_api_init(void) {
         }
     }
 
-    /* Restore persisted cookie */
+    /* Restore persisted cookie (one-time setup for the first request) */
     cookie_load();
+    if (g_cookie[0] && g_curl) {
+        /* Make a dummy HEAD request with the cookie to populate the engine */
+        curl_easy_setopt(g_curl, CURLOPT_URL, "http://localhost:10000/");
+        curl_easy_setopt(g_curl, CURLOPT_COOKIE, g_cookie);
+        curl_easy_setopt(g_curl, CURLOPT_NOBODY, 1L);
+        curl_easy_perform(g_curl);
+        curl_easy_setopt(g_curl, CURLOPT_NOBODY, 0L);
+    }
+    /* From now on, the curl engine manages cookies automatically.
+       api_get() must NOT set CURLOPT_COOKIE, otherwise it overrides
+       the engine's cookies and breaks the login 803→802 handshake. */
 
     LOG_INFO("Netease API client ready");
     return 0;
