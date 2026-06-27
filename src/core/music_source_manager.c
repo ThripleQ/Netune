@@ -75,3 +75,8 @@ void music_source_manager_shutdown(void) {
 int music_source_count(void) {
     return g_count;
 }
+
+MusicSource* music_source_get_by_index(int idx) {
+    if (idx < 0 || idx >= g_count) return NULL;
+    return g_sources[idx];
+}

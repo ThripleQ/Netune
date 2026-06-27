@@ -10,6 +10,7 @@ keybindings:
   seek_backward: ["left"]
   volume_up:    ["+", "="]
   volume_down:  ["-"]
+  open_search:  ["/"]
   stop:         ["s"]
   toggle_mute:  ["m"]
   cycle_loop:   ["l"]

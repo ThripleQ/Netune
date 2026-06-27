@@ -22,6 +22,8 @@ extern "C" {
 #include "core/music_source.h"
 #include "core/playlist_manager.h"
 #include "core/audio_output_mgr.h"
+#include "core/search_manager.h"
+#include "core/cache_manager.h"
 #include "plugins/music_sources/local/local_source.h"
 }
 
@@ -33,6 +35,7 @@ extern "C" {
 #include "ui/components/song_list.h"
 #include "ui/components/player_controls.h"
 #include "ui/components/help_screen.h"
+#include "ui/components/search_bar.h"
 #include "ui/theme.h"
 #include "ui/layout_engine.h"
 
@@ -44,6 +47,38 @@ static KeybindingManager g_keybindings;
 static volatile bool g_running = true;
 
 static void on_signal(int sig) { (void)sig; g_running = false; }
+
+/* ── Search event → StateStore bridge ─────────────── */
+static void ev_search_start(const BusEvent *ev, void *data) {
+    (void)data;
+    StateStore::instance().set_search_active(true);
+    StateStore::instance().set_search_query(
+        ev->data ? (const char*)ev->data : "");
+}
+
+static void ev_search_result(const BusEvent *ev, void *data) {
+    (void)ev; (void)data;
+    const SearchResult *sr = search_manager_results();
+    if (sr && sr->count > 0) {
+        /* Build vector with proper deep copies */
+        std::vector<SongInfo> vec;
+        vec.reserve(sr->count);
+        for (int i = 0; i < sr->count; i++) {
+            SongInfo copy = {};
+            song_info_copy(&copy, &sr->songs[i]);
+            vec.push_back(copy);
+        }
+        StateStore::instance().set_search_results(vec, sr->total);
+        /* clean up the copies after set_search_results re-copies them */
+        for (auto &v : vec) song_info_free(&v);
+    }
+}
+
+static void ev_search_error(const BusEvent *ev, void *data) {
+    (void)ev; (void)data;
+    StateStore::instance().set_search_active(false);
+    StateStore::instance().set_search_query("");
+}
 
 /* ── Event bus → StateStore bridge ────────────────── */
 static void ev_progress(const BusEvent *ev, void *data) {
@@ -137,6 +172,19 @@ int run_app(int argc, char **argv) {
     if (!cfg) LOG_WARN("No config loaded, using defaults");
     config_set_global(cfg);
 
+    /* init search infrastructure */
+    {
+        const char *home = getenv("HOME");
+        char cache_dir[512];
+        if (home) {
+            snprintf(cache_dir, sizeof(cache_dir), "%s/.cache/lmusic", home);
+        } else {
+            snprintf(cache_dir, sizeof(cache_dir), "/tmp/lmusic-cache");
+        }
+        cache_init(cache_dir);
+    }
+    search_manager_init();
+
     event_bus_init();
 
     event_bus_subscribe(EV_PROGRESS_UPDATE,   ev_progress, NULL);
@@ -149,7 +197,10 @@ int run_app(int argc, char **argv) {
     event_bus_subscribe(EV_VOLUME_CHANGED,    ev_volume_changed, NULL);
     event_bus_subscribe(EV_MUTE_CHANGED,      ev_mute_changed, NULL);
     event_bus_subscribe(EV_PLAYLIST_CHANGED,  ev_playlist_changed, NULL);
-    /* group switching handled synchronously in set_group_index */
+    /* search events — StateStore bridge */
+    event_bus_subscribe(EV_SEARCH_START, ev_search_start, NULL);
+    event_bus_subscribe(EV_SEARCH_RESULT, ev_search_result, NULL);
+    event_bus_subscribe(EV_SEARCH_ERROR, ev_search_error, NULL);
 
     if (cfg) {
         int vol = config_get_int(cfg, "audio.volume", -1);
@@ -268,7 +319,12 @@ int run_app(int argc, char **argv) {
             layout_engine.build(s) | flex,
         });
 
-        if (s.show_help) {
+        if (s.search_active) {
+            main = vbox(Elements{
+                main,
+                render_search_bar(s) | center | clear_under,
+            });
+        } else if (s.show_help) {
             /* overlay help screen centered on top of main content */
             main = vbox(Elements{
                 main,
@@ -446,6 +502,18 @@ int run_app(int argc, char **argv) {
         case Action::ToggleMute: {
             int muted_val = cur.muted ? 0 : 1;
             event_bus_publish(EV_MUTE_CHANGED, &muted_val, sizeof(muted_val));
+            return true;
+        }
+
+        case Action::OpenSearch: {
+            bool was_active = cur.search_active;
+            if (was_active) {
+                search_manager_clear();
+                StateStore::instance().set_search_active(false);
+                StateStore::instance().set_search_query("");
+            } else {
+                search_manager_search("", 0);
+            }
             return true;
         }
 

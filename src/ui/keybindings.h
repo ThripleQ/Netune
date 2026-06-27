@@ -17,6 +17,7 @@ enum class Action {
     SeekForward, SeekBackward,
     VolumeUp, VolumeDown,
     ToggleMute,
+    OpenSearch,
     CycleLoop,
     ShowHelp,
     Quit,

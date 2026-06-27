@@ -81,14 +81,21 @@ void StateStore::set_show_help(bool show) {
     state_.show_help = show;
 }
 
-void StateStore::set_search_results(const std::string &keyword,
-                                     const std::vector<SongInfo> &results) {
+void StateStore::set_search_active(bool active) {
+    state_.search_active = active;
+}
+
+void StateStore::set_search_query(const std::string &query) {
+    state_.search_query = query;
+}
+
+void StateStore::set_search_results(const std::vector<SongInfo> &results, int total) {
     /* free old */
     for (auto &s : state_.search_results) {
         song_info_free(&s);
     }
     state_.search_results.clear();
-    state_.search_keyword = keyword;
+    state_.search_total = total;
 
     for (auto &s : results) {
         SongInfo copy = {};

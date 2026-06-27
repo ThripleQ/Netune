@@ -50,8 +50,10 @@ struct AppState {
     bool show_help = false;
 
     /* search */
-    std::string search_keyword;
+    bool search_active = false;
+    std::string search_query;
     std::vector<SongInfo> search_results;
+    int search_total = 0;
 };
 
 /* ── State store singleton ─────────────────────────── */
@@ -81,8 +83,9 @@ public:
     void set_show_help(bool show);
 
     /* search */
-    void set_search_results(const std::string &keyword,
-                            const std::vector<SongInfo> &results);
+    void set_search_active(bool active);
+    void set_search_query(const std::string &query);
+    void set_search_results(const std::vector<SongInfo> &results, int total);
 
 private:
     StateStore() = default;

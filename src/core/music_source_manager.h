@@ -28,6 +28,9 @@ void music_source_manager_shutdown(void);
 /* Number of registered sources */
 int music_source_count(void);
 
+/* Get source by index (0 .. count-1). Returns NULL if out of range. */
+MusicSource* music_source_get_by_index(int idx);
+
 #ifdef __cplusplus
 }
 #endif

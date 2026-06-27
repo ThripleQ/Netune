@@ -36,6 +36,8 @@ set(CORE_SOURCES
   src/core/audio_output_mgr.c
   src/core/playback_coordinator.c
   src/core/playlist_manager.c
+  src/core/cache_manager.c
+  src/core/search_manager.c
 )
 
 set(INFRA_SOURCES
@@ -69,6 +71,7 @@ set(UI_SOURCES
   src/ui/components/status_bar.cpp
   src/ui/components/player_controls.cpp
   src/ui/components/help_screen.cpp
+  src/ui/components/search_bar.cpp
 )
 
 set(ALL_SOURCES

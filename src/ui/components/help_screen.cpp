@@ -33,6 +33,7 @@ Element render_help_screen(const AppState &s) {
     col.push_back(entry("m",       "Toggle mute"));
     col.push_back(entry("s",       "Stop playback"));
     col.push_back(entry("l",       "Cycle loop mode"));
+    col.push_back(entry("/",       "Search"));
     col.push_back(entry("q / Esc", "Quit"));
     col.push_back(entry("?",       "Toggle this help"));
     col.push_back(separator());
