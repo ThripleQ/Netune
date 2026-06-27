@@ -101,6 +101,9 @@ static yyjson_doc* parse_ok(WriteBuf *buf) {
 }
 
 /* ── Cookie persistence ─────────────────────────────── */
+/* ── User ID (stored after login) ──────────────────── */
+static long g_user_uid = 0;
+
 static void cookie_set_path(void) {
     if (g_cookie_path[0]) return;
     const char *home = getenv("HOME");
@@ -115,6 +118,7 @@ static void cookie_save(void) {
     FILE *fp = fopen(g_cookie_path, "w");
     if (!fp) return;
     fprintf(fp, "%s\n", g_cookie);
+    fprintf(fp, "%lu\n", g_user_uid);
     if (g_account_name[0])
         fprintf(fp, "%s\n", g_account_name);
     fclose(fp);
@@ -124,17 +128,26 @@ static void cookie_load(void) {
     cookie_set_path();
     FILE *fp = fopen(g_cookie_path, "r");
     if (!fp) return;
-    if (fgets(g_cookie, sizeof(g_cookie), fp)) {
-        size_t n = strlen(g_cookie);
-        if (n > 0 && g_cookie[n-1] == '\n') g_cookie[n-1] = '\0';
+    char buf[4096];
+    /* cookie line */
+    if (fgets(buf, sizeof(buf), fp)) {
+        size_t n = strlen(buf);
+        if (n > 0 && buf[n-1] == '\n') buf[n-1] = '\0';
+        snprintf(g_cookie, sizeof(g_cookie), "%s", buf);
     }
-    if (fgets(g_account_name, sizeof(g_account_name), fp)) {
-        size_t n = strlen(g_account_name);
-        if (n > 0 && g_account_name[n-1] == '\n') g_account_name[n-1] = '\0';
+    /* uid line */
+    if (fgets(buf, sizeof(buf), fp)) {
+        g_user_uid = atol(buf);
+    }
+    /* nickname line */
+    if (fgets(buf, sizeof(buf), fp)) {
+        size_t n = strlen(buf);
+        if (n > 0 && buf[n-1] == '\n') buf[n-1] = '\0';
+        snprintf(g_account_name, sizeof(g_account_name), "%s", buf);
     }
     fclose(fp);
     if (g_cookie[0])
-        LOG_INFO("Netease cookie restored: %s", g_account_name);
+        LOG_INFO("Netease cookie restored: %s (uid=%ld)", g_account_name, g_user_uid);
 }
 
 /* ── Server lifecycle ────────────────────────────────── */
@@ -191,6 +204,142 @@ static int start_server(void) {
     waitpid(g_server_pid, NULL, 0);
     g_server_pid = 0;
     return -1;
+}
+
+long netease_get_user_id(void) {
+    return g_user_uid;
+}
+
+/* ── User playlists ─────────────────────────────────── */
+int netease_get_playlists(long uid, int mine_only, NeteasePlaylistResult *out) {
+    if (!out) return -1;
+    memset(out, 0, sizeof(*out));
+    if (uid <= 0) return -1;
+
+    char path[256];
+    snprintf(path, sizeof(path), "/user/playlist?uid=%ld&limit=100", uid);
+
+    WriteBuf buf = {0};
+    if (api_get(path, &buf) != 0) return -1;
+
+    yyjson_doc *doc = yyjson_read(buf.data, buf.len, 0);
+    free(buf.data);
+    if (!doc) return -1;
+
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *playlists = yyjson_obj_get(root, "playlist");
+    if (!playlists || !yyjson_is_arr(playlists)) {
+        yyjson_doc_free(doc);
+        return 0;
+    }
+
+    size_t n = yyjson_arr_size(playlists);
+    out->items = (NeteasePlaylist*)calloc(n, sizeof(NeteasePlaylist));
+
+    size_t idx, max;
+    yyjson_val *pl;
+    int oi = 0;
+    yyjson_arr_foreach(playlists, idx, max, pl) {
+        long pid  = 0;
+        yyjson_val *v = yyjson_obj_get(pl, "id");
+        if (v) pid = (long)yyjson_get_int(v);
+
+        v = yyjson_obj_get(pl, "name");
+        const char *name = v ? yyjson_get_str(v) : "";
+
+        int tc = 0;
+        v = yyjson_obj_get(pl, "trackCount");
+        if (v) tc = (int)yyjson_get_int(v);
+
+        bool sub = false;
+        v = yyjson_obj_get(pl, "subscribed");
+        if (v) sub = yyjson_get_bool(v);
+
+        if (mine_only == 1 && sub) continue;
+        if (mine_only == 2 && !sub) continue;
+
+        out->items[oi].id = pid;
+        out->items[oi].name = strdup(name);
+        out->items[oi].track_count = tc;
+        out->items[oi].subscribed = sub;
+        oi++;
+    }
+
+    out->count = oi;
+    yyjson_doc_free(doc);
+    return 0;
+}
+
+void netease_playlist_result_free(NeteasePlaylistResult *r) {
+    if (!r) return;
+    for (int i = 0; i < r->count; i++)
+        free(r->items[i].name);
+    free(r->items);
+    r->items = NULL;
+    r->count = 0;
+}
+
+/* ── Playlist songs ─────────────────────────────────── */
+int netease_get_playlist_songs(long playlist_id, SearchResult *out) {
+    if (!out) return -1;
+    memset(out, 0, sizeof(*out));
+
+    char path[256];
+    snprintf(path, sizeof(path), "/playlist/detail?id=%ld", playlist_id);
+
+    WriteBuf buf = {0};
+    if (api_get(path, &buf) != 0) return -1;
+
+    yyjson_doc *doc = yyjson_read(buf.data, buf.len, 0);
+    free(buf.data);
+    if (!doc) return -1;
+
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *pl = yyjson_obj_get(root, "playlist");
+    yyjson_val *tracks = pl ? yyjson_obj_get(pl, "tracks") : NULL;
+    if (!tracks) { yyjson_doc_free(doc); return 0; }
+
+    size_t n = yyjson_arr_size(tracks);
+    size_t limit = n > 50 ? 50 : n;
+    out->songs = (SongInfo*)calloc(limit, sizeof(SongInfo));
+    out->count = (int)limit;
+    out->total = (int)n;
+
+    size_t idx, max;
+    yyjson_val *tr;
+    int oi = 0;
+    yyjson_arr_foreach(tracks, idx, max, tr) {
+        if (oi >= (int)limit) break;
+        SongInfo *si = &out->songs[oi++];
+        yyjson_val *v;
+
+        v = yyjson_obj_get(tr, "id");
+        if (v) {
+            char id_buf[32];
+            snprintf(id_buf, sizeof(id_buf), "%llu", (unsigned long long)yyjson_get_int(v));
+            si->id = strdup(id_buf);
+        }
+        si->source = strdup("netease");
+
+        v = yyjson_obj_get(tr, "name");
+        si->title = v ? strdup(yyjson_get_str(v)) : strdup("");
+
+        yyjson_val *artists = yyjson_obj_get(tr, "ar");
+        if (!artists) artists = yyjson_obj_get(tr, "artists");
+        if (artists && yyjson_arr_size(artists) > 0) {
+            v = yyjson_obj_get(yyjson_arr_get(artists, 0), "name");
+            si->artist = v ? strdup(yyjson_get_str(v)) : strdup("");
+        } else {
+            si->artist = strdup("");
+        }
+
+        v = yyjson_obj_get(tr, "dt");
+        if (!v) v = yyjson_obj_get(tr, "duration");
+        si->duration_sec = v ? (int)(yyjson_get_int(v) / 1000) : 0;
+    }
+
+    yyjson_doc_free(doc);
+    return 0;
 }
 
 /* ── Init / Shutdown ────────────────────────────────── */
@@ -382,15 +531,19 @@ int netease_qr_poll(const char *unikey) {
         ret = -1;
     }
 
-    /* On success, extract nickname */
+    /* On success, extract account info */
     if (ret == 0) {
-        yyjson_val *nick = yyjson_obj_get(root, "nickname");
-        if (nick) {
-            snprintf(g_account_name, sizeof(g_account_name), "%s",
-                     yyjson_get_str(nick));
-            LOG_INFO("Netease login: %s", g_account_name);
-            cookie_save();
+        yyjson_val *profile = yyjson_obj_get(root, "profile");
+        if (profile) {
+            yyjson_val *uid_v = yyjson_obj_get(profile, "userId");
+            if (uid_v) g_user_uid = (long)yyjson_get_int(uid_v);
+            yyjson_val *nick = yyjson_obj_get(profile, "nickname");
+            if (nick) snprintf(g_account_name, sizeof(g_account_name), "%s", yyjson_get_str(nick));
         }
+        if (g_account_name[0])
+            LOG_INFO("Netease login: %s (uid=%ld)", g_account_name, g_user_uid);
+        cookie_save();
+        /* Update netease menu account name */
     }
 
     yyjson_doc_free(doc);

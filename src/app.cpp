@@ -698,14 +698,34 @@ int run_app(int argc, char **argv) {
                     int idx = cur.netease_selected;
                     if (idx < (int)cur.netease_menu.size()) {
                         int type = cur.netease_menu[idx].type;
-                        if (type == 200) {
-                            /* QR login */
+                        const std::string &pl_id = cur.netease_menu[idx].id;
+
+                        if (type == -1) {
+                            /* Back to main netease menu */
+                            StateStore::instance().set_music_mode(MusicMode::Local);
+                            StateStore::instance().set_music_mode(MusicMode::Netease);
+                        } else if (type == 200) {
                             start_login();
                         } else if (type == 100) {
-                            /* Open search in netease mode */
                             search_manager_clear();
                             StateStore::instance().set_search_active(true);
                             StateStore::instance().set_search_query("");
+                        } else if (!pl_id.empty()) {
+                            long playlist_id = atol(pl_id.c_str());
+                            SearchResult sr;
+                            if (netease_get_playlist_songs(playlist_id, &sr) == 0 && sr.count > 0) {
+                                std::vector<SongInfo> vec;
+                                vec.reserve(sr.count);
+                                for (int i = 0; i < sr.count; i++) {
+                                    SongInfo copy = {};
+                                    song_info_copy(&copy, &sr.songs[i]);
+                                    vec.push_back(copy);
+                                    song_info_free(&sr.songs[i]);
+                                }
+                                free(sr.songs);
+                                StateStore::instance().set_playlist(vec, 0);
+                                StateStore::instance().set_active_panel(1);
+                            }
                         } else if (type >= 0 && type <= 1) {
                             SearchResult sr;
                             if (netease_load_menu(type, 50, &sr) == 0 && sr.count > 0) {
@@ -720,6 +740,26 @@ int run_app(int argc, char **argv) {
                                 free(sr.songs);
                                 StateStore::instance().set_playlist(vec, 0);
                                 StateStore::instance().set_active_panel(1);
+                            }
+                        } else if (type == 2 || type == 3) {
+                            long uid = netease_get_user_id();
+                            if (uid <= 0) {
+                                start_login();
+                            } else {
+                                int mine_only = (type == 2) ? 1 : 2;
+                                NeteasePlaylistResult pr;
+                                if (netease_get_playlists(uid, mine_only, &pr) == 0 && pr.count > 0) {
+                                    std::vector<NeteaseMenuItem> items;
+                                    items.push_back({"<< \u8FD4\u56DE", -1, ""});
+                                    for (int i = 0; i < pr.count; i++) {
+                                        char id_buf[32];
+                                        snprintf(id_buf, sizeof(id_buf), "%ld", pr.items[i].id);
+                                        items.push_back({pr.items[i].name, 1000, id_buf});
+                                    }
+                                    netease_playlist_result_free(&pr);
+                                    StateStore::instance().set_netease_menu(items);
+                                    StateStore::instance().set_netease_selected(0);
+                                }
                             }
                         }
                     }

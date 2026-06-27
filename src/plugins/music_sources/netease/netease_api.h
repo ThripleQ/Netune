@@ -57,6 +57,30 @@ bool netease_is_logged_in(void);
 /* Get logged-in account name (borrowed, do not free) */
 const char* netease_account_name(void);
 
+/* Get user ID after login (0 if not logged in) */
+long netease_get_user_id(void);
+
+/* ── User playlists ──────────────────────────────────── */
+typedef struct {
+    long   id;
+    char  *name;
+    int    track_count;
+    bool   subscribed;  /* true = favorited, false = created */
+} NeteasePlaylist;
+
+typedef struct {
+    NeteasePlaylist *items;
+    int              count;
+} NeteasePlaylistResult;
+
+/* Get user's playlists (requires login).
+ * mine_only: 0=all, 1=created only, 2=subscribed only */
+int netease_get_playlists(long uid, int mine_only, NeteasePlaylistResult *out);
+void netease_playlist_result_free(NeteasePlaylistResult *r);
+
+/* Get songs in a playlist */
+int netease_get_playlist_songs(long playlist_id, SearchResult *out);
+
 /* ── Song detail / play URL ─────────────────────────── */
 /* Get song detail by id. out fields are allocated strings. */
 int netease_get_song_detail(const char *song_id,
