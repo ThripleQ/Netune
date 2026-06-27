@@ -116,6 +116,7 @@ static void ev_playback_finish(const BusEvent *ev, void *data) {
             StateStore::instance().set_selected_index(next);
             if (next < (int)st.playlist.size())
                 StateStore::instance().set_current_song(st.playlist[next]);
+                event_bus_publish(EV_TRACK_CHANGED, &next, sizeof(next));
             event_bus_publish(EV_PLAYBACK_START, (void*)path, strlen(path) + 1);
             return;
         }
@@ -144,6 +145,12 @@ static void ev_mute_changed(const BusEvent *ev, void *data) {
         if (target <= 0) target = 80;
         audio_output_set_volume(target);
     }
+}
+
+static void ev_track_changed(const BusEvent *ev, void *data) {
+    (void)ev; (void)data;
+    /* Track changed — placeholder for future listeners (lyrics, cover).
+       StateStore already has the correct song from direct writes. */
 }
 
 static void ev_playlist_changed(const BusEvent *ev, void *data) {
@@ -197,6 +204,7 @@ int run_app(int argc, char **argv) {
     event_bus_subscribe(EV_VOLUME_CHANGED,    ev_volume_changed, NULL);
     event_bus_subscribe(EV_MUTE_CHANGED,      ev_mute_changed, NULL);
     event_bus_subscribe(EV_PLAYLIST_CHANGED,  ev_playlist_changed, NULL);
+    event_bus_subscribe(EV_TRACK_CHANGED,  ev_track_changed, NULL);
     /* search events — StateStore bridge */
     event_bus_subscribe(EV_SEARCH_START, ev_search_start, NULL);
     event_bus_subscribe(EV_SEARCH_RESULT, ev_search_result, NULL);
@@ -491,6 +499,7 @@ int run_app(int argc, char **argv) {
                 playlist_manager_set_index(idx);
                 const auto &sel = cur.playlist[idx];
                 StateStore::instance().set_current_song(sel);
+                event_bus_publish(EV_TRACK_CHANGED, NULL, 0);
                 event_bus_publish(EV_PLAYBACK_START, (void*)(sel.id ? sel.id : ""),
                                   strlen(sel.id ? sel.id : "") + 1);
             }
@@ -516,6 +525,7 @@ int run_app(int argc, char **argv) {
                     StateStore::instance().set_selected_index(next);
                     if (next < (int)cur.playlist.size())
                         StateStore::instance().set_current_song(cur.playlist[next]);
+                        event_bus_publish(EV_TRACK_CHANGED, NULL, 0);
                     event_bus_publish(EV_PLAYBACK_START, (void*)path, strlen(path) + 1);
                 }
             }
@@ -530,6 +540,7 @@ int run_app(int argc, char **argv) {
                     StateStore::instance().set_selected_index(prev);
                     if (prev < (int)cur.playlist.size())
                         StateStore::instance().set_current_song(cur.playlist[prev]);
+                        event_bus_publish(EV_TRACK_CHANGED, NULL, 0);
                     event_bus_publish(EV_PLAYBACK_START, (void*)path, strlen(path) + 1);
                 }
             }
