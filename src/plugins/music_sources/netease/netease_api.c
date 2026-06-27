@@ -3,11 +3,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <sys/wait.h>
 #include <curl/curl.h>
 #include <yyjson.h>
 
 /* ── Configuration ──────────────────────────────────── */
 static char g_base_url[256] = "http://localhost:10000";
+static pid_t g_server_pid = 0;
+
+/* Path to the Node.js API server */
+#define SERVER_DIR  "/home/liu/Projects/netease-api-local/node_modules/NeteaseCloudMusicApi"
+#define SERVER_PORT "10000"
 static char g_cookie[4096] = {0};
 static char g_account_name[128] = {0};
 static CURL *g_curl = NULL;
@@ -89,6 +96,53 @@ static yyjson_doc* parse_ok(WriteBuf *buf) {
     return doc;
 }
 
+/* ── Server lifecycle ────────────────────────────────── */
+/* Quick check if server is responding */
+static int server_alive(void) {
+    WriteBuf buf = {0};
+    int rc = api_get("/search?keywords=ping&limit=1", &buf);
+    if (buf.data) free(buf.data);
+    return (rc == 0) ? 0 : -1;
+}
+
+/* Start the Node.js API server as a child process */
+static int start_server(void) {
+    if (g_server_pid > 0) return 0; /* already started */
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        LOG_WARN("Failed to fork API server");
+        return -1;
+    }
+    if (pid == 0) {
+        /* Child process: redirect output and exec the server */
+        freopen("/tmp/netease-api.log", "a", stdout);
+        freopen("/tmp/netease-api.log", "a", stderr);
+        setenv("PORT", SERVER_PORT, 1);
+        chdir(SERVER_DIR);
+        execl("/usr/bin/node", "node", "app.js", NULL);
+        _exit(1); /* only reached if exec fails */
+    }
+
+    g_server_pid = pid;
+    LOG_INFO("API server started (PID %d)", pid);
+
+    /* Wait for server to be ready (up to 10s) */
+    for (int i = 0; i < 100; i++) {
+        if (server_alive() == 0) {
+            LOG_INFO("API server ready (%.1fs)", (i + 1) * 0.1);
+            return 0;
+        }
+        usleep(100000); /* 100ms */
+    }
+
+    LOG_WARN("API server did not start within 10s");
+    kill(g_server_pid, SIGTERM);
+    waitpid(g_server_pid, NULL, 0);
+    g_server_pid = 0;
+    return -1;
+}
+
 /* ── Init / Shutdown ────────────────────────────────── */
 int netease_api_init(void) {
     if (g_curl) return 0;
@@ -97,15 +151,34 @@ int netease_api_init(void) {
     if (!g_curl) return -1;
     curl_easy_setopt(g_curl, CURLOPT_TIMEOUT, 10L);
     curl_easy_setopt(g_curl, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(g_curl, CURLOPT_COOKIEFILE, "");  /* enable cookie engine */
-    LOG_INFO("Netease API client ready (server: %s)", g_base_url);
+    curl_easy_setopt(g_curl, CURLOPT_COOKIEFILE, "");
+
+    /* Start API server if not already running */
+    if (server_alive() != 0) {
+        if (start_server() != 0) {
+            LOG_WARN("API server unavailable; Netease features disabled");
+        }
+    }
+
+    LOG_INFO("Netease API client ready");
     return 0;
 }
 
 void netease_api_shutdown(void) {
+    /* Kill child API server */
+    if (g_server_pid > 0) {
+        kill(g_server_pid, SIGTERM);
+        waitpid(g_server_pid, NULL, 0);
+        g_server_pid = 0;
+        LOG_INFO("API server stopped");
+    }
     if (g_curl) { curl_easy_cleanup(g_curl); g_curl = NULL; }
     curl_global_cleanup();
-    LOG_INFO("Netease API shutdown");
+}
+
+/* ── Override base URL (optional, for tests) ────────── */
+void netease_api_set_base_url(const char *url) {
+    if (url) snprintf(g_base_url, sizeof(g_base_url), "%s", url);
 }
 
 /* ── Search ─────────────────────────────────────────── */

@@ -11,9 +11,13 @@ extern "C" {
  * Thin wrapper over libcurl for Netease Cloud Music API.
  * ──────────────────────────────────────────────────── */
 
-/* Initialize the API client (call once) */
+/* Initialize the API client (call once).
+ * Starts the Node.js API server as a child process on first use. */
 int  netease_api_init(void);
 void netease_api_shutdown(void);
+
+/* Override the API base URL (default: http://localhost:10000) */
+void netease_api_set_base_url(const char *url);
 
 /* ── Search ─────────────────────────────────────────── */
 typedef struct {
