@@ -440,6 +440,7 @@ int run_app(int argc, char **argv) {
         }
         if (s.login_state == 2 && ++g_login_poll_tick % 125 == 0) {
             int rc = netease_qr_poll(g_login_unikey.c_str());
+            LOG_INFO("LOGIN POLL: rc=%d", rc);
             if (rc == 0) {
                 StateStore::instance().set_login_state(3,
                     netease_account_name() ? netease_account_name() : "Logged in", "");
