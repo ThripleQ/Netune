@@ -53,6 +53,7 @@ struct AppState {
     bool search_active = false;
     std::string search_query;
     std::vector<SongInfo> search_results;
+    int search_selected = 0;
     int search_total = 0;
 };
 
@@ -85,6 +86,7 @@ public:
     /* search */
     void set_search_active(bool active);
     void set_search_query(const std::string &query);
+    void set_search_selected(int idx);
     void set_search_results(const std::vector<SongInfo> &results, int total);
 
 private:

@@ -89,12 +89,17 @@ void StateStore::set_search_query(const std::string &query) {
     state_.search_query = query;
 }
 
+void StateStore::set_search_selected(int idx) {
+    state_.search_selected = idx;
+}
+
 void StateStore::set_search_results(const std::vector<SongInfo> &results, int total) {
     /* free old */
     for (auto &s : state_.search_results) {
         song_info_free(&s);
     }
     state_.search_results.clear();
+    state_.search_selected = 0;
     state_.search_total = total;
 
     for (auto &s : results) {

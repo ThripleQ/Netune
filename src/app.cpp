@@ -356,7 +356,34 @@ int run_app(int argc, char **argv) {
 
         /* ── Search input mode: capture keys as query text ── */
         if (cur.search_active) {
-            if (ev_key == "escape" || ev_key == "enter") {
+            /* Navigate results */
+            if (ev_key == "up" && !cur.search_results.empty()) {
+                int idx = cur.search_selected - 1;
+                if (idx < 0) idx = (int)cur.search_results.size() - 1;
+                StateStore::instance().set_search_selected(idx);
+                return true;
+            }
+            if (ev_key == "down" && !cur.search_results.empty()) {
+                int idx = cur.search_selected + 1;
+                if (idx >= (int)cur.search_results.size()) idx = 0;
+                StateStore::instance().set_search_selected(idx);
+                return true;
+            }
+            /* Play selected result */
+            if (ev_key == "enter" && !cur.search_results.empty()) {
+                const auto &sel = cur.search_results[cur.search_selected];
+                if (sel.id && sel.id[0]) {
+                    StateStore::instance().set_current_song(sel);
+                    StateStore::instance().set_active_panel(1);
+                    event_bus_publish(EV_PLAYBACK_START, (void*)sel.id,
+                                      strlen(sel.id) + 1);
+                }
+                search_manager_clear();
+                StateStore::instance().set_search_active(false);
+                StateStore::instance().set_search_query("");
+                return true;
+            }
+            if (ev_key == "escape") {
                 /* close search */
                 search_manager_clear();
                 StateStore::instance().set_search_active(false);
@@ -375,7 +402,7 @@ int run_app(int argc, char **argv) {
             bool is_ascii = (ev_key.size() == 1 && ev_key[0] >= 32 && ev_key[0] < 127);
             bool is_utf8  = (ev_key.size() > 1 && ((unsigned char)ev_key[0] & 0x80));
             if (is_ascii || is_utf8) {
-                std::string ch = is_ascii ? ev_key : ev_key;
+                std::string ch = ev_key;
                 if (ev_key == "space") ch = " ";
                 std::string q = cur.search_query + ch;
                 StateStore::instance().set_search_query(q);

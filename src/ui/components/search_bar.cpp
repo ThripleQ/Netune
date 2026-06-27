@@ -22,10 +22,14 @@ Element render_search_bar(const AppState &s) {
         int shown = 0;
         for (auto &song : s.search_results) {
             if (shown >= 20) break;
+            bool selected = (shown == s.search_selected);
             std::string label;
             if (song.title) label += song.title;
             if (song.artist) { label += "  —  "; label += song.artist; }
-            result_els.push_back(theme_fg(text(" " + label)));
+            if (selected)
+                result_els.push_back(theme_accent(text("> " + label) | bold | inverted));
+            else
+                result_els.push_back(theme_fg(text("  " + label)));
             shown++;
         }
     }
@@ -38,7 +42,7 @@ Element render_search_bar(const AppState &s) {
     col.push_back(separator());
     col.push_back(vbox(std::move(result_els)) | yframe | flex);
     col.push_back(separator());
-    col.push_back(text(" [Enter]play  [Esc]close  [/]open  [↑↓]nav") | dim | center);
+    col.push_back(text(" [↑↓]select  [Enter]play  [Esc]close") | dim | center);
 
     auto box = vbox(std::move(col));
     return box | border | center | clear_under | bgcolor(Color::RGB(15, 15, 25));
