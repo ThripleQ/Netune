@@ -50,6 +50,29 @@ static volatile bool g_running = true;
 
 static void on_signal(int sig) { (void)sig; g_running = false; }
 
+/* ── Direct netease search (bypass search_manager) ── */
+static void do_netease_search(const char *query) {
+    if (!query || !query[0]) return;
+    NeteaseSearchResult nr;
+    if (netease_search(query, 30, 0, &nr) != 0) return;
+
+    std::vector<SongInfo> vec;
+    vec.reserve(nr.count);
+    for (int i = 0; i < nr.count; i++) {
+        SongInfo si = {};
+        si.id       = strdup(nr.songs[i].id);
+        si.source   = strdup("netease");
+        si.title    = strdup(nr.songs[i].title ? nr.songs[i].title : "");
+        si.artist   = strdup(nr.songs[i].artist ? nr.songs[i].artist : "");
+        si.album    = strdup(nr.songs[i].album ? nr.songs[i].album : "");
+        si.duration_sec = nr.songs[i].duration_ms / 1000;
+        vec.push_back(si);
+    }
+    netease_search_result_free(&nr);
+    StateStore::instance().set_search_results(vec, (int)vec.size());
+    for (auto &s : vec) song_info_free(&s);
+}
+
 /* ── Search event → StateStore bridge ─────────────── */
 static void ev_search_start(const BusEvent *ev, void *data) {
     (void)data;
@@ -431,8 +454,10 @@ int run_app(int argc, char **argv) {
                 StateStore::instance().set_search_query(q);
                 StateStore::instance().set_search_results({}, 0);
                 if (!q.empty()) {
-                    const char *src = (cur.music_mode == MusicMode::Netease) ? "netease" : NULL;
-                    search_manager_search_source(src, q.c_str(), 0);
+                    if (cur.music_mode == MusicMode::Netease)
+                        do_netease_search(q.c_str());
+                    else
+                        search_manager_search(q.c_str(), 0);
                 }
                 return true;
             }
@@ -445,8 +470,10 @@ int run_app(int argc, char **argv) {
                 std::string q = cur.search_query + ch;
                 StateStore::instance().set_search_query(q);
                 StateStore::instance().set_search_results({}, 0);
-                const char *src = (cur.music_mode == MusicMode::Netease) ? "netease" : NULL;
-                search_manager_search_source(src, q.c_str(), 0);
+                if (cur.music_mode == MusicMode::Netease)
+                    do_netease_search(q.c_str());
+                else
+                    search_manager_search(q.c_str(), 0);
                 return true;
             }
             return true; /* consume all keys while searching */
