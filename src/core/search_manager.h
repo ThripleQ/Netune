@@ -24,10 +24,13 @@ extern "C" {
 /* Initialize the search manager */
 int search_manager_init(void);
 
-/* Execute a search across all available sources.
+/* Execute a search. source_name can be NULL (all sources) or a specific
+ * source like "local", "netease".
  * Returns 0 if search started (results delivered via event bus).
  * Keyword NULL or "" means "clear and return to previous mode". */
 int search_manager_search(const char *keyword, int page);
+int search_manager_search_source(const char *source_name,
+                                  const char *keyword, int page);
 
 /* Get the most recent results (borrowed pointer, do not free). */
 const SearchResult* search_manager_results(void);

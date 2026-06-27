@@ -428,7 +428,11 @@ int run_app(int argc, char **argv) {
                 std::string q = cur.search_query;
                 if (!q.empty()) q.pop_back();
                 StateStore::instance().set_search_query(q);
-                search_manager_search(q.c_str(), 0);
+                StateStore::instance().set_search_results({}, 0);
+                if (!q.empty()) {
+                    const char *src = (cur.music_mode == MusicMode::Netease) ? "netease" : NULL;
+                    search_manager_search_source(src, q.c_str(), 0);
+                }
                 return true;
             }
             /* Regular ASCII or UTF-8 character: append to query */
@@ -439,7 +443,9 @@ int run_app(int argc, char **argv) {
                 if (ev_key == "space") ch = " ";
                 std::string q = cur.search_query + ch;
                 StateStore::instance().set_search_query(q);
-                search_manager_search(q.c_str(), 0);
+                StateStore::instance().set_search_results({}, 0);
+                const char *src = (cur.music_mode == MusicMode::Netease) ? "netease" : NULL;
+                search_manager_search_source(src, q.c_str(), 0);
                 return true;
             }
             return true; /* consume all keys while searching */
@@ -460,13 +466,22 @@ int run_app(int argc, char **argv) {
 
         case Action::MoveDown:
             if (cur.active_panel == 0) {
-                int next_grp = cur.group_index + 1;
-                if (next_grp < (int)cur.groups.size()) {
-                    StateStore::instance().set_group_index(next_grp);
-                    std::vector<const char*> paths;
-                    for (auto &s : cur.groups[next_grp].songs) paths.push_back(s.id);
-                    playlist_manager_sync(paths.data(), (int)paths.size());
-                    playlist_manager_set_index(0);
+                if (cur.music_mode == MusicMode::Local) {
+                    int idx = cur.group_index;
+                    if (idx >= (int)cur.groups.size() - 1) return true; /* at bottom */
+                    if (idx == -1 && cur.groups.empty()) return true;
+                    int next = (idx < 0) ? 0 : idx + 1;
+                    StateStore::instance().set_group_index(next);
+                    if (next >= 0 && next < (int)cur.groups.size()) {
+                        std::vector<const char*> paths;
+                        for (auto &s : cur.groups[next].songs) paths.push_back(s.id);
+                        playlist_manager_sync(paths.data(), (int)paths.size());
+                        playlist_manager_set_index(0);
+                    }
+                } else {
+                    int next = cur.netease_selected + 1;
+                    if (next < (int)cur.netease_menu.size())
+                        StateStore::instance().set_netease_selected(next);
                 }
             } else {
                 if (!cur.playlist.empty() && cur.selected_index < (int)cur.playlist.size() - 1)
@@ -476,13 +491,22 @@ int run_app(int argc, char **argv) {
 
         case Action::MoveUp:
             if (cur.active_panel == 0) {
-                int next_grp = cur.group_index - 1;
-                if (next_grp >= 0) {
-                    StateStore::instance().set_group_index(next_grp);
-                    std::vector<const char*> paths;
-                    for (auto &s : cur.groups[next_grp].songs) paths.push_back(s.id);
-                    playlist_manager_sync(paths.data(), (int)paths.size());
-                    playlist_manager_set_index(0);
+                if (cur.music_mode == MusicMode::Local) {
+                    int prev = cur.group_index - 1;
+                    if (prev < -1) return true; /* already at top (netease entry) */
+                    if (prev >= 0) {
+                        StateStore::instance().set_group_index(prev);
+                        std::vector<const char*> paths;
+                        for (auto &s : cur.groups[prev].songs) paths.push_back(s.id);
+                        playlist_manager_sync(paths.data(), (int)paths.size());
+                        playlist_manager_set_index(0);
+                    } else {
+                        StateStore::instance().set_group_index(-1);
+                    }
+                } else {
+                    int prev = cur.netease_selected - 1;
+                    if (prev >= -1)
+                        StateStore::instance().set_netease_selected(prev);
                 }
             } else {
                 if (cur.selected_index > 0)
@@ -509,6 +533,22 @@ int run_app(int argc, char **argv) {
             return true;
 
         case Action::PlaySelected:
+            if (cur.active_panel == 0) {
+                /* Left panel: mode switching or menu selection */
+                if (cur.music_mode == MusicMode::Local && cur.group_index < 0) {
+                    /* Switch to Netease mode */
+                    StateStore::instance().set_music_mode(MusicMode::Netease);
+                    StateStore::instance().set_active_panel(0);
+                    StateStore::instance().set_group_index(-1);
+                } else if (cur.music_mode == MusicMode::Netease && cur.netease_selected < 0) {
+                    /* Switch back to Local mode */
+                    StateStore::instance().set_music_mode(MusicMode::Local);
+                    StateStore::instance().set_active_panel(0);
+                    StateStore::instance().set_group_index(0);
+                }
+                return true;
+            }
+            /* Right panel: play selected song */
             if (cur.playlist.empty()) return true;
             if (cur.active_panel == 1) {
                 int idx = cur.selected_index;

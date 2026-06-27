@@ -77,6 +77,29 @@ void StateStore::set_playlist(const std::vector<SongInfo> &list, int index) {
     state_.selected_index = index;
 }
 
+void StateStore::set_music_mode(MusicMode mode) {
+    state_.music_mode = mode;
+    /* When switching to Netease, populate default menu items */
+    if (mode == MusicMode::Netease && state_.netease_menu.empty()) {
+        state_.netease_menu = {
+            {"\u65E5\u5E38\u63A8\u8350",   0, ""},          /* 每日推荐 */
+            {"\u63A8\u8350\u6B4C\u5355",   1, ""},          /* 推荐歌单 */
+            {"\u6211\u7684\u6B4C\u5355",   2, ""},          /* 我的歌单 */
+            {"\u6536\u85CF\u6B4C\u5355",   3, ""},          /* 收藏歌单 */
+            {"\u641C\u7D22\u7F51\u6613\u4E91", 100, ""},  /* 搜索网易云 */
+        };
+    }
+    state_.netease_selected = 0;
+}
+
+void StateStore::set_netease_menu(const std::vector<NeteaseMenuItem> &items) {
+    state_.netease_menu = items;
+}
+
+void StateStore::set_netease_selected(int idx) {
+    state_.netease_selected = idx;
+}
+
 void StateStore::set_show_help(bool show) {
     state_.show_help = show;
 }

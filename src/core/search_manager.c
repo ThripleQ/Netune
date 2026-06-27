@@ -35,7 +35,9 @@ static bool has_duplicate(const SongInfo *song) {
     return false;
 }
 
-/* ── Search across all sources ───────────────────────── */
+/* ── Search across selected or all sources ──────────── */
+static const char *g_source_filter = NULL;
+
 static int search_all(const char *keyword, int page, int page_size) {
     /* Temporary buffer for aggregated results */
     SongInfo *buf = calloc((size_t)(page_size * 4), sizeof(SongInfo));
@@ -55,12 +57,13 @@ static int search_all(const char *keyword, int page, int page_size) {
         }
     }
 
-    /* Search all registered music sources */
+    /* Search registered music sources (filtered by g_source_filter if set) */
     int n_src = music_source_count();
     for (int si = 0; si < n_src; si++) {
         MusicSource *src = music_source_get_by_index(si);
         if (!src || !src->search) continue;
         if (!src->is_available || !src->is_available()) continue;
+        if (g_source_filter && strcmp(src->name, g_source_filter) != 0) continue;
 
         SearchResult sr = {0};
         int rc = src->search(keyword, page, page_size * 2, &sr);
@@ -106,6 +109,14 @@ int search_manager_init(void) {
     g_inited = true;
     LOG_INFO("Search manager initialized");
     return 0;
+}
+
+int search_manager_search_source(const char *source_name,
+                                   const char *keyword, int page) {
+    g_source_filter = source_name;
+    int rc = search_manager_search(keyword, page);
+    g_source_filter = NULL;
+    return rc;
 }
 
 int search_manager_search(const char *keyword, int page) {

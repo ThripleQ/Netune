@@ -10,6 +10,16 @@ extern "C" {
 /* ── Playback state ────────────────────────────────── */
 enum class PlaybackState { Stopped, Playing, Paused };
 
+/* ── Music source mode ─────────────────────────────── */
+enum class MusicMode { Local, Netease };
+
+/* ── Netease menu item ─────────────────────────────── */
+struct NeteaseMenuItem {
+    std::string name;
+    int         type;  /* 0=daily, 1=recommended playlists, 2=my playlists, 3=favorites, 100=search */
+    std::string id;    /* playlist id for types 1-3 */
+};
+
 /* ── Loop mode ─────────────────────────────────────── */
 enum class LoopMode { None = 0, Track = 1, Playlist = 2 };
 
@@ -46,6 +56,13 @@ struct AppState {
     /* play mode */
     LoopMode loop_mode = LoopMode::None;
 
+    /* source mode */
+    MusicMode music_mode = MusicMode::Local;
+
+    /* netease menu (shown in left panel when music_mode == Netease) */
+    std::vector<NeteaseMenuItem> netease_menu;
+    int netease_selected = 0;
+
     /* help screen */
     bool show_help = false;
 
@@ -79,6 +96,9 @@ public:
     void set_playlist(const std::vector<SongInfo> &list, int index);
     void set_selected_index(int idx);
     void set_loop_mode(LoopMode mode);
+    void set_music_mode(MusicMode mode);
+    void set_netease_menu(const std::vector<NeteaseMenuItem> &items);
+    void set_netease_selected(int idx);
 
     /* help screen */
     void set_show_help(bool show);
