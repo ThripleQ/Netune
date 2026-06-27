@@ -428,11 +428,10 @@ int run_app(int argc, char **argv) {
         });
 
         if (s.login_state != 0) {
-            main = vbox(Elements{
-                main,
-                render_login_screen(s) | center | clear_under,
-            });
-        } else if (s.search_active) {
+            /* Full-page login screen */
+            return render_login_screen(s);
+        }
+        if (s.search_active) {
             main = vbox(Elements{
                 main,
                 render_search_bar(s) | center | clear_under,

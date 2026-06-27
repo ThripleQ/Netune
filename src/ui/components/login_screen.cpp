@@ -2,58 +2,78 @@
 #include "ui/components/theme_util.h"
 #include <cstdio>
 #include <string>
+#include <sstream>
 #include <vector>
 using namespace ftxui;
 
-Element render_login_screen(const AppState &s) {
-    if (s.login_state == 0) return text(""); /* not active */
+/* Split QR code string into lines */
+static std::vector<std::string> split_lines(const std::string &s) {
+    std::vector<std::string> lines;
+    std::istringstream stream(s);
+    std::string line;
+    while (std::getline(stream, line))
+        lines.push_back(line);
+    return lines;
+}
 
+Element render_login_screen(const AppState &s) {
+    /* Build the full login page */
     Elements col;
 
-    /* Title */
-    col.push_back(text(" Netease Login ") | bold | center | underlined);
+    /* Title bar */
+    col.push_back(text(" Netease Cloud Music - Login ") | bold | center | underlined);
     col.push_back(separator());
+    col.push_back(text("")); /* spacer */
 
     switch (s.login_state) {
     case 1: /* Getting QR key */
-        col.push_back(theme_fg(text(" Getting QR code... ")) | center);
+        col.push_back(theme_fg(text(" Connecting to server... ")) | center);
+        col.push_back(text(""));
+        col.push_back(text(" Please wait ") | dim | center);
         break;
 
-    case 2: /* QR code displayed, waiting for scan */
+    case 2: /* QR displayed, waiting for scan */
         if (!s.login_qr.empty()) {
-            /* Display QR code (text-based, from qrencode) */
-            col.push_back(text(s.login_qr) | center);
-            col.push_back(separator());
+            auto qr_lines = split_lines(s.login_qr);
+            Elements qr_els;
+            for (auto &ln : qr_lines) {
+                /* Add a leading space for centering offset */
+                qr_els.push_back(text("  " + ln));
+            }
+            col.push_back(vbox(std::move(qr_els)) | center);
         } else {
-            col.push_back(theme_fg(text(" Scan with Netease Music App ")) | center);
+            col.push_back(text(""));
         }
-        col.push_back(theme_accent(text(" > ") | bold) | center);
-        col.push_back(theme_fg(text(" Please scan the QR code using ")) | center);
-        col.push_back(theme_fg(text(" Netease Cloud Music mobile app ")) | center);
-        col.push_back(separator());
+        col.push_back(text(""));
+        col.push_back(theme_accent(text(" >>> Scan with Netease Music App <<< ") | bold) | center);
+        col.push_back(text(""));
+        col.push_back(text(" 1. Open Netease Cloud Music on your phone ") | dim | center);
+        col.push_back(text(" 2. Tap the scan icon in the top-right corner ") | dim | center);
+        col.push_back(text(" 3. Scan this QR code ") | dim | center);
         break;
 
     case 3: /* Logged in */
+        col.push_back(text(""));
+        col.push_back(theme_accent(text(" ✓ Login successful! ")) | bold | center);
+        col.push_back(text(""));
         if (!s.login_status.empty()) {
-            col.push_back(theme_accent(text(" ✓ " + s.login_status)) | bold | center);
-        } else {
-            col.push_back(theme_accent(text(" ✓ Logged in! ")) | bold | center);
+            col.push_back(theme_accent(text(" Welcome, " + s.login_status + " ")) | center);
         }
         break;
 
     case -1: /* Error */
-        col.push_back(theme_fg(text(" ✗ " + s.login_status)) | center);
+        col.push_back(theme_fg(text("")) | center);
         break;
     }
 
-    /* Status message */
-    if (!s.login_status.empty() && s.login_state != 3 && s.login_state != 2) {
+    /* Status line */
+    col.push_back(filler());
+    col.push_back(separator());
+    if (!s.login_status.empty() && s.login_state != 2) {
         col.push_back(theme_fg(text(" " + s.login_status)) | dim | center);
     }
+    col.push_back(text(" [Esc] back ") | dim | center);
 
-    col.push_back(separator());
-    col.push_back(text(" [Esc] close ") | dim | center);
-
-    auto box = vbox(std::move(col));
-    return box | border | center | clear_under | bgcolor(Color::RGB(15, 15, 25));
+    auto page = vbox(std::move(col));
+    return page | bgcolor(Color::RGB(15, 15, 25));
 }
