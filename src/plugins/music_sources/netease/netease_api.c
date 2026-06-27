@@ -5,6 +5,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/prctl.h>
 #include <curl/curl.h>
 #include <yyjson.h>
 
@@ -115,7 +116,9 @@ static int start_server(void) {
         return -1;
     }
     if (pid == 0) {
-        /* Child process: redirect output and exec the server */
+        /* Child process: auto-kill on parent death */
+        prctl(PR_SET_PDEATHSIG, SIGTERM);
+        /* Redirect output and exec the server */
         freopen("/tmp/netease-api.log", "a", stdout);
         freopen("/tmp/netease-api.log", "a", stderr);
         setenv("PORT", SERVER_PORT, 1);
