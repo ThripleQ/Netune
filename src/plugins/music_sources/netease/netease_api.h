@@ -70,6 +70,9 @@ int netease_get_lyric(const char *song_id, char *buf, size_t buf_size);
 /* Get cover URL for a song. buf must be at least 1024 bytes. */
 int netease_get_cover_url(const char *song_id, char *buf, size_t buf_size);
 
+/* Get personalized playlists (for menu). Returns raw JSON in out_json. */
+int netease_get_personalized(char *out_json, size_t json_size);
+
 #ifdef __cplusplus
 }
 #endif
