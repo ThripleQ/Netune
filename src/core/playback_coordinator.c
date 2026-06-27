@@ -265,10 +265,9 @@ static void* playback_thread(void *arg) {
                     if (decoder) { decoder_close(decoder); decoder = NULL; }
                     if (audio)   { audio_output_destroy(audio); audio = NULL; }
                     state = PS_STOPPED;
-                    /* Same rationale as outer loop: don't publish
-                       EV_PLAYBACK_STOP here to avoid racing with app. */
                     current_frame = 0;
-                    event_bus_publish(EV_PLAYBACK_STOP, NULL, 0);
+                    /* Don't publish EV_PLAYBACK_STOP here — same race
+                       condition as the outer loop handler. */
                     goto next_song;
                 case CMD_PLAY:
                     /* switch to new track */
