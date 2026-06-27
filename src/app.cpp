@@ -27,9 +27,12 @@ extern "C" {
 
 #include "ui/state_store.h"
 #include "ui/keybindings.h"
+#include "ui/components/top_bar.h"
 #include "ui/components/status_bar.h"
 #include "ui/components/group_list.h"
 #include "ui/components/song_list.h"
+#include "ui/components/player_controls.h"
+#include "ui/components/help_screen.h"
 #include "ui/theme.h"
 #include "ui/layout_engine.h"
 
@@ -149,9 +152,11 @@ int run_app(int argc, char **argv) {
 
     /* layout engine */
     LayoutEngine layout_engine;
+    layout_engine.register_component("top_bar", render_top_bar);
     layout_engine.register_component("status_bar", render_status_bar);
     layout_engine.register_component("group_list", render_group_list);
     layout_engine.register_component("song_list", render_song_list);
+    layout_engine.register_component("player_controls", render_player_controls);
     const char *l_name = config_get_str(cfg, "ui.layout", NULL);
     const char *l_path = "data/layouts/default.yaml";
     if (l_name && strcmp(l_name, "default") != 0) l_path = l_name;
@@ -229,13 +234,19 @@ int run_app(int argc, char **argv) {
         event_bus_poll();
         const AppState &s = state.state();
 
-        return vbox(Elements{
-            text(" LMusic v2.0.0 ") | bold | center,
-            separator(),
+        Element main = vbox(Elements{
             layout_engine.build(s) | flex,
-            separator(),
-            text(" [Tab]panel  [j/k]nav  [Enter]play  [Space]pause  [+/-]vol  [l]loop  [q]quit") | dim,
         });
+
+        if (s.show_help) {
+            /* overlay help screen centered on top of main content */
+            main = vbox(Elements{
+                main,
+                render_help_screen(s) | center | clear_under,
+            });
+        }
+
+        return main;
     });
 
     component |= CatchEvent([&](ftxui::Event event) -> bool {
@@ -384,6 +395,30 @@ int run_app(int argc, char **argv) {
             }
             return true;
         }
+
+        case Action::Stop:
+            if (cur.playback_state != PlaybackState::Stopped) {
+                event_bus_publish(EV_PLAYBACK_STOP, NULL, 0);
+            }
+            return true;
+
+        case Action::ToggleMute: {
+            bool new_muted = !cur.muted;
+            int vol = audio_output_get_volume();
+            if (vol >= 0) {
+                int target = new_muted ? 0 : cur.volume;
+                if (target == 0) target = cur.volume; /* restore volume on unmute */
+                if (target <= 0) target = 80;
+                audio_output_set_volume(target);
+            }
+            StateStore::instance().set_muted(new_muted);
+            StateStore::instance().set_volume(new_muted ? 0 : cur.volume);
+            return true;
+        }
+
+        case Action::ShowHelp:
+            StateStore::instance().set_show_help(!cur.show_help);
+            return true;
 
         case Action::CycleLoop: {
             int next = ((int)cur.loop_mode + 1) % 3;

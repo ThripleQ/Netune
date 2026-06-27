@@ -47,6 +47,9 @@ struct AppState {
     /* play mode */
     LoopMode loop_mode = LoopMode::None;
 
+    /* help screen */
+    bool show_help = false;
+
     /* search */
     std::string search_keyword;
     std::vector<SongInfo> search_results;
@@ -77,6 +80,9 @@ public:
     void set_playlist(const std::vector<SongInfo> &list, int index);
     void set_selected_index(int idx);
     void set_loop_mode(LoopMode mode);
+
+    /* help screen */
+    void set_show_help(bool show);
 
     /* search */
     void set_search_results(const std::string &keyword,

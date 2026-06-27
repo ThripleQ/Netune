@@ -13,9 +13,12 @@ enum class Action {
     PlayPause,
     PlaySelected,
     NextTrack, PrevTrack,
+    Stop,
     SeekForward, SeekBackward,
     VolumeUp, VolumeDown,
+    ToggleMute,
     CycleLoop,
+    ShowHelp,
     Quit,
 };
 

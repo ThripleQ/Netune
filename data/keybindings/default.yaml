@@ -10,5 +10,8 @@ keybindings:
   seek_backward: ["left"]
   volume_up:    ["+", "="]
   volume_down:  ["-"]
+  stop:         ["s"]
+  toggle_mute:  ["m"]
   cycle_loop:   ["l"]
+  show_help:    ["?", "escape"]
   quit:         ["q"]

@@ -28,6 +28,10 @@ KeybindingManager::KeybindingManager() {
     impl_->map["="]      = Action::VolumeUp;
     impl_->map["-"]      = Action::VolumeDown;
     impl_->map["l"]      = Action::CycleLoop;
+    impl_->map["s"]      = Action::Stop;
+    impl_->map["m"]      = Action::ToggleMute;
+    impl_->map["?"]      = Action::ShowHelp;
+    impl_->map["escape"] = Action::ShowHelp;
     impl_->map["q"]      = Action::Quit;
 }
 
@@ -76,6 +80,9 @@ bool KeybindingManager::load(const std::string &yaml_path) {
         if (name == "volume_up")     return Action::VolumeUp;
         if (name == "volume_down")   return Action::VolumeDown;
         if (name == "cycle_loop")    return Action::CycleLoop;
+        if (name == "stop")          return Action::Stop;
+        if (name == "toggle_mute")   return Action::ToggleMute;
+        if (name == "show_help")     return Action::ShowHelp;
         if (name == "quit")          return Action::Quit;
         return Action::None;
     };

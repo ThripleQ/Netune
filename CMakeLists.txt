@@ -63,9 +63,12 @@ set(UI_SOURCES
   src/ui/theme.cpp
   src/ui/layout_engine.cpp
   src/ui/components/theme_util.cpp
+  src/ui/components/top_bar.cpp
   src/ui/components/group_list.cpp
   src/ui/components/song_list.cpp
   src/ui/components/status_bar.cpp
+  src/ui/components/player_controls.cpp
+  src/ui/components/help_screen.cpp
 )
 
 set(ALL_SOURCES

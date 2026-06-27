@@ -90,6 +90,11 @@ void StateStore::set_playlist(const std::vector<SongInfo> &list, int index) {
     notify();
 }
 
+void StateStore::set_show_help(bool show) {
+    state_.show_help = show;
+    notify();
+}
+
 void StateStore::set_search_results(const std::string &keyword,
                                      const std::vector<SongInfo> &results) {
     /* free old */
