@@ -25,6 +25,7 @@ extern "C" {
 #include "core/search_manager.h"
 #include "core/cache_manager.h"
 #include "plugins/music_sources/local/local_source.h"
+#include "plugins/music_sources/netease/netease_source.h"
 }
 
 #include "ui/state_store.h"
@@ -114,9 +115,10 @@ static void ev_playback_finish(const BusEvent *ev, void *data) {
         if (path) {
             const auto &st = StateStore::instance().state();
             StateStore::instance().set_selected_index(next);
-            if (next < (int)st.playlist.size())
+            if (next < (int)st.playlist.size()) {
                 StateStore::instance().set_current_song(st.playlist[next]);
                 event_bus_publish(EV_TRACK_CHANGED, &next, sizeof(next));
+            }
             event_bus_publish(EV_PLAYBACK_START, (void*)path, strlen(path) + 1);
             return;
         }
@@ -246,6 +248,7 @@ int run_app(int argc, char **argv) {
 
     music_source_manager_init();
     local_source_register();
+    netease_source_register();
 
     /* auto-scan */
     {
@@ -523,9 +526,10 @@ int run_app(int argc, char **argv) {
                 const char *path = playlist_manager_get_path(next);
                 if (path) {
                     StateStore::instance().set_selected_index(next);
-                    if (next < (int)cur.playlist.size())
+                    if (next < (int)cur.playlist.size()) {
                         StateStore::instance().set_current_song(cur.playlist[next]);
                         event_bus_publish(EV_TRACK_CHANGED, NULL, 0);
+                    }
                     event_bus_publish(EV_PLAYBACK_START, (void*)path, strlen(path) + 1);
                 }
             }
@@ -538,9 +542,10 @@ int run_app(int argc, char **argv) {
                 const char *path = playlist_manager_get_path(prev);
                 if (path) {
                     StateStore::instance().set_selected_index(prev);
-                    if (prev < (int)cur.playlist.size())
+                    if (prev < (int)cur.playlist.size()) {
                         StateStore::instance().set_current_song(cur.playlist[prev]);
                         event_bus_publish(EV_TRACK_CHANGED, NULL, 0);
+                    }
                     event_bus_publish(EV_PLAYBACK_START, (void*)path, strlen(path) + 1);
                 }
             }

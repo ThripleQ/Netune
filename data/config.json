@@ -37,9 +37,10 @@
       "show_hidden": false
     },
     "netease": {
-      "enabled": false,
+      "enabled": true,
       "quality": "standard",
-      "cookie_file": ""
+      "cookie_file": "",
+      "auto_login": false
     }
   },
 
