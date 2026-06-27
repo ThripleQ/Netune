@@ -481,6 +481,76 @@ int netease_get_cover_url(const char *song_id, char *buf, size_t buf_size) {
     return 0;
 }
 
+/* ── Load menu item songs ────────────────────────────── */
+int netease_load_menu(int type, int limit, SearchResult *out) {
+    if (!out) return -1;
+    memset(out, 0, sizeof(*out));
+
+    const char *path = NULL;
+    switch (type) {
+    case 0:  path = "/personalized/newsong?limit=30"; break; /* 每日推荐 */
+    case 1:  path = "/personalized?limit=30"; break;          /* 推荐歌单 */
+    default: return -1;
+    }
+
+    WriteBuf buf = {0};
+    if (api_get(path, &buf) != 0) return -1;
+
+    yyjson_doc *doc = yyjson_read(buf.data, buf.len, 0);
+    free(buf.data);
+    if (!doc) return -1;
+
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *result = yyjson_obj_get(root, "result");
+    if (!result) { yyjson_doc_free(doc); return 0; }
+
+    yyjson_val *songs = yyjson_obj_get(result, "songs");
+    if (!songs) songs = result; /* personalized returns result array directly */
+    if (!yyjson_is_arr(songs)) { yyjson_doc_free(doc); return 0; }
+
+    size_t n = yyjson_arr_size(songs);
+    size_t count = (limit > 0 && n > (size_t)limit) ? (size_t)limit : n;
+    out->songs = (SongInfo*)calloc(count, sizeof(SongInfo));
+    out->count = (int)count;
+    out->total = (int)count;
+
+    size_t idx, max;
+    yyjson_val *item;
+    size_t oi = 0;
+    yyjson_arr_foreach(songs, idx, max, item) {
+        if (oi >= count) break;
+        SongInfo *si = &out->songs[oi++];
+        yyjson_val *v;
+
+        /* song id */
+        v = yyjson_obj_get(item, "id");
+        if (v) {
+            char id_buf[32];
+            snprintf(id_buf, sizeof(id_buf), "%llu",
+                     (unsigned long long)yyjson_get_int(v));
+            si->id = strdup(id_buf);
+        }
+        si->source = strdup("netease");
+
+        v = yyjson_obj_get(item, "name");
+        si->title = v ? strdup(yyjson_get_str(v)) : strdup("");
+
+        yyjson_val *artists = yyjson_obj_get(item, "artists");
+        if (artists && yyjson_arr_size(artists) > 0) {
+            v = yyjson_obj_get(yyjson_arr_get(artists, 0), "name");
+            si->artist = v ? strdup(yyjson_get_str(v)) : strdup("");
+        } else {
+            si->artist = strdup("");
+        }
+
+        v = yyjson_obj_get(item, "duration");
+        si->duration_sec = v ? (int)(yyjson_get_int(v) / 1000) : 0;
+    }
+
+    yyjson_doc_free(doc);
+    return 0;
+}
+
 /* ── Playlists (for menu items) ─────────────────────── */
 int netease_get_personalized(char *out_json, size_t json_size) {
     WriteBuf buf = {0};

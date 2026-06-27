@@ -26,6 +26,7 @@ extern "C" {
 #include "core/cache_manager.h"
 #include "plugins/music_sources/local/local_source.h"
 #include "plugins/music_sources/netease/netease_source.h"
+#include "plugins/music_sources/netease/netease_api.h"
 }
 
 #include "ui/state_store.h"
@@ -545,6 +546,33 @@ int run_app(int argc, char **argv) {
                     StateStore::instance().set_music_mode(MusicMode::Local);
                     StateStore::instance().set_active_panel(0);
                     StateStore::instance().set_group_index(0);
+                } else if (cur.music_mode == MusicMode::Netease && cur.netease_selected >= 0) {
+                    /* Load netease menu item content into right panel */
+                    int idx = cur.netease_selected;
+                    if (idx < (int)cur.netease_menu.size()) {
+                        int type = cur.netease_menu[idx].type;
+                        if (type == 100) {
+                            /* Open search in netease mode */
+                            search_manager_clear();
+                            StateStore::instance().set_search_active(true);
+                            StateStore::instance().set_search_query("");
+                        } else if (type >= 0 && type <= 1) {
+                            SearchResult sr;
+                            if (netease_load_menu(type, 50, &sr) == 0 && sr.count > 0) {
+                                std::vector<SongInfo> vec;
+                                vec.reserve(sr.count);
+                                for (int i = 0; i < sr.count; i++) {
+                                    SongInfo copy = {};
+                                    song_info_copy(&copy, &sr.songs[i]);
+                                    vec.push_back(copy);
+                                    song_info_free(&sr.songs[i]);
+                                }
+                                free(sr.songs);
+                                StateStore::instance().set_playlist(vec, 0);
+                                StateStore::instance().set_active_panel(1);
+                            }
+                        }
+                    }
                 }
                 return true;
             }

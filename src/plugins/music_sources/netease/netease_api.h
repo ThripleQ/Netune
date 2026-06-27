@@ -6,6 +6,7 @@ extern "C" {
 
 #include <stdbool.h>
 #include <stddef.h>
+#include "core/music_source.h"
 
 /* ── Netease API client ───────────────────────────────
  * Thin wrapper over libcurl for Netease Cloud Music API.
@@ -61,6 +62,11 @@ const char* netease_account_name(void);
 int netease_get_song_detail(const char *song_id,
                             char **title, char **artist, char **album,
                             int *duration_ms);
+
+/* Load songs for a netease menu item type.
+ * type: 0=daily, 1=recommended playlists, 2=my playlists
+ * Returns SearchResult (caller must search_result_free). */
+int netease_load_menu(int type, int limit, SearchResult *out);
 
 /* Get play URL for a song. out_url must be at least 1024 bytes.
  * quality: 0=standard, 1=high, 2=lossless */
