@@ -540,7 +540,10 @@ int run_app(int argc, char **argv) {
                 StateStore::instance().set_search_active(false);
                 StateStore::instance().set_search_query("");
             } else {
-                search_manager_search("", 0);
+                /* show empty search bar — user types to start searching */
+                search_manager_clear();
+                StateStore::instance().set_search_active(true);
+                StateStore::instance().set_search_query("");
             }
             return true;
         }
