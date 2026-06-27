@@ -450,7 +450,12 @@ int run_app(int argc, char **argv) {
             if (ev_key == "backspace") {
                 /* remove last char and re-search */
                 std::string q = cur.search_query;
-                if (!q.empty()) q.pop_back();
+                if (!q.empty()) {
+                    /* pop last UTF-8 character, not just last byte */
+                    int n = (int)q.size() - 1;
+                    while (n > 0 && ((unsigned char)q[n] & 0xC0) == 0x80) n--;
+                    q.resize((size_t)n);
+                }
                 StateStore::instance().set_search_query(q);
                 StateStore::instance().set_search_results({}, 0);
                 if (!q.empty()) {
