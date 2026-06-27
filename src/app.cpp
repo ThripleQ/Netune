@@ -369,14 +369,32 @@ int run_app(int argc, char **argv) {
                 StateStore::instance().set_search_selected(idx);
                 return true;
             }
-            /* Play selected result */
+            /* Navigate to selected result in its folder */
             if (ev_key == "enter" && !cur.search_results.empty()) {
                 const auto &sel = cur.search_results[cur.search_selected];
-                if (sel.id && sel.id[0]) {
-                    StateStore::instance().set_current_song(sel);
-                    StateStore::instance().set_active_panel(1);
-                    event_bus_publish(EV_PLAYBACK_START, (void*)sel.id,
-                                      strlen(sel.id) + 1);
+                if (sel.source && strcmp(sel.source, "local") == 0 &&
+                    sel.id && sel.id[0]) {
+                    int target_group = -1;
+                    int target_song = -1;
+                    for (int gi = 0; gi < (int)cur.groups.size() && target_group < 0; gi++) {
+                        for (int si = 0; si < (int)cur.groups[gi].songs.size(); si++) {
+                            if (strcmp(cur.groups[gi].songs[si].id, sel.id) == 0) {
+                                target_group = gi;
+                                target_song = si;
+                                break;
+                            }
+                        }
+                    }
+                    if (target_group >= 0) {
+                        /* sync backend paths */
+                        std::vector<const char*> paths;
+                        for (auto &s : cur.groups[target_group].songs)
+                            paths.push_back(s.id);
+                        playlist_manager_sync(paths.data(), (int)paths.size());
+                        playlist_manager_set_index(target_song);
+                        StateStore::instance().set_group_index(target_group);
+                        StateStore::instance().set_selected_index(target_song);
+                    }
                 }
                 search_manager_clear();
                 StateStore::instance().set_search_active(false);
