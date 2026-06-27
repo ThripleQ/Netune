@@ -162,8 +162,12 @@ void StateStore::set_groups(const std::vector<SongGroup> &grps) {
 }
 
 void StateStore::set_group_index(int idx) {
-    if (idx < 0 || idx >= (int)state_.groups.size()) return;
     state_.group_index = idx;
+    if (idx < 0) {
+        /* -1 = cross-mode entry (netease), no playlist update */
+        return;
+    }
+    if (idx >= (int)state_.groups.size()) { state_.group_index = 0; return; }
     /* update right panel from this group */
     auto &grp = state_.groups[idx];
     set_playlist(grp.songs, 0);
