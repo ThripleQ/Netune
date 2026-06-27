@@ -370,7 +370,7 @@ int run_app(int argc, char **argv) {
                 return true;
             }
             /* Navigate to selected result in its folder */
-            if (ev_key == "enter" && !cur.search_results.empty()) {
+            if ((ev_key == "enter" || ev_key == "\r") && !cur.search_results.empty()) {
                 const auto &sel = cur.search_results[cur.search_selected];
                 if (sel.source && strcmp(sel.source, "local") == 0 &&
                     sel.id && sel.id[0]) {
@@ -385,6 +385,9 @@ int run_app(int argc, char **argv) {
                             }
                         }
                     }
+                    LOG_INFO("Search Enter: group=%d song=%d id='%s'",
+                              target_group, target_song,
+                              sel.id ? sel.id : "null");
                     if (target_group >= 0) {
                         /* sync backend paths */
                         std::vector<const char*> paths;
@@ -393,7 +396,8 @@ int run_app(int argc, char **argv) {
                         playlist_manager_sync(paths.data(), (int)paths.size());
                         playlist_manager_set_index(target_song);
                         StateStore::instance().set_group_index(target_group);
-                        StateStore::instance().set_selected_index(target_song);
+                        StateStore::instance().set_selected_index(target_song >= 0 ? target_song : 0);
+                        StateStore::instance().set_active_panel(1);
                     }
                 }
                 search_manager_clear();
