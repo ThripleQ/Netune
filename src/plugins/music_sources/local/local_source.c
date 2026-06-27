@@ -178,6 +178,7 @@ static int search_filtered(const char *keyword, SongArray *out) {
 /* ── MusicSource implementation ──────────────────────── */
 static int local_init(void) {
     LOG_INFO("Local music source initialized");
+    ensure_cache();  /* warm up search cache at startup */
     return 0;
 }
 
@@ -198,9 +199,26 @@ static int local_search(const char *keyword, int page, int page_size,
     (void)page; (void)page_size;
     if (!keyword || !out) return -1;
 
-    /* If keyword looks like a directory path, scan that dir directly */
+    /* If keyword looks like a directory path, return songs under that path.
+       Use cache if available, otherwise scan the directory directly. */
     struct stat st;
     if (strchr(keyword, '/') && stat(keyword, &st) == 0 && S_ISDIR(st.st_mode)) {
+        if (g_scanned) {
+            /* filter cache by path prefix */
+            SongArray arr;
+            song_array_init(&arr);
+            size_t plen = strlen(keyword);
+            for (int i = 0; i < g_all_songs.count; i++) {
+                if (g_all_songs.items[i].id &&
+                    strncmp(g_all_songs.items[i].id, keyword, plen) == 0)
+                    song_array_push(&arr, &g_all_songs.items[i]);
+            }
+            out->songs = arr.items;
+            out->count = arr.count;
+            out->total = arr.count;
+            return 0;
+        }
+        /* cache not ready — fallback to direct scan */
         SongArray arr;
         song_array_init(&arr);
         scan_dir(keyword, &arr);
@@ -210,7 +228,6 @@ static int local_search(const char *keyword, int page, int page_size,
         return 0;
     }
 
-    /* Normal keyword search: populate cache then filter */
     ensure_cache();
     SongArray arr;
     search_filtered(keyword, &arr);
