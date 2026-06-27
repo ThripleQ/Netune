@@ -281,15 +281,18 @@ int run_app(int argc, char **argv) {
 
     component |= CatchEvent([&](ftxui::Event event) -> bool {
         std::string ev_key;
-        if (event.is_character()) {
-            ev_key = event.character();
-        } else if (event == ftxui::Event::Tab) { ev_key = "tab"; }
+        if (event == ftxui::Event::Tab) { ev_key = "tab"; }
         else if (event == ftxui::Event::Return) { ev_key = "enter"; }
         else if (event == ftxui::Event::Escape) { ev_key = "escape"; }
         else if (event == ftxui::Event::ArrowUp) { ev_key = "up"; }
         else if (event == ftxui::Event::ArrowDown) { ev_key = "down"; }
         else if (event == ftxui::Event::ArrowLeft) { ev_key = "left"; }
         else if (event == ftxui::Event::ArrowRight) { ev_key = "right"; }
+        else if (event.is_character()) {
+            ev_key = event.character();
+            /* Space: event.character() returns " ", normalize to "space" */
+            if (ev_key == " ") ev_key = "space";
+        }
         if (ev_key.empty()) return false;
 
         auto action = g_keybindings.lookup(ev_key);
