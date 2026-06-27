@@ -97,7 +97,7 @@ static int search_all(const char *keyword, int page, int page_size) {
     g_results.total = total;
 
     LOG_INFO("Search for '%s': %d results (total: %d)", keyword, count, total);
-    return count > 0 ? 0 : -1;
+    return 0; /* empty results are valid, not an error */
 }
 
 /* ── Public API ──────────────────────────────────────── */

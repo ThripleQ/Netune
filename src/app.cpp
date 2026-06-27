@@ -371,9 +371,13 @@ int run_app(int argc, char **argv) {
                 search_manager_search(q.c_str(), 0);
                 return true;
             }
-            /* Regular character: append to query */
-            if (ev_key.size() == 1 && ev_key[0] >= 32 && ev_key[0] < 127) {
-                std::string q = cur.search_query + ev_key;
+            /* Regular ASCII or UTF-8 character: append to query */
+            bool is_ascii = (ev_key.size() == 1 && ev_key[0] >= 32 && ev_key[0] < 127);
+            bool is_utf8  = (ev_key.size() > 1 && ((unsigned char)ev_key[0] & 0x80));
+            if (is_ascii || is_utf8) {
+                std::string ch = is_ascii ? ev_key : ev_key;
+                if (ev_key == "space") ch = " ";
+                std::string q = cur.search_query + ch;
                 StateStore::instance().set_search_query(q);
                 search_manager_search(q.c_str(), 0);
                 return true;
