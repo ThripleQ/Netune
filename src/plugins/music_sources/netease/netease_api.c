@@ -68,7 +68,8 @@ static int api_get(const char *path, WriteBuf *out) {
         return -1;
     }
 
-    /* Save cookies from response */
+    /* Save cookies from response (CURLINFO_COOKIELIST returns Netscape format:
+       domain TRUE / FALSE expiry name value. Extract name=value only.) */
     struct curl_slist *cookies = NULL;
     curl_easy_getinfo(g_curl, CURLINFO_COOKIELIST, &cookies);
     if (cookies) {
@@ -76,8 +77,28 @@ static int api_get(const char *path, WriteBuf *out) {
         struct curl_slist *nc = cookies;
         while (nc) {
             if (nc->data && nc->data[0] != '#') {
-                if (buf[0]) strncat(buf, "; ", sizeof(buf) - strlen(buf) - 1);
-                strncat(buf, nc->data, sizeof(buf) - strlen(buf) - 1);
+                /* Netscape format: tab-separated. Fields are index 6 and 7. */
+                int tab_count = 0;
+                const char *name_start = NULL, *value_start = NULL;
+                for (const char *p = nc->data; *p; p++) {
+                    if (*p == '\t') {
+                        tab_count++;
+                        if (tab_count == 5) name_start = p + 1;
+                        if (tab_count == 6 && value_start == NULL) value_start = p + 1;
+                    }
+                }
+                if (name_start && value_start) {
+                    if (buf[0]) strncat(buf, "; ", sizeof(buf) - strlen(buf) - 1);
+                    /* name */
+                    size_t nlen = (size_t)(value_start - name_start - 1);
+                    strncat(buf, name_start, nlen);
+                    strncat(buf, "=", sizeof(buf) - strlen(buf) - 1);
+                    /* value (rest of string) */
+                    strncat(buf, value_start, sizeof(buf) - strlen(buf) - 1);
+                    /* trim trailing tab from value if present */
+                    size_t blen = strlen(buf);
+                    if (blen > 0 && buf[blen-1] == '\t') buf[blen-1] = '\0';
+                }
             }
             nc = nc->next;
         }
