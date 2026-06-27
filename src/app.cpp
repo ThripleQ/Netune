@@ -88,16 +88,36 @@ static void ev_playback_finish(const BusEvent *ev, void *data) {
     StateStore::instance().set_playback_state(PlaybackState::Stopped);
 }
 
-static void on_switch_group(const BusEvent *ev, void *data) {
-    (void)ev; (void)data;
-    /* When group changes: sync the new group's paths to backend */
-    const auto &st = StateStore::instance().state();
-    int gi = st.group_index;
-    if (gi < 0 || gi >= (int)st.groups.size()) return;
-    std::vector<const char*> paths;
-    for (auto &s : st.groups[gi].songs) paths.push_back(s.id);
-    playlist_manager_sync(paths.data(), (int)paths.size());
-    playlist_manager_set_index(st.selected_index);
+/* ── Volume / Mute / Playlist event handlers ──────── */
+static void ev_volume_changed(const BusEvent *ev, void *data) {
+    (void)data;
+    if (ev->data_size == sizeof(int)) {
+        int vol = *(int*)ev->data;
+        if (vol < 0) vol = 0;
+        if (vol > 100) vol = 100;
+        audio_output_set_volume(vol);
+        StateStore::instance().set_volume(vol);
+    }
+}
+
+static void ev_mute_changed(const BusEvent *ev, void *data) {
+    (void)data;
+    if (ev->data_size == sizeof(int)) {
+        int muted = *(int*)ev->data;
+        StateStore::instance().set_muted(muted != 0);
+        int target = muted ? 0 : StateStore::instance().state().volume;
+        if (target <= 0) target = 80;
+        audio_output_set_volume(target);
+    }
+}
+
+static void ev_playlist_changed(const BusEvent *ev, void *data) {
+    (void)data;
+    if (ev->data_size == sizeof(int)) {
+        int mode = *(int*)ev->data;
+        playlist_manager_set_loop_mode(mode);
+        StateStore::instance().set_loop_mode((LoopMode)mode);
+    }
 }
 /* ───────────────────────────────────────────────────── */
 
@@ -126,6 +146,9 @@ int run_app(int argc, char **argv) {
     event_bus_subscribe(EV_PLAYBACK_STOP,     ev_playback_stop, NULL);
     event_bus_subscribe(EV_PLAYBACK_FINISH,   ev_playback_finish, NULL);
     event_bus_subscribe(EV_PLAYBACK_ERROR,    ev_playback_error, NULL);
+    event_bus_subscribe(EV_VOLUME_CHANGED,    ev_volume_changed, NULL);
+    event_bus_subscribe(EV_MUTE_CHANGED,      ev_mute_changed, NULL);
+    event_bus_subscribe(EV_PLAYLIST_CHANGED,  ev_playlist_changed, NULL);
     /* group switching handled synchronously in set_group_index */
 
     if (cfg) {
@@ -203,7 +226,14 @@ int run_app(int argc, char **argv) {
         }
         if (!groups.empty()) {
             StateStore::instance().set_groups(groups);
-            on_switch_group(NULL, NULL);
+            /* sync first group's paths to backend */
+            {
+                const auto &st = StateStore::instance().state();
+                std::vector<const char*> paths;
+                for (auto &s : st.groups[0].songs) paths.push_back(s.id);
+                playlist_manager_sync(paths.data(), (int)paths.size());
+                playlist_manager_set_index(0);
+            }
             LOG_INFO("Scanned %zu groups", groups.size());
         } else {
             LOG_WARN("No music files found");
@@ -370,8 +400,7 @@ int run_app(int argc, char **argv) {
             int vol = audio_output_get_volume();
             if (vol >= 0) {
                 vol = (vol + 5 > 100) ? 100 : vol + 5;
-                if (audio_output_set_volume(vol) == 0)
-                    StateStore::instance().set_volume(vol);
+                event_bus_publish(EV_VOLUME_CHANGED, &vol, sizeof(vol));
             }
             return true;
         }
@@ -380,8 +409,7 @@ int run_app(int argc, char **argv) {
             int vol = audio_output_get_volume();
             if (vol >= 0) {
                 vol = (vol - 5 < 0) ? 0 : vol - 5;
-                if (audio_output_set_volume(vol) == 0)
-                    StateStore::instance().set_volume(vol);
+                event_bus_publish(EV_VOLUME_CHANGED, &vol, sizeof(vol));
             }
             return true;
         }
@@ -413,16 +441,8 @@ int run_app(int argc, char **argv) {
             return true;
 
         case Action::ToggleMute: {
-            bool new_muted = !cur.muted;
-            int vol = audio_output_get_volume();
-            if (vol >= 0) {
-                int target = new_muted ? 0 : cur.volume;
-                if (target == 0) target = cur.volume; /* restore volume on unmute */
-                if (target <= 0) target = 80;
-                audio_output_set_volume(target);
-            }
-            StateStore::instance().set_muted(new_muted);
-            StateStore::instance().set_volume(new_muted ? 0 : cur.volume);
+            int muted_val = cur.muted ? 0 : 1;
+            event_bus_publish(EV_MUTE_CHANGED, &muted_val, sizeof(muted_val));
             return true;
         }
 
@@ -432,8 +452,7 @@ int run_app(int argc, char **argv) {
 
         case Action::CycleLoop: {
             int next = ((int)cur.loop_mode + 1) % 3;
-            playlist_manager_set_loop_mode(next);
-            StateStore::instance().set_loop_mode((LoopMode)next);
+            event_bus_publish(EV_PLAYLIST_CHANGED, &next, sizeof(next));
             return true;
         }
 

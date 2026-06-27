@@ -33,44 +33,32 @@ StateStore& StateStore::instance() {
     return s;
 }
 
-void StateStore::notify() {
-    for (auto &cb : subscribers_) {
-        cb(state_);
-    }
-}
-
 void StateStore::set_playback_state(PlaybackState s) {
     state_.playback_state = s;
-    notify();
 }
 
 void StateStore::set_current_song(const SongInfo &song) {
     copy_song_info(state_.current_song, song);
-    notify();
 }
 
 void StateStore::set_progress(double pos, int cur_sec, int total_sec) {
     state_.progress        = pos;
     state_.current_time_sec = cur_sec;
     state_.total_time_sec   = total_sec;
-    notify();
 }
 
 void StateStore::set_volume(int vol) {
     if (vol < 0) vol = 0;
     if (vol > 100) vol = 100;
     state_.volume = vol;
-    notify();
 }
 
 void StateStore::set_muted(bool m) {
     state_.muted = m;
-    notify();
 }
 
 void StateStore::set_loop_mode(LoopMode mode) {
     state_.loop_mode = mode;
-    notify();
 }
 
 void StateStore::set_playlist(const std::vector<SongInfo> &list, int index) {
@@ -87,12 +75,10 @@ void StateStore::set_playlist(const std::vector<SongInfo> &list, int index) {
         state_.playlist.push_back(copy);
     }
     state_.selected_index = index;
-    notify();
 }
 
 void StateStore::set_show_help(bool show) {
     state_.show_help = show;
-    notify();
 }
 
 void StateStore::set_search_results(const std::string &keyword,
@@ -109,12 +95,10 @@ void StateStore::set_search_results(const std::string &keyword,
         copy_song_info(copy, s);
         state_.search_results.push_back(copy);
     }
-    notify();
 }
 
 void StateStore::set_selected_index(int idx) {
     state_.selected_index = idx;
-    notify();
 }
 
 void StateStore::set_groups(const std::vector<SongGroup> &grps) {
@@ -152,9 +136,4 @@ void StateStore::set_group_index(int idx) {
 
 void StateStore::set_active_panel(int panel) {
     state_.active_panel = (panel == 0 || panel == 1) ? panel : 0;
-    notify();
-}
-
-void StateStore::subscribe(StateChangeCallback cb) {
-    subscribers_.push_back(std::move(cb));
 }

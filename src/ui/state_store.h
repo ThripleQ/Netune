@@ -2,7 +2,6 @@
 
 #include <string>
 #include <vector>
-#include <functional>
 
 extern "C" {
 #include "core/music_source.h"
@@ -55,9 +54,6 @@ struct AppState {
     std::vector<SongInfo> search_results;
 };
 
-/* ── Change callback ───────────────────────────────── */
-using StateChangeCallback = std::function<void(const AppState&)>;
-
 /* ── State store singleton ─────────────────────────── */
 class StateStore {
 public:
@@ -88,11 +84,7 @@ public:
     void set_search_results(const std::string &keyword,
                             const std::vector<SongInfo> &results);
 
-    void subscribe(StateChangeCallback cb);
-
 private:
     StateStore() = default;
-    void notify();
     AppState state_;
-    std::vector<StateChangeCallback> subscribers_;
 };
