@@ -314,6 +314,16 @@ int run_app(int argc, char **argv) {
                 event_bus_publish(EV_PLAYBACK_PAUSE, NULL, 0);
             else if (cur.playback_state == PlaybackState::Paused)
                 event_bus_publish(EV_PLAYBACK_RESUME, NULL, 0);
+            else if (cur.playback_state == PlaybackState::Stopped) {
+                /* resumed from stop — play selected song */
+                if (cur.playlist.empty()) return true;
+                int idx = cur.selected_index;
+                playlist_manager_set_index(idx);
+                const auto &sel = cur.playlist[idx];
+                StateStore::instance().set_current_song(sel);
+                event_bus_publish(EV_PLAYBACK_START, (void*)(sel.id ? sel.id : ""),
+                                  strlen(sel.id ? sel.id : "") + 1);
+            }
             return true;
 
         case Action::PlaySelected:

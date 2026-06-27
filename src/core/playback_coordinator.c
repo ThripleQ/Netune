@@ -170,6 +170,7 @@ static void* playback_thread(void *arg) {
             case CMD_QUIT:
                 goto cleanup;
             case CMD_STOP:
+                if (state == PS_STOPPED) continue; /* guard feedback loop */
                 if (decoder) { decoder_close(decoder); decoder = NULL; }
                 if (audio)   { audio_output_destroy(audio); audio = NULL; }
                 state = PS_STOPPED;
@@ -257,6 +258,7 @@ static void* playback_thread(void *arg) {
                     /* should not happen while playing */
                     break;
                 case CMD_STOP:
+                    if (state == PS_STOPPED) goto next_song;
                     if (decoder) { decoder_close(decoder); decoder = NULL; }
                     if (audio)   { audio_output_destroy(audio); audio = NULL; }
                     state = PS_STOPPED;
