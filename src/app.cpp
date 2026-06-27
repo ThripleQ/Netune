@@ -337,7 +337,8 @@ int run_app(int argc, char **argv) {
 
     component |= CatchEvent([&](ftxui::Event event) -> bool {
         std::string ev_key;
-        if (event == ftxui::Event::Tab) { ev_key = "tab"; }
+        if (event == ftxui::Event::Backspace) { ev_key = "backspace"; }
+        else if (event == ftxui::Event::Tab) { ev_key = "tab"; }
         else if (event == ftxui::Event::Return) { ev_key = "enter"; }
         else if (event == ftxui::Event::Escape) { ev_key = "escape"; }
         else if (event == ftxui::Event::ArrowUp) { ev_key = "up"; }
@@ -351,10 +352,37 @@ int run_app(int argc, char **argv) {
         }
         if (ev_key.empty()) return false;
 
+        const AppState &cur = state.state();
+
+        /* ── Search input mode: capture keys as query text ── */
+        if (cur.search_active) {
+            if (ev_key == "escape" || ev_key == "enter") {
+                /* close search */
+                search_manager_clear();
+                StateStore::instance().set_search_active(false);
+                StateStore::instance().set_search_query("");
+                return true;
+            }
+            if (ev_key == "backspace") {
+                /* remove last char and re-search */
+                std::string q = cur.search_query;
+                if (!q.empty()) q.pop_back();
+                StateStore::instance().set_search_query(q);
+                search_manager_search(q.c_str(), 0);
+                return true;
+            }
+            /* Regular character: append to query */
+            if (ev_key.size() == 1 && ev_key[0] >= 32 && ev_key[0] < 127) {
+                std::string q = cur.search_query + ev_key;
+                StateStore::instance().set_search_query(q);
+                search_manager_search(q.c_str(), 0);
+                return true;
+            }
+            return true; /* consume all keys while searching */
+        }
+
         auto action = g_keybindings.lookup(ev_key);
         if (!action.has_value()) return false;
-
-        const AppState &cur = state.state();
 
         switch (action.value()) {
 

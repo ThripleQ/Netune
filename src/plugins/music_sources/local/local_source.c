@@ -2,6 +2,7 @@
 #include "core/decoder_manager.h"
 #include "core/music_source_manager.h"
 #include "infra/log.h"
+#include "infra/config.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -95,6 +96,55 @@ static void scan_dir(const char *dir_path, SongArray *arr) {
     closedir(dir);
 }
 
+/* ── Keyword-filtered scan ─────────────────────────────
+ * Scan configured music dirs and only include songs where
+ * filename/artist/album contains the keyword (case-insensitive).
+ * If keyword is empty, include all songs. */
+static int scan_with_keyword(const char *keyword, SongArray *arr) {
+    Config *cfg = config_global();
+    int ndirs = cfg ? config_get_array_size(cfg, "music_sources.local.dirs") : 0;
+    if (ndirs <= 0) {
+        /* fallback: scan current dir or home */
+        const char *home = getenv("HOME");
+        scan_dir(home ? home : ".", arr);
+        return 0;
+    }
+
+    for (int i = 0; i < ndirs; i++) {
+        char key[64];
+        snprintf(key, sizeof(key), "music_sources.local.dirs[%d]", i);
+        const char *dir = config_get_str(cfg, key, NULL);
+        if (!dir) continue;
+        scan_dir(dir, arr);
+    }
+
+    if (keyword && keyword[0] && arr->count > 0) {
+        /* Filter by keyword */
+        SongArray filtered;
+        song_array_init(&filtered);
+        for (int i = 0; i < arr->count; i++) {
+            const char *title  = arr->items[i].title  ? arr->items[i].title  : "";
+            const char *artist = arr->items[i].artist ? arr->items[i].artist : "";
+            const char *album  = arr->items[i].album  ? arr->items[i].album : "";
+            /* Also match the filename (id may contain path) */
+            const char *fname = strrchr(arr->items[i].id, '/');
+            fname = fname ? fname + 1 : arr->items[i].id;
+            if (strcasestr(title, keyword) ||
+                strcasestr(artist, keyword) ||
+                strcasestr(album, keyword) ||
+                strcasestr(fname, keyword)) {
+                song_array_push(&filtered, &arr->items[i]);
+            }
+        }
+        /* Free unfiltered items */
+        for (int i = 0; i < arr->count; i++)
+            song_info_free(&arr->items[i]);
+        free(arr->items);
+        *arr = filtered;
+    }
+    return 0;
+}
+
 /* ── MusicSource implementation ──────────────────────── */
 static int local_init(void) {
     LOG_INFO("Local music source initialized");
@@ -111,7 +161,15 @@ static int local_search(const char *keyword, int page, int page_size,
     if (!keyword || !out) return -1;
     SongArray arr;
     song_array_init(&arr);
-    scan_dir(keyword, &arr);
+
+    /* If keyword looks like a directory path, scan that dir directly.
+       Otherwise, scan configured dirs and filter by keyword. */
+    struct stat st;
+    if (strchr(keyword, '/') && stat(keyword, &st) == 0 && S_ISDIR(st.st_mode)) {
+        scan_dir(keyword, &arr);
+    } else {
+        scan_with_keyword(keyword, &arr);
+    }
 
     out->songs = arr.items;
     out->count = arr.count;
