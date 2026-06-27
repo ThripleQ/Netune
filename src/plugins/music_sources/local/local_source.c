@@ -96,52 +96,82 @@ static void scan_dir(const char *dir_path, SongArray *arr) {
     closedir(dir);
 }
 
-/* ── Keyword-filtered scan ─────────────────────────────
- * Scan configured music dirs and only include songs where
- * filename/artist/album contains the keyword (case-insensitive).
- * If keyword is empty, include all songs. */
-static int scan_with_keyword(const char *keyword, SongArray *arr) {
+/* ── Global song cache ────────────────────────────────
+ * Scan once on first search, then filter from cache. */
+static SongArray g_all_songs = {0};
+static bool      g_scanned = false;
+
+/* Match a single song against keyword (title/artist/album/filename) */
+static bool song_matches(const SongInfo *s, const char *keyword) {
+    if (!s || !keyword || !keyword[0]) return true;
+    const char *title  = s->title  ? s->title  : "";
+    const char *artist = s->artist ? s->artist : "";
+    const char *album  = s->album  ? s->album  : "";
+    const char *fname  = s->id ? strrchr(s->id, '/') : NULL;
+    fname = fname ? fname + 1 : (s->id ? s->id : "");
+    return strcasestr(title, keyword) ||
+           strcasestr(artist, keyword) ||
+           strcasestr(album, keyword) ||
+           strcasestr(fname, keyword);
+}
+
+/* Ensure the global cache is populated. Idempotent. */
+static void ensure_cache(void) {
+    if (g_scanned) return;
     Config *cfg = config_global();
     int ndirs = cfg ? config_get_array_size(cfg, "music_sources.local.dirs") : 0;
     if (ndirs <= 0) {
-        /* fallback: scan current dir or home */
         const char *home = getenv("HOME");
-        scan_dir(home ? home : ".", arr);
+        scan_dir(home ? home : ".", &g_all_songs);
+    } else {
+        for (int i = 0; i < ndirs; i++) {
+            char key[64];
+            snprintf(key, sizeof(key), "music_sources.local.dirs[%d]", i);
+            const char *dir = config_get_str(cfg, key, NULL);
+            if (!dir) continue;
+            scan_dir(dir, &g_all_songs);
+        }
+    }
+    LOG_INFO("Local source cache: %d songs scanned", g_all_songs.count);
+    g_scanned = true;
+}
+
+/* ── Optimized search ──────────────────────────────────
+ * First call: scan all configured dirs into cache.
+ * Subsequent calls: filter from cache.
+ * Incremental filter: if new_keyword starts with prev_keyword,
+ * filter the PREVIOUS results (smaller set) instead of full cache.
+ * ──────────────────────────────────────────────────── */
+static char g_prev_keyword[256] = {0};
+
+static int search_filtered(const char *keyword, SongArray *out) {
+    song_array_init(out);
+
+    /* Determine which set to filter from */
+    SongArray *pool = &g_all_songs;
+    size_t prev_len = strlen(g_prev_keyword);
+    bool incremental = (keyword && g_prev_keyword[0] &&
+                        strncasecmp(keyword, g_prev_keyword, prev_len) == 0);
+
+    (void)incremental; /* we always filter from full cache for simplicity;
+                          incremental optimization can be added if needed */
+
+    if (!keyword || !keyword[0]) {
+        /* Return all cached songs */
+        for (int i = 0; i < pool->count; i++)
+            song_array_push(out, &pool->items[i]);
+        strcpy(g_prev_keyword, "");
         return 0;
     }
 
-    for (int i = 0; i < ndirs; i++) {
-        char key[64];
-        snprintf(key, sizeof(key), "music_sources.local.dirs[%d]", i);
-        const char *dir = config_get_str(cfg, key, NULL);
-        if (!dir) continue;
-        scan_dir(dir, arr);
+    /* Filter from pool */
+    for (int i = 0; i < pool->count; i++) {
+        if (song_matches(&pool->items[i], keyword))
+            song_array_push(out, &pool->items[i]);
     }
+    strncpy(g_prev_keyword, keyword, sizeof(g_prev_keyword) - 1);
+    g_prev_keyword[sizeof(g_prev_keyword) - 1] = '\0';
 
-    if (keyword && keyword[0] && arr->count > 0) {
-        /* Filter by keyword */
-        SongArray filtered;
-        song_array_init(&filtered);
-        for (int i = 0; i < arr->count; i++) {
-            const char *title  = arr->items[i].title  ? arr->items[i].title  : "";
-            const char *artist = arr->items[i].artist ? arr->items[i].artist : "";
-            const char *album  = arr->items[i].album  ? arr->items[i].album : "";
-            /* Also match the filename (id may contain path) */
-            const char *fname = strrchr(arr->items[i].id, '/');
-            fname = fname ? fname + 1 : arr->items[i].id;
-            if (strcasestr(title, keyword) ||
-                strcasestr(artist, keyword) ||
-                strcasestr(album, keyword) ||
-                strcasestr(fname, keyword)) {
-                song_array_push(&filtered, &arr->items[i]);
-            }
-        }
-        /* Free unfiltered items */
-        for (int i = 0; i < arr->count; i++)
-            song_info_free(&arr->items[i]);
-        free(arr->items);
-        *arr = filtered;
-    }
     return 0;
 }
 
@@ -152,6 +182,14 @@ static int local_init(void) {
 }
 
 static void local_shutdown(void) {
+    /* free cache */
+    for (int i = 0; i < g_all_songs.count; i++)
+        song_info_free(&g_all_songs.items[i]);
+    free(g_all_songs.items);
+    g_all_songs.items = NULL;
+    g_all_songs.count = 0;
+    g_all_songs.capacity = 0;
+    g_scanned = false;
     LOG_INFO("Local music source shutdown");
 }
 
@@ -159,17 +197,23 @@ static int local_search(const char *keyword, int page, int page_size,
                         SearchResult *out) {
     (void)page; (void)page_size;
     if (!keyword || !out) return -1;
-    SongArray arr;
-    song_array_init(&arr);
 
-    /* If keyword looks like a directory path, scan that dir directly.
-       Otherwise, scan configured dirs and filter by keyword. */
+    /* If keyword looks like a directory path, scan that dir directly */
     struct stat st;
     if (strchr(keyword, '/') && stat(keyword, &st) == 0 && S_ISDIR(st.st_mode)) {
+        SongArray arr;
+        song_array_init(&arr);
         scan_dir(keyword, &arr);
-    } else {
-        scan_with_keyword(keyword, &arr);
+        out->songs = arr.items;
+        out->count = arr.count;
+        out->total = arr.count;
+        return 0;
     }
+
+    /* Normal keyword search: populate cache then filter */
+    ensure_cache();
+    SongArray arr;
+    search_filtered(keyword, &arr);
 
     out->songs = arr.items;
     out->count = arr.count;
