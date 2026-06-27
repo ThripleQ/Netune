@@ -175,7 +175,10 @@ static void* playback_thread(void *arg) {
                 if (audio)   { audio_output_destroy(audio); audio = NULL; }
                 state = PS_STOPPED;
                 current_frame = 0;
-                event_bus_publish(EV_PLAYBACK_STOP, NULL, 0);
+                /* Don't publish EV_PLAYBACK_STOP here — the app already set
+                   StateStore when it sent the command. Publishing it now would
+                   race with a subsequent EV_PLAYBACK_START (e.g. from Space
+                   pressed right after Stop) and clobber the Playing state. */
                 continue;
 
             case CMD_PLAY: {
@@ -262,6 +265,8 @@ static void* playback_thread(void *arg) {
                     if (decoder) { decoder_close(decoder); decoder = NULL; }
                     if (audio)   { audio_output_destroy(audio); audio = NULL; }
                     state = PS_STOPPED;
+                    /* Same rationale as outer loop: don't publish
+                       EV_PLAYBACK_STOP here to avoid racing with app. */
                     current_frame = 0;
                     event_bus_publish(EV_PLAYBACK_STOP, NULL, 0);
                     goto next_song;
