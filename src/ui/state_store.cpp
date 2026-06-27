@@ -82,6 +82,7 @@ void StateStore::set_music_mode(MusicMode mode) {
     /* When switching to Netease, populate default menu items */
     if (mode == MusicMode::Netease && state_.netease_menu.empty()) {
         state_.netease_menu = {
+            {"\u626B\u7801\u767B\u5F55",   200, ""},        /* 扫码登录 */
             {"\u65E5\u5E38\u63A8\u8350",   0, ""},          /* 每日推荐 */
             {"\u63A8\u8350\u6B4C\u5355",   1, ""},          /* 推荐歌单 */
             {"\u6211\u7684\u6B4C\u5355",   2, ""},          /* 我的歌单 */
@@ -98,6 +99,13 @@ void StateStore::set_netease_menu(const std::vector<NeteaseMenuItem> &items) {
 
 void StateStore::set_netease_selected(int idx) {
     state_.netease_selected = idx;
+}
+
+void StateStore::set_login_state(int st, const std::string &status,
+                                   const std::string &qr) {
+    state_.login_state = st;
+    state_.login_status = status;
+    state_.login_qr = qr;
 }
 
 void StateStore::set_show_help(bool show) {

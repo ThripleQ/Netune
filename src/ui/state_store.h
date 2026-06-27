@@ -63,6 +63,11 @@ struct AppState {
     std::vector<NeteaseMenuItem> netease_menu;
     int netease_selected = 0;
 
+    /* netease login */
+    int  login_state = 0; /* 0=idle, 1=get_key, 2=wait_scan, 3=done, -1=error */
+    std::string login_status; /* status message displayed in overlay */
+    std::string login_qr;     /* QR code text for terminal display */
+
     /* help screen */
     bool show_help = false;
 
@@ -99,6 +104,7 @@ public:
     void set_music_mode(MusicMode mode);
     void set_netease_menu(const std::vector<NeteaseMenuItem> &items);
     void set_netease_selected(int idx);
+    void set_login_state(int state, const std::string &status, const std::string &qr);
 
     /* help screen */
     void set_show_help(bool show);

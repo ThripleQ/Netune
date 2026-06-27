@@ -38,6 +38,7 @@ extern "C" {
 #include "ui/components/player_controls.h"
 #include "ui/components/help_screen.h"
 #include "ui/components/search_bar.h"
+#include "ui/components/login_screen.h"
 #include "ui/theme.h"
 #include "ui/layout_engine.h"
 
@@ -49,6 +50,56 @@ static KeybindingManager g_keybindings;
 static volatile bool g_running = true;
 
 static void on_signal(int sig) { (void)sig; g_running = false; }
+
+/* ── Login state ────────────────────────────────────── */
+static std::string g_login_unikey;
+static int         g_login_poll_tick = 0;
+
+/* Generate QR code text via qrencode tool */
+static std::string gen_qr(const char *unikey) {
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd),
+        "qrencode -t UTF8 'https://music.163.com/login?codekey=%s' 2>/dev/null",
+        unikey);
+    FILE *fp = popen(cmd, "r");
+    if (!fp) return "";
+    char buf[8192] = {0};
+    size_t n = fread(buf, 1, sizeof(buf) - 1, fp);
+    pclose(fp);
+    buf[n] = '\0';
+    return std::string(buf);
+}
+
+/* Start the QR login flow */
+static void start_login(void) {
+    StateStore::instance().set_login_state(1, "Contacting server...", "");
+    char unikey[128] = {0};
+    char qr_url[512] = {0};
+    if (netease_qr_get_key(unikey, sizeof(unikey), qr_url, sizeof(qr_url)) == 0
+        && unikey[0]) {
+        g_login_unikey = unikey;
+        g_login_poll_tick = 0;
+        std::string qr = gen_qr(unikey);
+        StateStore::instance().set_login_state(2,
+            "Scan with Netease Music App", qr);
+    } else {
+        StateStore::instance().set_login_state(-1,
+            "Failed to get QR code", "");
+    }
+}
+
+/* Update netease menu after successful login */
+static void update_login_menu(void) {
+    const auto &cur = StateStore::instance().state();
+    if (cur.netease_menu.empty()) return;
+    const char *name = netease_account_name();
+    if (!name) name = "Logged in";
+    auto menu = cur.netease_menu;
+    std::string label = "";
+    label += name;
+    menu[0].name = label;
+    StateStore::instance().set_netease_menu(menu);
+}
 
 /* ── Direct netease search (bypass search_manager) ── */
 static void do_netease_search(const char *query) {
@@ -350,11 +401,38 @@ int run_app(int argc, char **argv) {
         event_bus_poll();
         const AppState &s = state.state();
 
+        /* Login polling: every ~2s while waiting for QR scan;
+           auto-close 2s after successful login */
+        if (s.login_state == 3) {
+            static int close_tick = 0;
+            if (++close_tick >= 125) {
+                close_tick = 0;
+                StateStore::instance().set_login_state(0, "", "");
+            }
+        }
+        if (s.login_state == 2 && ++g_login_poll_tick % 125 == 0) {
+            int rc = netease_qr_poll(g_login_unikey.c_str());
+            if (rc == 0) {
+                StateStore::instance().set_login_state(3,
+                    netease_account_name() ? netease_account_name() : "Logged in", "");
+                update_login_menu();
+            } else if (rc == 2) {
+                /* expired — restart */
+                g_login_unikey.clear();
+                start_login();
+            }
+        }
+
         Element main = vbox(Elements{
             layout_engine.build(s) | flex,
         });
 
-        if (s.search_active) {
+        if (s.login_state != 0) {
+            main = vbox(Elements{
+                main,
+                render_login_screen(s) | center | clear_under,
+            });
+        } else if (s.search_active) {
             main = vbox(Elements{
                 main,
                 render_search_bar(s) | center | clear_under,
@@ -388,6 +466,13 @@ int run_app(int argc, char **argv) {
         if (ev_key.empty()) return false;
 
         const AppState &cur = state.state();
+
+        /* ── Login overlay: Esc to close ── */
+        if (cur.login_state != 0 && (ev_key == "escape")) {
+            StateStore::instance().set_login_state(0, "", "");
+            g_login_unikey.clear();
+            return true;
+        }
 
         /* ── Search input mode: capture keys as query text ── */
         if (cur.search_active) {
@@ -586,7 +671,10 @@ int run_app(int argc, char **argv) {
                     int idx = cur.netease_selected;
                     if (idx < (int)cur.netease_menu.size()) {
                         int type = cur.netease_menu[idx].type;
-                        if (type == 100) {
+                        if (type == 200) {
+                            /* QR login */
+                            start_login();
+                        } else if (type == 100) {
                             /* Open search in netease mode */
                             search_manager_clear();
                             StateStore::instance().set_search_active(true);
