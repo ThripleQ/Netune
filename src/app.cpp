@@ -457,7 +457,7 @@ int run_app(int argc, char **argv) {
                     if (cur.music_mode == MusicMode::Netease)
                         do_netease_search(q.c_str());
                     else
-                        search_manager_search(q.c_str(), 0);
+                        search_manager_search_source("local", q.c_str(), 0);
                 }
                 return true;
             }
@@ -473,7 +473,7 @@ int run_app(int argc, char **argv) {
                 if (cur.music_mode == MusicMode::Netease)
                     do_netease_search(q.c_str());
                 else
-                    search_manager_search(q.c_str(), 0);
+                    search_manager_search_source("local", q.c_str(), 0);
                 return true;
             }
             return true; /* consume all keys while searching */

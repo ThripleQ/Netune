@@ -197,9 +197,28 @@ int netease_search(const char *keyword, int limit, int offset,
     if (!keyword || !out) return -1;
     memset(out, 0, sizeof(*out));
 
+    /* URL-encode the keyword for Chinese/UTF-8 support */
+    char encoded[1024];
+    {
+        int ei = 0;
+        for (const char *p = keyword; *p && ei < (int)sizeof(encoded) - 4; p++) {
+            unsigned char c = (unsigned char)*p;
+            if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') ||
+                (c >= 'a' && c <= 'z') || c == '-' || c == '_' || c == '.') {
+                encoded[ei++] = (char)c;
+            } else if (c == ' ') {
+                encoded[ei++] = '+';
+            } else {
+                int n = snprintf(encoded + ei, sizeof(encoded) - (size_t)ei,
+                                 "%%%02X", c);
+                ei += n;
+            }
+        }
+        encoded[ei] = '\0';
+    }
     char path[1024];
     snprintf(path, sizeof(path), "/search?keywords=%s&limit=%d&offset=%d&type=1",
-             keyword, limit, offset);
+             encoded, limit, offset);
 
     WriteBuf buf = {0};
     if (api_get(path, &buf) != 0) return -1;
