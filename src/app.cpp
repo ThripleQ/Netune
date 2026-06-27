@@ -101,9 +101,23 @@ static void update_login_menu(void) {
     StateStore::instance().set_netease_menu(menu);
 }
 
-/* ── Direct netease search (bypass search_manager) ── */
+#include <map>
+
+/* ── Netease search cache (in-memory LRU, max 32 entries) ── */
+static std::map<std::string, std::vector<SongInfo>> g_ns_cache;
+#define NS_CACHE_MAX 32
+
 static void do_netease_search(const char *query) {
     if (!query || !query[0]) return;
+    std::string q(query);
+
+    /* Check cache first */
+    auto it = g_ns_cache.find(q);
+    if (it != g_ns_cache.end()) {
+        StateStore::instance().set_search_results(it->second, (int)it->second.size());
+        return;
+    }
+
     NeteaseSearchResult nr;
     if (netease_search(query, 30, 0, &nr) != 0) return;
 
@@ -120,8 +134,22 @@ static void do_netease_search(const char *query) {
         vec.push_back(si);
     }
     netease_search_result_free(&nr);
+
+    /* Store in cache, evict oldest if full */
+    if (g_ns_cache.size() >= NS_CACHE_MAX)
+        g_ns_cache.erase(g_ns_cache.begin());
+    g_ns_cache[q] = vec;
+
+    /* Deep copy for StateStore (vec holds shallow ownership) */
     StateStore::instance().set_search_results(vec, (int)vec.size());
-    for (auto &s : vec) song_info_free(&s);
+}
+
+/* Free search cache on shutdown */
+static void free_ns_cache(void) {
+    for (auto &entry : g_ns_cache)
+        for (auto &s : entry.second)
+            song_info_free(&s);
+    g_ns_cache.clear();
 }
 
 /* ── Search event → StateStore bridge ─────────────── */
@@ -830,6 +858,7 @@ int run_app(int argc, char **argv) {
     event_bus_publish(EV_APP_SHUTDOWN, NULL, 0);
     playback_coordinator_shutdown();
     music_source_manager_shutdown();
+    free_ns_cache();
     event_bus_shutdown();
     config_free(cfg);
     log_shutdown();
