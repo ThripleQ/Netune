@@ -55,12 +55,11 @@ static void on_signal(int sig) { (void)sig; g_running = false; }
 static std::string g_login_unikey;
 static int         g_login_poll_tick = 0;
 
-/* Generate QR code text via qrencode tool */
-static std::string gen_qr(const char *unikey) {
-    char cmd[512];
+/* Generate QR code text from a full URL */
+static std::string gen_qr(const char *url) {
+    char cmd[1024];
     snprintf(cmd, sizeof(cmd),
-        "qrencode -t UTF8 'https://music.163.com/login?codekey=%s' 2>/dev/null",
-        unikey);
+        "qrencode -t UTF8 '%s' 2>/dev/null", url);
     FILE *fp = popen(cmd, "r");
     if (!fp) return "";
     char buf[8192] = {0};
@@ -70,16 +69,26 @@ static std::string gen_qr(const char *unikey) {
     return std::string(buf);
 }
 
-/* Start the QR login flow */
+/* Start the QR login flow:
+   1) get unikey from /login/qr/key
+   2) get full QR URL (with chainId) from /login/qr/create
+   3) generate ASCII QR code from the full URL */
 static void start_login(void) {
     StateStore::instance().set_login_state(1, "Contacting server...", "");
     char unikey[128] = {0};
     char qr_url[512] = {0};
     if (netease_qr_get_key(unikey, sizeof(unikey), qr_url, sizeof(qr_url)) == 0
         && unikey[0]) {
+        /* Get full QR URL with chainId */
+        char full_url[512] = {0};
+        if (netease_qr_create(unikey, full_url, sizeof(full_url)) != 0) {
+            /* Fallback: construct URL manually (without chainId) */
+            snprintf(full_url, sizeof(full_url),
+                     "https://music.163.com/login?codekey=%s", unikey);
+        }
         g_login_unikey = unikey;
         g_login_poll_tick = 0;
-        std::string qr = gen_qr(unikey);
+        std::string qr = gen_qr(full_url);
         StateStore::instance().set_login_state(2,
             "Scan with Netease Music App", qr);
     } else {
@@ -270,10 +279,10 @@ static void ev_playlist_changed(const BusEvent *ev, void *data) {
 
 int run_app(int argc, char **argv) {
     log_init(NULL);
-    LOG_INFO("LMusic v2.0.0 starting");
+    LOG_INFO("Netune v2.0.0 starting");
 
     if (argc > 1 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
-        printf("LMusic v2.0.0 — Terminal music player\nUsage: %s [config.json]\n", argv[0]);
+        printf("Netune v2.0.0 — Terminal music player\nUsage: %s [config.json]\n", argv[0]);
         return 0;
     }
 
@@ -291,7 +300,7 @@ int run_app(int argc, char **argv) {
         if (home) {
             snprintf(cache_dir, sizeof(cache_dir), "%s/.cache/lmusic", home);
         } else {
-            snprintf(cache_dir, sizeof(cache_dir), "/tmp/lmusic-cache");
+            snprintf(cache_dir, sizeof(cache_dir), "/tmp/netune-cache");
         }
         cache_init(cache_dir);
     }
@@ -442,13 +451,18 @@ int run_app(int argc, char **argv) {
             int rc = netease_qr_poll(g_login_unikey.c_str());
             LOG_INFO("LOGIN POLL: rc=%d", rc);
             if (rc == 0) {
+                /* 803: authorized, login successful */
                 StateStore::instance().set_login_state(3,
                     netease_account_name() ? netease_account_name() : "Logged in", "");
                 update_login_menu();
             } else if (rc == 2) {
-                /* expired — restart */
+                /* 800: expired — restart */
                 g_login_unikey.clear();
                 start_login();
+            } else if (rc == 3) {
+                /* 802: scanned, waiting for phone confirm */
+                StateStore::instance().set_login_state(2,
+                    "Scanned. Confirm in Netease Music App...", s.login_qr);
             }
         }
 
@@ -702,7 +716,9 @@ int run_app(int argc, char **argv) {
                         const std::string &pl_id = cur.netease_menu[idx].id;
 
                         if (type == -1) {
-                            /* Back to main netease menu */
+                            /* Back to main netease menu: clear first so
+                               set_music_mode reinitializes the default menu */
+                            StateStore::instance().set_netease_menu({});
                             StateStore::instance().set_music_mode(MusicMode::Local);
                             StateStore::instance().set_music_mode(MusicMode::Netease);
                         } else if (type == 200) {
@@ -714,7 +730,13 @@ int run_app(int argc, char **argv) {
                         } else if (!pl_id.empty()) {
                             long playlist_id = atol(pl_id.c_str());
                             SearchResult sr;
-                            if (netease_get_playlist_songs(playlist_id, &sr) == 0 && sr.count > 0) {
+                            int ret = netease_get_playlist_songs(playlist_id, &sr);
+                            /* Fallback: liked songs playlist uses /likelist, not /playlist/detail */
+                            if (ret != 0 || sr.count == 0) {
+                                long uid = netease_get_user_id();
+                                ret = netease_get_liked_songs(uid, &sr);
+                            }
+                            if (ret == 0 && sr.count > 0) {
                                 std::vector<SongInfo> vec;
                                 vec.reserve(sr.count);
                                 for (int i = 0; i < sr.count; i++) {

@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "_comment": "LMusic v2.0 全局配置 — 所有设置集中于此",
+  "_comment": "Netune v2.0 全局配置 — 所有设置集中于此",
 
   "audio": {
     "backend": "auto",
@@ -48,7 +48,7 @@
     "proxy": "",
     "timeout_sec": 10,
     "max_retries": 2,
-    "user_agent": "LMusic/2.0"
+    "user_agent": "Netune/2.0"
   },
 
   "plugins": {

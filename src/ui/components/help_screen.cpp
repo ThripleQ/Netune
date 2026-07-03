@@ -17,7 +17,7 @@ Element render_help_screen(const AppState &s) {
     };
 
     Elements col;
-    col.push_back(text(" LMusic v2.0.0 — Help ") | bold | center | underlined);
+    col.push_back(text(" Netune v2.0.0 — Help ") | bold | center | underlined);
     col.push_back(separator());
     col.push_back(entry("Tab",     "Switch panel (groups / songs)"));
     col.push_back(entry("j / Down","Move down"));

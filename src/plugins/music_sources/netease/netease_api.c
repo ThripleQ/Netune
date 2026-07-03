@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/prctl.h>
+#include <time.h>
 #include <curl/curl.h>
 #include <yyjson.h>
 
@@ -19,9 +20,10 @@ static char g_cookie_path[512] = {0};
 /* Path to the Node.js API server */
 #define SERVER_DIR  "/home/liu/Projects/netease-api-local/node_modules/NeteaseCloudMusicApi"
 #define SERVER_PORT "10000"
-static char g_cookie[4096] = {0};
+static char g_cookie[16384] = {0};
 static char g_account_name[128] = {0};
 static CURL *g_curl = NULL;
+static bool g_capture_cookies = false;  /* only capture during login flow */
 
 /* ── CURL write callback ────────────────────────────── */
 typedef struct { char *data; size_t len; size_t cap; } WriteBuf;
@@ -55,9 +57,15 @@ static int api_get(const char *path, WriteBuf *out) {
     curl_easy_setopt(g_curl, CURLOPT_WRITEFUNCTION, write_cb);
     curl_easy_setopt(g_curl, CURLOPT_WRITEDATA, out);
     curl_easy_setopt(g_curl, CURLOPT_HTTPGET, 1L);
-    /* Rely on curl's built-in cookie engine (enabled via COOKIEFILE in init).
-       Do NOT set CURLOPT_COOKIE here - it overrides the engine and breaks
-       login flow (803→802 handshake requires fresh cookies). */
+    /* Send stored cookies from g_cookie. After QR login (code 803), api_get()
+       captures the MUSIC_U cookie from the response and updates g_cookie,
+       so subsequent requests automatically carry it.
+       This is safe now because 803 is correctly mapped to success (not 802),
+       so the login flow stops before any cookie conflict can occur. */
+    if (g_cookie[0])
+        curl_easy_setopt(g_curl, CURLOPT_COOKIE, g_cookie);
+    else
+        curl_easy_setopt(g_curl, CURLOPT_COOKIE, NULL);
 
     /* Suppress curl output */
     curl_easy_setopt(g_curl, CURLOPT_VERBOSE, 0L);
@@ -68,42 +76,46 @@ static int api_get(const char *path, WriteBuf *out) {
         return -1;
     }
 
-    /* Save cookies from response (CURLINFO_COOKIELIST returns Netscape format:
-       domain TRUE / FALSE expiry name value. Extract name=value only.) */
-    struct curl_slist *cookies = NULL;
-    curl_easy_getinfo(g_curl, CURLINFO_COOKIELIST, &cookies);
-    if (cookies) {
-        char buf[4096] = {0};
-        struct curl_slist *nc = cookies;
-        while (nc) {
-            if (nc->data && nc->data[0] != '#') {
-                /* Netscape format: tab-separated. Fields are index 6 and 7. */
-                int tab_count = 0;
-                const char *name_start = NULL, *value_start = NULL;
-                for (const char *p = nc->data; *p; p++) {
-                    if (*p == '\t') {
-                        tab_count++;
-                        if (tab_count == 5) name_start = p + 1;
-                        if (tab_count == 6 && value_start == NULL) value_start = p + 1;
+    /* Only capture cookies during login flow (g_capture_cookies==true).
+       During normal API calls, CURLOPT_COOKIE handles sending g_cookie
+       without needing to update it. Reading CURLINFO_COOKIELIST would
+       return only engine-jar cookies (like NMTID), overwriting saved
+       cookies like MUSIC_R_U. */
+    if (g_capture_cookies) {
+        struct curl_slist *cookies = NULL;
+        curl_easy_getinfo(g_curl, CURLINFO_COOKIELIST, &cookies);
+        if (cookies) {
+            char buf[16384] = {0};
+            struct curl_slist *nc = cookies;
+            while (nc) {
+                if (nc->data && nc->data[0] != '#') {
+                    int tab_count = 0;
+                    const char *name_start = NULL, *value_start = NULL;
+                    for (const char *p = nc->data; *p; p++) {
+                        if (*p == '\t') {
+                            tab_count++;
+                            if (tab_count == 5) name_start = p + 1;
+                            if (tab_count == 6 && value_start == NULL) value_start = p + 1;
+                        }
+                    }
+                    if (name_start && value_start) {
+                        if (buf[0]) { size_t bl = strlen(buf); strncat(buf, "; ", sizeof(buf) - bl - 1); }
+                        size_t nlen = (size_t)(value_start - name_start - 1);
+                        strncat(buf, name_start, nlen);
+                        { size_t bl = strlen(buf); strncat(buf, "=", sizeof(buf) - bl - 1); }
+                        { size_t bl = strlen(buf); strncat(buf, value_start, sizeof(buf) - bl - 1); }
+                        size_t blen = strlen(buf);
+                        if (blen > 0 && buf[blen-1] == '\t') buf[blen-1] = '\0';
                     }
                 }
-                if (name_start && value_start) {
-                    if (buf[0]) strncat(buf, "; ", sizeof(buf) - strlen(buf) - 1);
-                    /* name */
-                    size_t nlen = (size_t)(value_start - name_start - 1);
-                    strncat(buf, name_start, nlen);
-                    strncat(buf, "=", sizeof(buf) - strlen(buf) - 1);
-                    /* value (rest of string) */
-                    strncat(buf, value_start, sizeof(buf) - strlen(buf) - 1);
-                    /* trim trailing tab from value if present */
-                    size_t blen = strlen(buf);
-                    if (blen > 0 && buf[blen-1] == '\t') buf[blen-1] = '\0';
-                }
+                nc = nc->next;
             }
-            nc = nc->next;
+            curl_slist_free_all(cookies);
+            if (buf[0]) {
+                LOG_INFO("Cookie capture: %.100s", buf);
+                snprintf(g_cookie, sizeof(g_cookie), "%s", buf);
+            }
         }
-        curl_slist_free_all(cookies);
-        if (buf[0]) snprintf(g_cookie, sizeof(g_cookie), "%s", buf);
     }
 
     return 0;
@@ -150,8 +162,8 @@ static void cookie_load(void) {
     cookie_set_path();
     FILE *fp = fopen(g_cookie_path, "r");
     if (!fp) return;
-    char buf[4096];
-    /* cookie line */
+    char buf[16384];
+    /* cookie line (may be very long — MUSIC_U is 770 chars alone) */
     if (fgets(buf, sizeof(buf), fp)) {
         size_t n = strlen(buf);
         if (n > 0 && buf[n-1] == '\n') buf[n-1] = '\0';
@@ -189,8 +201,44 @@ static int server_alive(void) {
 }
 
 /* Start the Node.js API server as a child process */
+/* Generate/persist device ID to avoid creating new anonymous devices on each login */
+static void ensure_device_id(void) {
+    const char *home = getenv("HOME");
+    if (!home) return;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/.cache/lmusic/device_id.txt", home);
+    FILE *fp = fopen(path, "r");
+    if (fp) {
+        char id[64] = {0};
+        if (fgets(id, sizeof(id), fp)) {
+            size_t n = strlen(id);
+            if (n > 0 && id[n-1] == '\n') id[n-1] = '\0';
+            setenv("DEVICE_ID", id, 1);
+        }
+        fclose(fp);
+        return;
+    }
+    /* Generate a 40-char hex device ID */
+    srand((unsigned)(time(NULL) ^ (long)getpid()));
+    char id[64];
+    for (int i = 0; i < 40; i++) {
+        int r = rand() % 16;
+        id[i] = r < 10 ? '0' + r : 'A' + r - 10;
+    }
+    id[40] = '\0';
+    setenv("DEVICE_ID", id, 1);
+    fp = fopen(path, "w");
+    if (fp) {
+        fprintf(fp, "%s\n", id);
+        fclose(fp);
+    }
+    LOG_INFO("Generated persistent device ID for API server");
+}
+
 static int start_server(void) {
     if (g_server_pid > 0) return 0; /* already started */
+
+    ensure_device_id();
 
     pid_t pid = fork();
     if (pid < 0) {
@@ -204,6 +252,7 @@ static int start_server(void) {
         freopen("/tmp/netease-api.log", "a", stdout);
         freopen("/tmp/netease-api.log", "a", stderr);
         setenv("PORT", SERVER_PORT, 1);
+        setenv("DEVICE_ID", getenv("DEVICE_ID"), 1);
         chdir(SERVER_DIR);
         execl("/usr/bin/node", "node", "app.js", NULL);
         _exit(1); /* only reached if exec fails */
@@ -364,6 +413,83 @@ int netease_get_playlist_songs(long playlist_id, SearchResult *out) {
     return 0;
 }
 
+/* ── Liked songs (红心歌单) ────────────────────────── */
+int netease_get_liked_songs(long uid, SearchResult *out) {
+    if (!out || uid <= 0) return -1;
+    memset(out, 0, sizeof(*out));
+
+    char path[256];
+    snprintf(path, sizeof(path), "/likelist?uid=%ld", uid);
+    WriteBuf buf = {0};
+    if (api_get(path, &buf) != 0) return -1;
+
+    yyjson_doc *doc = yyjson_read(buf.data, buf.len, 0);
+    free(buf.data);
+    if (!doc) return -1;
+
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *ids = yyjson_obj_get(root, "ids");
+    if (!ids || !yyjson_is_arr(ids) || yyjson_arr_size(ids) == 0) {
+        yyjson_doc_free(doc);
+        return 0;
+    }
+
+    /* Build comma-separated ID list */
+    char id_list[4096] = {0};
+    size_t idx, max;
+    yyjson_val *idv;
+    yyjson_arr_foreach(ids, idx, max, idv) {
+        long long id_val = yyjson_get_int(idv);
+        char tmp[32];
+        snprintf(tmp, sizeof(tmp), "%s%lld", id_list[0] ? "," : "", id_val);
+        strncat(id_list, tmp, sizeof(id_list) - strlen(id_list) - 1);
+        if (strlen(id_list) > 4000) break;
+    }
+    yyjson_doc_free(doc);
+    if (!id_list[0]) return 0;
+
+    /* Batch query from /playlist/detail with built ID list doesn't work;
+       fall back to /song/detail with comma-separated IDs */
+    snprintf(path, sizeof(path), "/song/detail?ids=%s", id_list);
+    WriteBuf buf2 = {0};
+    if (api_get(path, &buf2) != 0) return -1;
+
+    yyjson_doc *doc2 = yyjson_read(buf2.data, buf2.len, 0);
+    free(buf2.data);
+    if (!doc2) return -1;
+
+    yyjson_val *songs = yyjson_obj_get(yyjson_doc_get_root(doc2), "songs");
+    if (songs && yyjson_is_arr(songs)) {
+        size_t n = yyjson_arr_size(songs);
+        out->songs = (SongInfo*)calloc(n, sizeof(SongInfo));
+        out->count = 0;
+        size_t i, m;
+        yyjson_val *s;
+        yyjson_arr_foreach(songs, i, m, s) {
+            SongInfo *si = &out->songs[out->count++];
+            yyjson_val *v = yyjson_obj_get(s, "id");
+            if (v) {
+                char id_buf[32];
+                snprintf(id_buf, sizeof(id_buf), "%lld", (long long)yyjson_get_int(v));
+                si->id = strdup(id_buf);
+            }
+            si->source = strdup("netease");
+            v = yyjson_obj_get(s, "name");
+            si->title = v ? strdup(yyjson_get_str(v)) : strdup("");
+            yyjson_val *ar = yyjson_obj_get(s, "ar");
+            if (ar && yyjson_arr_size(ar) > 0) {
+                v = yyjson_obj_get(yyjson_arr_get(ar, 0), "name");
+                si->artist = v ? strdup(yyjson_get_str(v)) : strdup("");
+            } else si->artist = strdup("");
+            v = yyjson_obj_get(s, "dt");
+            si->duration_sec = v ? (int)(yyjson_get_int(v) / 1000) : 0;
+        }
+        out->total = out->count;
+    }
+    yyjson_doc_free(doc2);
+    return out->count > 0 ? 0 : -1;
+}
+
 /* ── Init / Shutdown ────────────────────────────────── */
 int netease_api_init(void) {
     if (g_curl) return 0;
@@ -381,19 +507,16 @@ int netease_api_init(void) {
         }
     }
 
-    /* Restore persisted cookie (one-time setup for the first request) */
+    /* Restore persisted cookie, then refresh to get uid/nickname */
     cookie_load();
-    if (g_cookie[0] && g_curl) {
-        /* Make a dummy HEAD request with the cookie to populate the engine */
-        curl_easy_setopt(g_curl, CURLOPT_URL, "http://localhost:10000/");
-        curl_easy_setopt(g_curl, CURLOPT_COOKIE, g_cookie);
-        curl_easy_setopt(g_curl, CURLOPT_NOBODY, 1L);
-        curl_easy_perform(g_curl);
-        curl_easy_setopt(g_curl, CURLOPT_NOBODY, 0L);
+    if (g_cookie[0]) {
+        LOG_INFO("Saved cookie loaded, refreshing login status...");
+        netease_refresh_login();
+        if (g_user_uid > 0) {
+            LOG_INFO("Cookie persisted from previous session: %s (uid=%ld)",
+                     g_account_name, g_user_uid);
+        }
     }
-    /* From now on, the curl engine manages cookies automatically.
-       api_get() must NOT set CURLOPT_COOKIE, otherwise it overrides
-       the engine's cookies and breaks the login 803→802 handshake. */
 
     LOG_INFO("Netease API client ready");
     return 0;
@@ -511,11 +634,25 @@ void netease_search_result_free(NeteaseSearchResult *r) {
     r->count = 0;
 }
 
+/* ── Helper: current timestamp in milliseconds ─────── */
+
+/* Inject saved cookies into curl engine with domain=localhost,
+   so they're sent on all subsequent API calls regardless of original domain. */
+static long long now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return (long long)ts.tv_sec * 1000 + (long long)ts.tv_nsec / 1000000;
+}
+
 /* ── QR Login ────────────────────────────────────────── */
+/* Step 1: Get unikey from Netease */
 int netease_qr_get_key(char *out_unikey, size_t unikey_size,
                         char *qr_url, size_t url_size) {
+    char path[256];
+    snprintf(path, sizeof(path), "/login/qr/key?timestamp=%lld", now_ms());
+
     WriteBuf buf = {0};
-    if (api_get("/login/qr/key?timestamp=1", &buf) != 0) return -1;
+    if (api_get(path, &buf) != 0) return -1;
 
     yyjson_doc *doc = parse_ok(&buf);
     free(buf.data);
@@ -537,13 +674,49 @@ int netease_qr_get_key(char *out_unikey, size_t unikey_size,
     return 0;
 }
 
-int netease_qr_poll(const char *unikey) {
+/* Step 1.5: Get full QR URL via /login/qr/create (adds chainId for web platform).
+ * Returns the complete QR login URL. out_url must be >= 512 bytes. */
+int netease_qr_create(const char *unikey, char *out_url, size_t url_size) {
     char path[512];
-    snprintf(path, sizeof(path), "/login/qr/check?key=%s&timestamp=1",
-             unikey ? unikey : "");
+    snprintf(path, sizeof(path), "/login/qr/create?key=%s&platform=web&timestamp=%lld",
+             unikey ? unikey : "", now_ms());
 
     WriteBuf buf = {0};
     if (api_get(path, &buf) != 0) return -1;
+
+    yyjson_doc *doc = yyjson_read(buf.data, buf.len, 0);
+    free(buf.data);
+    if (!doc) return -1;
+
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *data = yyjson_obj_get(root, "data");
+    yyjson_val *v = NULL;
+    if (data) v = yyjson_obj_get(data, "qrurl");
+    if (v && yyjson_get_str(v)) {
+        snprintf(out_url, url_size, "%s", yyjson_get_str(v));
+        yyjson_doc_free(doc);
+        return 0;
+    }
+
+    yyjson_doc_free(doc);
+    return -1;
+}
+
+/* Step 2: Poll login status.
+ * Returns: 0 = logged in (803), 1 = waiting for scan (801),
+ *          2 = expired (800), 3 = scanned, confirm on phone (802),
+ *          <0 = error.
+ * On success (0) reads cookies and saves them automatically. */
+int netease_qr_poll(const char *unikey) {
+    char path[512];
+    snprintf(path, sizeof(path), "/login/qr/check?key=%s&timestamp=%lld",
+             unikey ? unikey : "", now_ms());
+
+    WriteBuf buf = {0};
+    g_capture_cookies = true;
+    int rc = api_get(path, &buf);
+    g_capture_cookies = false;
+    if (rc != 0) return -1;
 
     yyjson_doc *doc = yyjson_read(buf.data, buf.len, 0);
     free(buf.data);
@@ -556,31 +729,66 @@ int netease_qr_poll(const char *unikey) {
         int c = (int)yyjson_get_int(code);
         switch (c) {
         case 800: ret = 2; break;   /* expired */
-        case 802: ret = 0; break;   /* confirmed (logged in) */
         case 801: ret = 1; break;   /* waiting for scan */
+        case 802: ret = 3; break;   /* scanned, waiting for phone confirm */
+        case 803: ret = 0; break;   /* authorized, login successful */
         default:  ret = 1; break;
         }
     } else {
         ret = -1;
     }
 
-    /* On success, extract account info */
+    /* On success (803): fetch profile first, then save cookie with uid/nickname. */
     if (ret == 0) {
-        yyjson_val *profile = yyjson_obj_get(root, "profile");
-        if (profile) {
-            yyjson_val *uid_v = yyjson_obj_get(profile, "userId");
-            if (uid_v) g_user_uid = (long)yyjson_get_int(uid_v);
-            yyjson_val *nick = yyjson_obj_get(profile, "nickname");
-            if (nick) snprintf(g_account_name, sizeof(g_account_name), "%s", yyjson_get_str(nick));
-        }
-        if (g_account_name[0])
-            LOG_INFO("Netease login: %s (uid=%ld)", g_account_name, g_user_uid);
+        LOG_INFO("QR login success (803)");
+        netease_refresh_login();
+        LOG_INFO("After refresh: uid=%ld name=%s", g_user_uid, g_account_name);
         cookie_save();
-        /* Update netease menu account name */
+        LOG_INFO("Cookie saved to %s (uid=%ld)", g_cookie_path, g_user_uid);
     }
 
     yyjson_doc_free(doc);
     return ret;
+}
+
+/* ── Refresh login status ──────────────────────────── */
+/* After receiving the MUSIC_U cookie (from QR login), call /login/status
+   to populate g_user_uid and g_account_name. */
+void netease_refresh_login(void) {
+    char path[256];
+    snprintf(path, sizeof(path), "/login/status?timestamp=%lld", now_ms());
+
+    LOG_INFO("Refreshing login (g_cookie=%.100s)", g_cookie);
+
+    WriteBuf buf = {0};
+    if (api_get(path, &buf) != 0) {
+        LOG_WARN("Refresh login api_get failed");
+        return;
+    }
+
+    yyjson_doc *doc = yyjson_read(buf.data, buf.len, 0);
+    free(buf.data);
+    if (!doc) return;
+
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *data = yyjson_obj_get(root, "data");
+    if (!data) { yyjson_doc_free(doc); return; }
+
+    yyjson_val *profile = yyjson_obj_get(data, "profile");
+    if (profile) {
+        yyjson_val *uid_v = yyjson_obj_get(profile, "userId");
+        if (uid_v) g_user_uid = (long)yyjson_get_int(uid_v);
+
+        yyjson_val *nick = yyjson_obj_get(profile, "nickname");
+        if (nick) snprintf(g_account_name, sizeof(g_account_name), "%s", yyjson_get_str(nick));
+    }
+
+    if (g_account_name[0])
+        LOG_INFO("Netease login refreshed: %s (uid=%ld)", g_account_name, g_user_uid);
+    else
+        LOG_WARN("Netease /login/status returned no profile (cookie may be invalid)");
+
+    yyjson_doc_free(doc);
 }
 
 bool netease_is_logged_in(void) {

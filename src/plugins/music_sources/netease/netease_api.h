@@ -46,9 +46,15 @@ void netease_search_result_free(NeteaseSearchResult *r);
  * out_unikey must be at least 64 bytes. */
 int netease_qr_get_key(char *out_unikey, size_t unikey_size, char *qr_url, size_t url_size);
 
+/* Step 1.5: Get full QR URL via /login/qr/create (adds chainId for web platform).
+ * out_url must be >= 512 bytes. Returns 0 on success. */
+int netease_qr_create(const char *unikey, char *out_url, size_t url_size);
+
 /* Step 2: Poll login status.
- * Returns 0 = logged in, 1 = waiting, 2 = expired, <0 = error.
- * On success reads and stores cookies internally. */
+ * Returns 0 = logged in (803), 1 = waiting for scan (801),
+ *        2 = expired (800), 3 = scanned, confirm on phone (802),
+ *        <0 = error.
+ * On success (0) reads cookies and stores them automatically. */
 int netease_qr_poll(const char *unikey);
 
 /* Check if currently logged in */
@@ -59,6 +65,10 @@ const char* netease_account_name(void);
 
 /* Get user ID after login (0 if not logged in) */
 long netease_get_user_id(void);
+
+/* Refresh login status: call /login/status to populate uid and account name.
+   Should be called after QR login succeeds (code 803) to get the profile. */
+void netease_refresh_login(void);
 
 /* ── User playlists ──────────────────────────────────── */
 typedef struct {
@@ -80,6 +90,9 @@ void netease_playlist_result_free(NeteasePlaylistResult *r);
 
 /* Get songs in a playlist */
 int netease_get_playlist_songs(long playlist_id, SearchResult *out);
+
+/* Get liked songs (红心歌单). Uses /likelist endpoint. */
+int netease_get_liked_songs(long uid, SearchResult *out);
 
 /* ── Song detail / play URL ─────────────────────────── */
 /* Get song detail by id. out fields are allocated strings. */

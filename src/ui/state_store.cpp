@@ -2,6 +2,10 @@
 #include <algorithm>
 #include <cstring>
 
+extern "C" {
+#include "plugins/music_sources/netease/netease_api.h"
+}
+
 /* helper: copy SongInfo (C struct → C++ member) */
 static void copy_song_info(SongInfo &dst, const SongInfo &src) {
     /* free old */
@@ -89,6 +93,14 @@ void StateStore::set_music_mode(MusicMode mode) {
             {"\u6536\u85CF\u6B4C\u5355",   3, ""},          /* 收藏歌单 */
             {"\u641C\u7D22\u7F51\u6613\u4E91", 100, ""},  /* 搜索网易云 */
         };
+        /* If already logged in from a previous session, show account name */
+        if (netease_is_logged_in()) {
+            const char *name = netease_account_name();
+            if (name && name[0])
+                state_.netease_menu[0].name = name;
+            else
+                state_.netease_menu[0].name = "\u5df2\u767b\u5f55";
+        }
     }
     state_.netease_selected = 0;
 }

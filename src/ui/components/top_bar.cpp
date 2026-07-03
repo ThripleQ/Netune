@@ -10,7 +10,7 @@ Element render_top_bar(const AppState &s) {
             title += std::string(" — ") + s.current_song.artist;
         }
     } else {
-        title = "LMusic v2.0.0";
+        title = "Netune v2.0.0";
     }
     return theme_bg(theme_fg(text(" " + title) | bold) | center);
 }

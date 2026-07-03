@@ -66,10 +66,16 @@ Element render_login_screen(const AppState &s) {
 
     /* Bottom status */
     col.push_back(separator());
-    if (s.login_state == 2)
-        col.push_back(theme_fg(text(" Waiting for scan... [Esc] cancel ")) | dim | center);
-    else
+    if (s.login_state == 2) {
+        /* Show status text if set; otherwise default messages */
+        const char *bottom = " Waiting for scan... [Esc] cancel ";
+        if (s.login_status.find("Scanned") != std::string::npos ||
+            s.login_status.find("Confirm") != std::string::npos)
+            bottom = " Scanned! Confirm in app... [Esc] cancel ";
+        col.push_back(theme_fg(text(bottom)) | dim | center);
+    } else {
         col.push_back(theme_fg(text(" [Esc] back ")) | dim | center);
+    }
 
     auto page = vbox(std::move(col));
     /* yframe + flex: fills available height, adds scrollbar if needed */
