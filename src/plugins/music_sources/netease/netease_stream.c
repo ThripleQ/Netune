@@ -13,17 +13,23 @@ static char  g_fifo[1024] = "";
 
 FILE *netease_stream_open(const char *song_id,
                           char *fifo_path_out, size_t path_size) {
+    fprintf(stderr, "STREAM_OPEN: id=%s\n", song_id ? song_id : "null");
     if (!song_id || !song_id[0]) return NULL;
 
     /* 1. Resolve play URL */
     char url[2048] = {0};
-    if (netease_get_play_url(song_id, 0, url, sizeof(url)) != 0 || !url[0])
+    if (netease_get_play_url(song_id, 0, url, sizeof(url)) != 0 || !url[0]) {
+        fprintf(stderr, "STREAM_OPEN: no play URL\n");
         return NULL;
+    }
 
     /* 2. Create FIFO */
     snprintf(g_fifo, sizeof(g_fifo), "/tmp/netune_%s.mp3", song_id);
     unlink(g_fifo);
-    if (mkfifo(g_fifo, 0600) != 0) return NULL;
+    if (mkfifo(g_fifo, 0600) != 0) {
+        fprintf(stderr, "STREAM_OPEN: mkfifo failed for %s\n", g_fifo);
+        return NULL;
+    }
 
     /* 3. Fork curl */
     pid_t child = fork();
@@ -39,10 +45,13 @@ FILE *netease_stream_open(const char *song_id,
     if (fifo_path_out && path_size > 0)
         snprintf(fifo_path_out, path_size, "%s", g_fifo);
 
-    return fopen(g_fifo, "rb");
+    FILE *f = fopen(g_fifo, "rb");
+    fprintf(stderr, "STREAM_OPEN: fifo=%s fp=%p child=%d\n", g_fifo, (void*)f, child);
+    return f;
 }
 
 void netease_stream_close(FILE *f) {
+    fprintf(stderr, "STREAM_CLOSE: fp=%p child=%d fifo=%s\n", (void*)f, g_child, g_fifo);
     if (g_child > 0) {
         kill(g_child, SIGKILL);
         waitpid(g_child, NULL, 0);
