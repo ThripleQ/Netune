@@ -212,6 +212,9 @@ static void* playback_thread(void *arg) {
                 char resolved_path[2048];
                 const char *play_path = cmd.path;
                 int is_local = (cmd.path[0] == '/' || cmd.path[0] == '~' || strchr(cmd.path, '.'));
+                /* Stream netease via FIFO + curl.
+                   MP3 decoder now supports pipes (custom I/O callbacks
+                   in dr_mp3 that handle non-seekable streams). */
                 if (!is_local) {
                     char url[2048] = {0};
                     MusicSource *src = music_source_get("netease");
@@ -219,21 +222,20 @@ static void* playback_thread(void *arg) {
                         src->get_play_url(cmd.path, 0, url, sizeof(url)) == 0 && url[0]) {
                         snprintf(resolved_path, sizeof(resolved_path),
                                  "/tmp/netune_%s.mp3", cmd.path);
+                        mkfifo(resolved_path, 0600);
                         pid_t child = fork();
                         if (child == 0) {
-                            cleanup_dl();
                             execl("/usr/bin/curl", "curl", "-sL", url,
-                                  "--max-time", "60", "-o", resolved_path, NULL);
+                                  "-o", resolved_path, NULL);
                             _exit(1);
                         }
                         if (child > 0) {
                             g_dl_child = child;
                             snprintf(g_dl_path, sizeof(g_dl_path), "%s", resolved_path);
-                            waitpid(child, NULL, 0);
-                            g_dl_child = 0;
                             play_path = resolved_path;
-                            LOG_INFO("Downloaded netease: %s", cmd.path);
+                            LOG_INFO("Streaming netease: %s", cmd.path);
                         } else {
+                            unlink(resolved_path);
                             LOG_ERROR("fork failed for netease stream %s", cmd.path);
                         }
                     } else {
