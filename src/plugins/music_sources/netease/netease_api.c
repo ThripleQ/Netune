@@ -24,6 +24,7 @@ static char *jstr(const char *j, const char *k) {
     char s[128]; snprintf(s,sizeof(s),"\"%s\"",k);
     const char *p = strstr(j,s); if(!p)return NULL; p+=strlen(s);
     while(*p==':'||*p==' '||*p=='\t'||*p=='\n')p++;
+    /* string value */
     if(*p=='"'){p++;size_t cap=512,w=0;char*o=malloc(cap);if(!o)return NULL;
         while(*p&&*p!='"'&&w<cap-1){
             if(*p=='\\'&&*(p+1)=='u'&&isxdigit((unsigned char)*(p+2))&&isxdigit((unsigned char)*(p+3))&&isxdigit((unsigned char)*(p+4))&&isxdigit((unsigned char)*(p+5))){
@@ -31,7 +32,12 @@ static char *jstr(const char *j, const char *k) {
                 if(cp<0x80)o[w++]=(char)cp;else if(cp<0x800){o[w++]=(char)(0xC0|(cp>>6));o[w++]=(char)(0x80|(cp&0x3F));}else{o[w++]=(char)(0xE0|(cp>>12));o[w++]=(char)(0x80|((cp>>6)&0x3F));o[w++]=(char)(0x80|(cp&0x3F));}p+=6;
             }else o[w++]=*p++;
         }o[w]=0;return o;
-    }if(isdigit((unsigned char)*p)||*p=='-'){const char*e=p;while(isdigit((unsigned char)*e)||*e=='.')e++;char*o=malloc((size_t)(e-p)+1);if(o){memcpy(o,p,(size_t)(e-p));o[e-p]=0;}return o;}
+    }
+    /* number value — return as string */
+    if(isdigit((unsigned char)*p)||*p=='-'){
+        const char*e=p;while(isdigit((unsigned char)*e)||*e=='.')e++;
+        char*o=malloc((size_t)(e-p)+1);if(o){memcpy(o,p,(size_t)(e-p));o[e-p]=0;}return o;
+    }
     return NULL;
 }
 static long long jint(const char *j, const char *k) {
@@ -109,7 +115,8 @@ int netease_qr_poll(const char *uk) {
     long long c=jint(j,"code");free(j);
     if(c==803){char*n=run("%s account-name 2>/dev/null",CLI);if(n){size_t l=strlen(n);if(l>0&&n[l-1]=='\n')n[l-1]=0;if(strcmp(n,"error")!=0&&strcmp(n,"未登录")!=0)snprintf(g_name,sizeof(g_name),"%s",n);free(n);}return 0;}
     if(c==800)return 2;
-    if(c==802)return 3; return 1;
+    if(c==802)return 3;
+    return 1;
 }
 bool netease_is_logged_in(void) { return g_name[0]!=0; }
 
