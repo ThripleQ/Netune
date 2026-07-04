@@ -206,16 +206,16 @@ static void ev_playback_error(const BusEvent *ev, void *data) {
 }
 static void ev_playback_finish(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
+    const auto &st = StateStore::instance().state();
     int next = playlist_manager_advance();
-    if (next >= 0) {
-        const char *path = playlist_manager_get_path(next);
-        if (path) {
-            const auto &st = StateStore::instance().state();
+    /* Use UI playlist directly instead of playlist_manager_get_path,
+       which may contain stale data from a different source. */
+    if (next >= 0 && next < (int)st.playlist.size()) {
+        const char *path = st.playlist[next].id;
+        if (path && path[0]) {
             StateStore::instance().set_selected_index(next);
-            if (next < (int)st.playlist.size()) {
-                StateStore::instance().set_current_song(st.playlist[next]);
-                event_bus_publish(EV_TRACK_CHANGED, &next, sizeof(next));
-            }
+            StateStore::instance().set_current_song(st.playlist[next]);
+            event_bus_publish(EV_TRACK_CHANGED, &next, sizeof(next));
             event_bus_publish(EV_PLAYBACK_START, (void*)path, strlen(path) + 1);
             return;
         }
@@ -730,11 +730,6 @@ int run_app(int argc, char **argv) {
                                 free(sr.songs);
                                 StateStore::instance().set_playlist(vec, 0);
                                 StateStore::instance().set_active_panel(1);
-                                /* Sync playlist manager for next-track support */
-                                {   std::vector<const char*> paths;
-                                    for (auto &s : vec) paths.push_back(s.id);
-                                    playlist_manager_sync(paths.data(), (int)paths.size());
-                                    playlist_manager_set_index(0); }
                             }
                         } else if (type >= 0 && type <= 1) {
                             SearchResult sr;
@@ -750,10 +745,6 @@ int run_app(int argc, char **argv) {
                                 free(sr.songs);
                                 StateStore::instance().set_playlist(vec, 0);
                                 StateStore::instance().set_active_panel(1);
-                                {   std::vector<const char*> paths;
-                                    for (auto &s : vec) paths.push_back(s.id);
-                                    playlist_manager_sync(paths.data(), (int)paths.size());
-                                    playlist_manager_set_index(0); }
                             }
                         } else if (type == 2 || type == 3) {
                             if (!netease_is_logged_in()) {
@@ -785,11 +776,7 @@ int run_app(int argc, char **argv) {
             if (cur.playlist.empty()) return true;
             if (cur.active_panel == 1) {
                 int idx = cur.selected_index;
-                /* Sync playlist manager with current UI playlist (support auto-advance) */
-                {   std::vector<const char*> paths;
-                    for (auto &s : cur.playlist) paths.push_back(s.id);
-                    playlist_manager_sync(paths.data(), (int)paths.size());
-                    playlist_manager_set_index(idx); }
+                playlist_manager_set_index(idx);
                 const auto &sel = cur.playlist[idx];
                 const char *path = sel.id ? sel.id : "";
                 StateStore::instance().set_current_song(sel);
@@ -799,14 +786,12 @@ int run_app(int argc, char **argv) {
 
         case Action::NextTrack: {
             int next = playlist_manager_advance();
-            if (next >= 0) {
-                const char *path = playlist_manager_get_path(next);
-                if (path) {
+            if (next >= 0 && next < (int)cur.playlist.size()) {
+                const char *path = cur.playlist[next].id;
+                if (path && path[0]) {
                     StateStore::instance().set_selected_index(next);
-                    if (next < (int)cur.playlist.size()) {
-                        StateStore::instance().set_current_song(cur.playlist[next]);
-                        event_bus_publish(EV_TRACK_CHANGED, NULL, 0);
-                    }
+                    StateStore::instance().set_current_song(cur.playlist[next]);
+                    event_bus_publish(EV_TRACK_CHANGED, NULL, 0);
                     event_bus_publish(EV_PLAYBACK_START, (void*)path, strlen(path) + 1);
                 }
             }
@@ -815,9 +800,9 @@ int run_app(int argc, char **argv) {
 
         case Action::PrevTrack: {
             int prev = playlist_manager_retreat();
-            if (prev >= 0) {
-                const char *path = playlist_manager_get_path(prev);
-                if (path) {
+            if (prev >= 0 && prev < (int)cur.playlist.size()) {
+                const char *path = cur.playlist[prev].id;
+                if (path && path[0]) {
                     StateStore::instance().set_selected_index(prev);
                     if (prev < (int)cur.playlist.size()) {
                         StateStore::instance().set_current_song(cur.playlist[prev]);
