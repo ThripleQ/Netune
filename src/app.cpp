@@ -730,6 +730,11 @@ int run_app(int argc, char **argv) {
                                 free(sr.songs);
                                 StateStore::instance().set_playlist(vec, 0);
                                 StateStore::instance().set_active_panel(1);
+                                /* Sync playlist manager for next-track support */
+                                {   std::vector<const char*> paths;
+                                    for (auto &s : vec) paths.push_back(s.id);
+                                    playlist_manager_sync(paths.data(), (int)paths.size());
+                                    playlist_manager_set_index(0); }
                             }
                         } else if (type >= 0 && type <= 1) {
                             SearchResult sr;
@@ -745,6 +750,10 @@ int run_app(int argc, char **argv) {
                                 free(sr.songs);
                                 StateStore::instance().set_playlist(vec, 0);
                                 StateStore::instance().set_active_panel(1);
+                                {   std::vector<const char*> paths;
+                                    for (auto &s : vec) paths.push_back(s.id);
+                                    playlist_manager_sync(paths.data(), (int)paths.size());
+                                    playlist_manager_set_index(0); }
                             }
                         } else if (type == 2 || type == 3) {
                             if (!netease_is_logged_in()) {
