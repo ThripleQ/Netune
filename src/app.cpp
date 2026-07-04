@@ -207,10 +207,21 @@ static void ev_playback_error(const BusEvent *ev, void *data) {
 static void ev_playback_finish(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
     const auto &st = StateStore::instance().state();
-    int next = playlist_manager_advance();
-    /* Use UI playlist directly instead of playlist_manager_get_path,
-       which may contain stale data from a different source. */
-    if (next >= 0 && next < (int)st.playlist.size()) {
+    int total = (int)st.playlist.size();
+    if (total <= 0) {
+        StateStore::instance().set_playback_state(PlaybackState::Stopped);
+        return;
+    }
+    /* Calculate next index from UI playlist — not playlist_manager
+       which may contain stale data from a different song source. */
+    int idx = st.selected_index;
+    int next = -1;
+    switch (st.loop_mode) {
+    case LoopMode::Track:   next = idx; break;
+    case LoopMode::Playlist: next = (idx + 1 >= total) ? 0 : idx + 1; break;
+    default:                next = (idx + 1 >= total) ? -1 : idx + 1; break;
+    }
+    if (next >= 0 && next < total) {
         const char *path = st.playlist[next].id;
         if (path && path[0]) {
             StateStore::instance().set_selected_index(next);
@@ -718,7 +729,6 @@ int run_app(int argc, char **argv) {
                             SearchResult sr;
                             int ret = netease_get_playlist_songs(pl_id.c_str(), &sr);
                             if (ret == 0 && sr.count > 0) {
-                                fprintf(stderr, "\nDIAG: playlist loaded ret=%d count=%d\n", ret, sr.count);
                                 std::vector<SongInfo> vec;
                                 vec.reserve(sr.count);
                                 for (int i = 0; i < sr.count; i++) {
@@ -785,12 +795,21 @@ int run_app(int argc, char **argv) {
             return true;
 
         case Action::NextTrack: {
-            int next = playlist_manager_advance();
-            if (next >= 0 && next < (int)cur.playlist.size()) {
-                const char *path = cur.playlist[next].id;
+            const auto &st = cur; /* captured in Renderer closure */
+            int total = (int)st.playlist.size();
+            if (total <= 0) return true;
+            int idx = st.selected_index;
+            int next = -1;
+            switch (st.loop_mode) {
+            case LoopMode::Track:   next = idx; break;
+            case LoopMode::Playlist: next = (idx + 1 >= total) ? 0 : idx + 1; break;
+            default:                next = (idx + 1 >= total) ? -1 : idx + 1; break;
+            }
+            if (next >= 0) {
+                const char *path = st.playlist[next].id;
                 if (path && path[0]) {
                     StateStore::instance().set_selected_index(next);
-                    StateStore::instance().set_current_song(cur.playlist[next]);
+                    StateStore::instance().set_current_song(st.playlist[next]);
                     event_bus_publish(EV_TRACK_CHANGED, NULL, 0);
                     event_bus_publish(EV_PLAYBACK_START, (void*)path, strlen(path) + 1);
                 }
@@ -799,15 +818,22 @@ int run_app(int argc, char **argv) {
         }
 
         case Action::PrevTrack: {
-            int prev = playlist_manager_retreat();
-            if (prev >= 0 && prev < (int)cur.playlist.size()) {
-                const char *path = cur.playlist[prev].id;
+            const auto &st = cur;
+            int total = (int)st.playlist.size();
+            if (total <= 0) return true;
+            int idx = st.selected_index;
+            int prev = -1;
+            switch (st.loop_mode) {
+            case LoopMode::Track:   prev = idx; break;
+            case LoopMode::Playlist: prev = (idx - 1 < 0) ? total - 1 : idx - 1; break;
+            default:                prev = (idx - 1 < 0) ? -1 : idx - 1; break;
+            }
+            if (prev >= 0) {
+                const char *path = st.playlist[prev].id;
                 if (path && path[0]) {
                     StateStore::instance().set_selected_index(prev);
-                    if (prev < (int)cur.playlist.size()) {
-                        StateStore::instance().set_current_song(cur.playlist[prev]);
-                        event_bus_publish(EV_TRACK_CHANGED, NULL, 0);
-                    }
+                    StateStore::instance().set_current_song(st.playlist[prev]);
+                    event_bus_publish(EV_TRACK_CHANGED, NULL, 0);
                     event_bus_publish(EV_PLAYBACK_START, (void*)path, strlen(path) + 1);
                 }
             }
