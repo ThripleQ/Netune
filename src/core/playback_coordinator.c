@@ -215,7 +215,7 @@ static void* playback_thread(void *arg) {
                 const char *play_path = cmd.path;
                 int is_local = (cmd.path[0] == '/' || cmd.path[0] == '~' || strchr(cmd.path, '.'));
                 if (!is_local) {
-                    fprintf(stderr, "DIAG_PB: non-local path='%s', resolving...\n", cmd.path);
+                    fprintf(stderr, "DIAG_V2: non-local path='%s', popen starting...\n", cmd.path);
                     char url_buf[2048] = {0};
                     /* Fetch song URL via popen — bypasses music_source_get */
                     char cli_cmd[2048];
@@ -272,8 +272,10 @@ static void* playback_thread(void *arg) {
                 }
 
                 decoder = decoder_open(play_path);
+                fprintf(stderr, "DIAG_V2: decoder_open returned %p\n", (void*)decoder);
                 if (!decoder) {
                     cleanup_dl();
+                    fprintf(stderr, "DIAG_V2: ERROR - cannot open: %s\n", play_path);
                     LOG_ERROR("Cannot open: %s", cmd.path);
                     event_bus_publish(EV_PLAYBACK_ERROR, NULL, 0);
                     continue;
@@ -284,8 +286,10 @@ static void* playback_thread(void *arg) {
                 channels     = info.channels;
                 total_frames = info.total_frames;
                 current_frame = 0;
+                fprintf(stderr, "DIAG_V2: SR=%d CH=%d frames=%d\n", samplerate, channels, total_frames);
 
                 audio = audio_output_create(samplerate, channels);
+                fprintf(stderr, "DIAG_V2: audio_output_create returned %p\n", (void*)audio);
                 if (!audio) {
                     decoder_close(decoder);
                     decoder = NULL;
