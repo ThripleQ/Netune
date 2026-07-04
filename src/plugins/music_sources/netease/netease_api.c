@@ -355,44 +355,61 @@ int netease_get_playlist_songs(unsigned long playlist_id, SearchResult *out) {
     if (!out) return -1;
     memset(out, 0, sizeof(*out));
 
-    char path[256];
-    snprintf(path, sizeof(path), "/playlist/track/all?id=%lu&limit=100", playlist_id);
+    char path[512];
+    snprintf(path, sizeof(path), "/playlist/detail?id=%lu", playlist_id);
 
     WriteBuf buf = {0};
     if (api_get(path, &buf) != 0) return -1;
 
-        yyjson_doc *doc = yyjson_read(buf.data, buf.len, 0);
+    yyjson_doc *doc = yyjson_read(buf.data, buf.len, 0);
     free(buf.data);
     if (!doc) return -1;
 
     yyjson_val *root = yyjson_doc_get_root(doc);
-    yyjson_val *songs = yyjson_obj_get(root, "songs");
-    if (!songs || !yyjson_is_arr(songs)) { yyjson_doc_free(doc); return 0; }
+    yyjson_val *pl = yyjson_obj_get(root, "playlist");
+    yyjson_val *tracks = pl ? yyjson_obj_get(pl, "tracks") : NULL;
+    if (!tracks) { yyjson_doc_free(doc); return 0; }
 
-    size_t n = yyjson_arr_size(songs);
+    size_t n = yyjson_arr_size(tracks);
     size_t limit = n > 100 ? 100 : n;
     out->songs = (SongInfo*)calloc(limit, sizeof(SongInfo));
     out->count = (int)limit;
     out->total = (int)n;
 
-    size_t i, m; yyjson_val *s; int oi = 0;
-    yyjson_arr_foreach(songs, i, m, s) {
+    size_t idx, max;
+    yyjson_val *tr;
+    int oi = 0;
+    yyjson_arr_foreach(tracks, idx, max, tr) {
         if (oi >= (int)limit) break;
         SongInfo *si = &out->songs[oi++];
         memset(si, 0, sizeof(*si));
-        yyjson_val *v = yyjson_obj_get(s, "id");
-        if (v) { char ib[32]; snprintf(ib, sizeof(ib), "%llu", (unsigned long long)yyjson_get_uint(v)); si->id = strdup(ib); }
+        yyjson_val *v;
+
+        v = yyjson_obj_get(tr, "id");
+        if (v) {
+            char id_buf[32];
+            snprintf(id_buf, sizeof(id_buf), "%llu", (unsigned long long)yyjson_get_uint(v));
+            si->id = strdup(id_buf);
+        }
         si->source = strdup("netease");
-        v = yyjson_obj_get(s, "name");
+
+        v = yyjson_obj_get(tr, "name");
         si->title = v ? strdup(yyjson_get_str(v)) : strdup("");
-        yyjson_val *ar = yyjson_obj_get(s, "ar");
-        if (ar && yyjson_arr_size(ar) > 0) {
-            v = yyjson_obj_get(yyjson_arr_get(ar, 0), "name");
+
+        yyjson_val *artists = yyjson_obj_get(tr, "ar");
+        if (!artists) artists = yyjson_obj_get(tr, "artists");
+        if (artists && yyjson_arr_size(artists) > 0) {
+            v = yyjson_obj_get(yyjson_arr_get(artists, 0), "name");
             si->artist = v ? strdup(yyjson_get_str(v)) : strdup("");
-        } else si->artist = strdup("");
-        v = yyjson_obj_get(s, "dt");
+        } else {
+            si->artist = strdup("");
+        }
+
+        v = yyjson_obj_get(tr, "dt");
+        if (!v) v = yyjson_obj_get(tr, "duration");
         si->duration_sec = v ? (int)(yyjson_get_int(v) / 1000) : 0;
     }
+
     yyjson_doc_free(doc);
     return out->count > 0 ? 0 : -1;
 }
@@ -432,11 +449,11 @@ int netease_get_liked_songs(unsigned long uid, SearchResult *out) {
     yyjson_doc_free(doc);
     if (!id_list[0]) return 0;
 
-    /* Batch query from /playlist/detail with built ID list doesn't work;
-       fall back to /song/detail with comma-separated IDs */
-    snprintf(path, sizeof(path), "/song/detail?ids=%s", id_list);
+    /* Use /song/detail with comma-separated IDs */
+    char sd_path[4608];
+    snprintf(sd_path, sizeof(sd_path), "/song/detail?ids=%s", id_list);
     WriteBuf buf2 = {0};
-    if (api_get(path, &buf2) != 0) return -1;
+    if (api_get(sd_path, &buf2) != 0) return -1;
 
     yyjson_doc *doc2 = yyjson_read(buf2.data, buf2.len, 0);
     free(buf2.data);
