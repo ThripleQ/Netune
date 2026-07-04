@@ -17,7 +17,6 @@
 #include <sys/wait.h>
 #include <signal.h>
 
-#define DIAG(msg) write(STDERR_FILENO, msg "\n", sizeof(msg))
 
 /* ── Constants ──────────────────────────────────────── */
 #define FRAMES_PER_CHUNK 4096
@@ -215,7 +214,6 @@ static void* playback_thread(void *arg) {
                 const char *play_path = cmd.path;
                 int is_local = (cmd.path[0] == '/' || cmd.path[0] == '~' || strchr(cmd.path, '.'));
                 if (!is_local) {
-                    fprintf(stderr, "DIAG_V2: non-local path='%s', popen starting...\n", cmd.path);
                     char url_buf[2048] = {0};
                     /* Fetch song URL via popen — bypasses music_source_get */
                     char cli_cmd[2048];
@@ -226,7 +224,6 @@ static void* playback_thread(void *arg) {
                         char jbuf[4096] = {0};
                         size_t nr = fread(jbuf, 1, sizeof(jbuf)-1, fp);
                         pclose(fp);
-                        fprintf(stderr, "DIAG_PB: song-url returned %zu bytes\n", nr);
                         /* Extract URL from {data:[{url:"..."}]} */
                         const char *k = nr > 0 ? strstr(jbuf, "\"url\"") : NULL;
                         if (k) {
@@ -245,7 +242,6 @@ static void* playback_thread(void *arg) {
                         }
                     }
                     if (url_buf[0]) {
-                        fprintf(stderr, "DIAG_PB: got url='%.60s'\n", url_buf);
                         snprintf(resolved_path, sizeof(resolved_path),
                                  "/tmp/netune_%s.mp3", cmd.path);
                         unlink(resolved_path);
@@ -266,16 +262,13 @@ static void* playback_thread(void *arg) {
                             LOG_ERROR("fork failed for netease stream %s", cmd.path);
                         }
                     } else {
-                        fprintf(stderr, "DIAG_PB: get_play_url failed or empty url\n");
                         LOG_WARN("No play URL for %s", cmd.path);
                     }
                 }
 
                 decoder = decoder_open(play_path);
-                fprintf(stderr, "DIAG_V2: decoder_open returned %p\n", (void*)decoder);
                 if (!decoder) {
                     cleanup_dl();
-                    fprintf(stderr, "DIAG_V2: ERROR - cannot open: %s\n", play_path);
                     LOG_ERROR("Cannot open: %s", cmd.path);
                     event_bus_publish(EV_PLAYBACK_ERROR, NULL, 0);
                     continue;
@@ -286,10 +279,8 @@ static void* playback_thread(void *arg) {
                 channels     = info.channels;
                 total_frames = info.total_frames;
                 current_frame = 0;
-                fprintf(stderr, "DIAG_V2: SR=%d CH=%d frames=%d\n", samplerate, channels, total_frames);
 
                 audio = audio_output_create(samplerate, channels);
-                fprintf(stderr, "DIAG_V2: audio_output_create returned %p\n", (void*)audio);
                 if (!audio) {
                     decoder_close(decoder);
                     decoder = NULL;

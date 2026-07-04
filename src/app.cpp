@@ -136,7 +136,6 @@ static void do_netease_search(const char *query) {
 
     /* Deep copy for StateStore (vec holds shallow ownership) */
     StateStore::instance().set_search_results(vec, (int)vec.size());
-    fprintf(stderr, "\nDIAG: search loaded %zu results\n", vec.size());
 }
 
 /* Free search cache on shutdown */
@@ -735,7 +734,6 @@ int run_app(int argc, char **argv) {
                         } else if (type >= 0 && type <= 1) {
                             SearchResult sr;
                             if (netease_load_menu(type, 200, &sr) == 0 && sr.count > 0) {
-                                fprintf(stderr, "\nDIAG: load_menu type=%d count=%d\n", type, sr.count);
                                 std::vector<SongInfo> vec;
                                 vec.reserve(sr.count);
                                 for (int i = 0; i < sr.count; i++) {
@@ -781,8 +779,6 @@ int run_app(int argc, char **argv) {
                 playlist_manager_set_index(idx);
                 const auto &sel = cur.playlist[idx];
                 const char *path = sel.id ? sel.id : "";
-                fprintf(stderr, "\nDIAG_PLAY: id='%s' source='%s'\n",
-                        path, sel.source ? sel.source : "(null)");
                 StateStore::instance().set_current_song(sel);
                 event_bus_publish(EV_PLAYBACK_START, (void*)path, strlen(path) + 1);
             }
