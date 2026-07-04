@@ -4,528 +4,155 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <ctype.h>
-#include <signal.h>
 #include <stdarg.h>
+#include <ctype.h>
 
 #define CLI "netease-cli"
+static char g_name[128] = "";
 
-/* ── Cached account data ───────────────────────────── */
-static char g_account_name[128] = "";
-static unsigned long g_user_uid = 0;
-
-/* ── Lightweight JSON helpers (no yyjson dependency) ── */
-
-/* Extract "key":"...string..." from JSON. Caller free()s result. */
-static char *json_str(const char *json, const char *key) {
-    char search[128];
-    snprintf(search, sizeof(search), "\"%s\"", key);
-    const char *p = strstr(json, search);
-    if (!p) return NULL;
-    p += strlen(search);
-    while (*p && (*p == ':' || *p == ' ' || *p == '\t' || *p == '\n')) p++;
-    if (*p == '"') {
-        p++;
-        size_t cap = 512, w = 0;
-        char *out = malloc(cap);
-        if (!out) return NULL;
-        while (*p && *p != '"' && w < cap - 1) {
-            if (*p == '\\' && *(p+1) == 'u' && isxdigit((unsigned char)*(p+2)) &&
-                isxdigit((unsigned char)*(p+3)) && isxdigit((unsigned char)*(p+4)) &&
-                isxdigit((unsigned char)*(p+5))) {
-                char hex[5] = {*(p+2),*(p+3),*(p+4),*(p+5),'\0'};
-                unsigned long cp = strtoul(hex, NULL, 16);
-                if (cp < 0x80)      { out[w++] = (char)cp; }
-                else if (cp < 0x800){ out[w++] = (char)(0xC0|(cp>>6)); out[w++] = (char)(0x80|(cp&0x3F)); }
-                else                { out[w++] = (char)(0xE0|(cp>>12)); out[w++] = (char)(0x80|((cp>>6)&0x3F)); out[w++] = (char)(0x80|(cp&0x3F)); }
-                p += 6;
-            } else { out[w++] = *p++; }
-        }
-        out[w] = '\0';
-        return out;
-    }
-    if (isdigit((unsigned char)*p) || *p == '-') {
-        const char *end = p;
-        while (isdigit((unsigned char)*end) || *end == '.') end++;
-        char *out = malloc((size_t)(end - p) + 1);
-        if (!out) return NULL;
-        memcpy(out, p, (size_t)(end - p));
-        out[end - p] = '\0';
-        return out;
-    }
+/* ── popen helper ─────────────────────────────────── */
+static char *run(const char *fmt, ...) {
+    char cmd[2048]; va_list ap;
+    va_start(ap, fmt); vsnprintf(cmd, sizeof(cmd), fmt, ap); va_end(ap);
+    FILE *fp = popen(cmd, "r"); if (!fp) return NULL;
+    size_t cap = 8192, len = 0; char *b = malloc(cap); if (!b) { pclose(fp); return NULL; }
+    while (!feof(fp)) { if (len+1024>=cap) { cap*=2; char*t=realloc(b,cap); if(!t){free(b);pclose(fp);return NULL;} b=t; } size_t r=fread(b+len,1,cap-len-1,fp); if(r>0)len+=r; else break; }
+    b[len]=0; pclose(fp); return b;
+}
+/* ── lightweight JSON helpers ─────────────────────── */
+static char *jstr(const char *j, const char *k) {
+    char s[128]; snprintf(s,sizeof(s),"\"%s\"",k);
+    const char *p = strstr(j,s); if(!p)return NULL; p+=strlen(s);
+    while(*p==':'||*p==' '||*p=='\t'||*p=='\n')p++;
+    if(*p=='"'){p++;size_t cap=512,w=0;char*o=malloc(cap);if(!o)return NULL;
+        while(*p&&*p!='"'&&w<cap-1){
+            if(*p=='\\'&&*(p+1)=='u'&&isxdigit((unsigned char)*(p+2))&&isxdigit((unsigned char)*(p+3))&&isxdigit((unsigned char)*(p+4))&&isxdigit((unsigned char)*(p+5))){
+                char h[5]={*(p+2),*(p+3),*(p+4),*(p+5),0};unsigned long cp=strtoul(h,NULL,16);
+                if(cp<0x80)o[w++]=(char)cp;else if(cp<0x800){o[w++]=(char)(0xC0|(cp>>6));o[w++]=(char)(0x80|(cp&0x3F));}else{o[w++]=(char)(0xE0|(cp>>12));o[w++]=(char)(0x80|((cp>>6)&0x3F));o[w++]=(char)(0x80|(cp&0x3F));}p+=6;
+            }else o[w++]=*p++;
+        }o[w]=0;return o;
+    }if(isdigit((unsigned char)*p)||*p=='-'){const char*e=p;while(isdigit((unsigned char)*e)||*e=='.')e++;char*o=malloc((size_t)(e-p)+1);if(o){memcpy(o,p,(size_t)(e-p));o[e-p]=0;}return o;}
     return NULL;
 }
-
-/* Extract "key":123 integer. */
-static long long json_int(const char *json, const char *key) {
-    char search[128];
-    snprintf(search, sizeof(search), "\"%s\"", key);
-    const char *p = strstr(json, search);
-    if (!p) return 0;
-    p += strlen(search);
-    while (*p && (*p == ':' || *p == ' ' || *p == '\t' || *p == '\n')) p++;
-    return atoll(p);
+static long long jint(const char *j, const char *k) {
+    char s[128]; snprintf(s,sizeof(s),"\"%s\"",k);
+    const char *p = strstr(j,s); if(!p)return 0; p+=strlen(s);
+    while(*p==':'||*p==' '||*p=='\t'||*p=='\n')p++; return atoll(p);
+}
+static const char *jobj(const char *j, const char *k) {
+    char s[128]; snprintf(s,sizeof(s),"\"%s\"",k);
+    const char *p = strstr(j,s); if(!p)return NULL; p+=strlen(s);
+    while(*p&&*p!='{'&&*p!='[')p++; return (*p=='{'||*p=='[')?p:NULL;
+}
+static const char *jmatch(const char *o) {
+    char oc=*o,cc=(oc=='{')?'}':']';int d=1;const char*p=o+1;
+    while(*p&&d>0){if(*p=='"'){p++;while(*p&&*p!='"'){if(*p=='\\')p++;p++;}}else if(*p==oc)d++;else if(*p==cc)d--;p++;}return p;
+}
+/* ── parse one song ────────────────────────────────── */
+static void fill(SongInfo *s, const char *jsn) {
+    memset(s,0,sizeof(*s)); s->source=strdup("netease"); s->cover_url=strdup(""); s->aux_label=strdup("");
+    char *id=jstr(jsn,"id"); s->id=id?id:strdup("");
+    char *t=jstr(jsn,"name"); s->title=t?t:strdup("");
+    const char *ar=jobj(jsn,"ar");if(ar){const char*ap=ar+1;while(*ap&&*ap!='{')ap++;if(*ap=='{'){char*an=jstr(ap,"name");s->artist=an?an:strdup("");}else s->artist=strdup("");}else s->artist=strdup("");
+    s->duration_sec=(int)(jint(jsn,"dt")/1000);
+}
+/* ── parse songs array into SongInfo* ──────────────── */
+static int parselist(const char *json, const char *loc __attribute__((unused)), SongInfo **out, int *cnt) {
+    *out=NULL; *cnt=0; if(!json)return -1;
+    const char *s=jobj(json,"songs");if(!s||*s!='['){const char*r=jobj(json,"result");if(r)s=jobj(r,"songs");}
+    if(!s||*s!='[')return -1;
+    int n=0;const char*p=s+1;while(*p){while(*p&&*p!='{'&&*p!=']')p++;if(*p==']')break;p=jmatch(p);n++;}
+    if(!n)return -1;
+    *out=(SongInfo*)calloc((size_t)n,sizeof(SongInfo));*cnt=0;
+    p=s+1;int oi=0;while(*p){while(*p&&*p!='{'&&*p!=']')p++;if(*p==']')break;
+        const char*e=jmatch(p);fill(&(*out)[oi],p);oi++;p=e;}
+    *cnt=oi;return oi>0?0:-1;
 }
 
-/* Find "key": {object or array start}. Returns pointer to { or [. */
-static const char *json_obj_start(const char *json, const char *key) {
-    char search[128];
-    snprintf(search, sizeof(search), "\"%s\"", key);
-    const char *p = strstr(json, search);
-    if (!p) return NULL;
-    p += strlen(search);
-    while (*p && *p != '{' && *p != '[') p++;
-    return (*p == '{' || *p == '[') ? p : NULL;
+/* ── Init ──────────────────────────────────────────── */
+int netease_init(void) {
+    char *n=run("%s account-name 2>/dev/null",CLI);
+    if(!n){LOG_WARN("netease-cli not found");return -1;}
+    if(n[0]&&strcmp(n,"未登录\n")!=0&&strcmp(n,"error\n")!=0){size_t l=strlen(n);if(l>0&&n[l-1]=='\n')n[l-1]=0;snprintf(g_name,sizeof(g_name),"%s",n);}
+    free(n);LOG_INFO("netease ready");return 0;
 }
+void netease_shutdown(void) {}
+const char* netease_account_name(void) { return g_name[0]?g_name:NULL; }
 
-/* Match closing bracket from an open { or [. Returns pointer past it. */
-static const char *json_match(const char *open) {
-    char open_ch = *open, close_ch = (open_ch == '{') ? '}' : ']';
-    int depth = 1;
-    const char *p = open + 1;
-    while (*p && depth > 0) {
-        if (*p == '"') { p++; while (*p && *p != '"') { if (*p == '\\') p++; p++; } }
-        else if (*p == open_ch) depth++;
-        else if (*p == close_ch) depth--;
-        p++;
-    }
-    return p;
+/* ── Search ────────────────────────────────────────── */
+int netease_search(const char *kw, int l, int o __attribute__((unused)), NSSearchResult *out) {
+    memset(out,0,sizeof(*out)); if(!kw)return -1;
+    char *j=run("%s search \"%s\" 2>/dev/null",CLI,kw); if(!j)return -1;
+    const char *s=jobj(jobj(j,"result")?jobj(j,"result"):j,"songs");
+    if(!s||*s!='['){free(j);return 0;}
+    int n=0,max=l>0?l:30;const char*p=s+1;while(*p){while(*p&&*p!='{'&&*p!=']')p++;if(*p==']')break;p=jmatch(p);n++;if(n>=max)break;}
+    if(n==0){free(j);return 0;} out->songs=calloc((size_t)n,sizeof(NSSong)); out->count=n;
+    int oi=0;p=s+1;while(*p&&oi<n){while(*p&&*p!='{'&&*p!=']')p++;if(*p==']')break;const char*e=jmatch(p);
+        NSSong *r=&out->songs[oi]; r->id=jstr(p,"id");r->title=jstr(p,"name");r->artist=jstr(p,"artist");
+        if(!r->artist){const char*a=jobj(p,"ar");if(a){const char*ap=a+1;while(*ap&&*ap!='{')ap++;if(*ap=='{')r->artist=jstr(ap,"name");}}if(!r->artist)r->artist=strdup("");
+        r->album=jstr(p,"album");if(!r->album){const char*a=jobj(p,"al");if(a)r->album=jstr(a,"name");}if(!r->album)r->album=strdup("");
+        r->dur_ms=(int)jint(p,"dt");oi++;p=e;}
+    out->count=oi; free(j); return 0;
 }
+void netease_search_free(NSSearchResult *r) { if(!r)return;for(int i=0;i<r->count;i++){free(r->songs[i].id);free(r->songs[i].title);free(r->songs[i].artist);free(r->songs[i].album);}free(r->songs);r->songs=NULL;r->count=0;}
 
-/* ── popen wrapper ──────────────────────────────────── */
-/* Run a command, capture stdout. Returns malloc'd string, or NULL on error.
-   Sets a 10-second SIGALRM timeout. */
-static char *run_cli(const char *fmt, ...) {
-    char cmd[2048];
-    va_list ap;
-    va_start(ap, fmt);
-    vsnprintf(cmd, sizeof(cmd), fmt, ap);
-    va_end(ap);
-
-    FILE *fp = popen(cmd, "r");
-    if (!fp) return NULL;
-
-    size_t cap = 8192, len = 0;
-    char *buf = malloc(cap);
-    if (!buf) { pclose(fp); return NULL; }
-
-    while (!feof(fp)) {
-        if (len + 1024 >= cap) { cap *= 2; char *tmp = realloc(buf, cap); if (!tmp) { free(buf); pclose(fp); return NULL; } buf = tmp; }
-        size_t r = fread(buf + len, 1, cap - len - 1, fp);
-        if (r > 0) len += r; else break;
-    }
-    buf[len] = '\0';
-    pclose(fp);
-    return buf;
+/* ── Login QR ─────────────────────────────────────── */
+int netease_qr_key(char *u, size_t usz, char *url, size_t usz2) {
+    char *j=run("%s qr-key 2>/dev/null",CLI);if(!j)return -1;
+    char *uk=jstr(j,"unikey"),*ul=jstr(j,"url"); int r=-1;
+    if(uk&&ul&&uk[0]&&ul[0]){snprintf(u,usz,"%s",uk);snprintf(url,usz2,"%s",ul);r=0;}
+    free(uk);free(ul);free(j);return r;
 }
-
-/* ── Parse helpers ──────────────────────────────────── */
-/* Extract artist name from a song JSON block's "ar" array. */
-static char *artist_name(const char *song_json) {
-    const char *ar = strstr(song_json, "\"ar\"");
-    if (!ar) return NULL;
-    const char *name = strstr(ar, "\"name\"");
-    if (!name) return NULL;
-    name += 6;
-    while (*name && (*name == ':' || *name == ' ')) name++;
-    if (*name == '"') {
-        name++;
-        const char *end = strchr(name, '"');
-        if (!end) return NULL;
-        size_t len = (size_t)(end - name);
-        char *out = malloc(len + 1);
-        if (!out) return NULL;
-        memcpy(out, name, len); out[len] = '\0';
-        return out;
-    }
-    return NULL;
+char* netease_qr_render(const char *url) { return run("%s qr-render \"%s\" 2>/dev/null",CLI,url); }
+int netease_qr_poll(const char *uk) {
+    char *j=run("%s qr-check \"%s\" 2>/dev/null",CLI,uk);if(!j)return -1;
+    long long c=jint(j,"code");free(j);
+    if(c==803){char*n=run("%s account-name 2>/dev/null",CLI);if(n){size_t l=strlen(n);if(l>0&&n[l-1]=='\n')n[l-1]=0;if(strcmp(n,"error")!=0&&strcmp(n,"未登录")!=0)snprintf(g_name,sizeof(g_name),"%s",n);free(n);}return 0;}
+    if(c==800)return 2;
+    if(c==802)return 3; return 1;
 }
+bool netease_is_logged_in(void) { return g_name[0]!=0; }
 
-/* Parse one song JSON block into SongInfo (SearchResult entry). */
-static int parse_song(const char *json, SongInfo *si) {
-    memset(si, 0, sizeof(*si));
-    si->source = strdup("netease");
-    si->cover_url = strdup("");
-    si->aux_label = strdup("");
-
-    char *id = json_str(json, "id");
-    if (!id) { song_info_free(si); return -1; }
-    si->id = id;
-
-    char *title = json_str(json, "name");
-    si->title = title ? title : strdup("");
-
-    char *artist = artist_name(json);
-    si->artist = artist ? artist : strdup("");
-
-    si->duration_sec = (int)(json_int(json, "dt") / 1000);
-    return 0;
+/* ── Playlists ────────────────────────────────────── */
+int netease_playlists(SongInfo **out, int *count) {
+    char *j=run("%s playlists 2>/dev/null",CLI);if(!j)return -1;
+    const char *pl=jobj(j,"playlists");if(!pl||*pl!='['){free(j);return -1;}
+    int n=0;const char*p=pl+1;while(*p){while(*p&&*p!='{'&&*p!=']')p++;if(*p==']')break;p=jmatch(p);n++;}
+    if(!n){free(j);return -1;}
+    *out=calloc((size_t)n,sizeof(SongInfo));*count=0;
+    p=pl+1;int oi=0;while(*p){while(*p&&*p!='{'&&*p!=']')p++;if(*p==']')break;const char*e=jmatch(p);
+        SongInfo *s=&(*out)[oi];memset(s,0,sizeof(*s));s->source=strdup("netease");s->cover_url=strdup("");s->aux_label=strdup("歌单");
+        char *id=jstr(p,"id");s->id=id?id:strdup("");
+        s->title=jstr(p,"name");if(!s->title)s->title=strdup("");
+        oi++;p=e;}
+    *count=oi;free(j);return 0;
 }
-
-/* ── Init / Shutdown ────────────────────────────────── */
-int netease_api_init(void) {
-    /* Check that netease-cli exists and works */
-    char *out = run_cli("%s account-name 2>/dev/null", CLI);
-    if (!out) {
-        LOG_WARN("netease-cli not found or not working");
-        return -1;
-    }
-    free(out);
-    /* Try to load cached login */
-    char *name = run_cli("%s account-name 2>/dev/null", CLI);
-    if (name && name[0] && strcmp(name, "未登录") != 0 && strcmp(name, "error") != 0) {
-        size_t n = strlen(name);
-        if (n > 0 && name[n-1] == '\n') name[n-1] = '\0';
-        snprintf(g_account_name, sizeof(g_account_name), "%s", name);
-        /* Get UID */
-        char *json = run_cli("%s playlist 0 2>/dev/null", CLI);
-        if (json) {
-            /* /user/playlist returns user info in the response */
-            free(json);
-        }
-        /* For UID, use account-info via playlists or similar */
-        g_user_uid = 1; /* placeholder — will be populated properly */
-    }
-    free(name);
-    LOG_INFO("Netease API client ready");
-    return 0;
+int netease_playlist_songs(const char *id, SongInfo **out, int *count) {
+    char *j=run("%s playlist-tracks \"%s\" 2>/dev/null",CLI,id);if(!j)return -1;
+    int r=parselist(j,"songs",out,count);free(j);return r;
 }
-
-void netease_api_shutdown(void) {}
-
-const char* netease_account_name(void) {
-    return g_account_name[0] ? g_account_name : NULL;
+int netease_liked_songs(SongInfo **out, int *count) {
+    char *j=run("%s liked 2>/dev/null",CLI);if(!j)return -1;
+    int r=parselist(j,"songs",out,count);free(j);return r;
 }
-
-unsigned long netease_get_user_id(void) {
-    return g_user_uid;
-}
-
-bool netease_is_logged_in(void) {
-    return g_account_name[0] != '\0';
-}
-
-/* ── Search ──────────────────────────────────────────── */
-int netease_search(const char *keyword, int limit, int offset,
-                   NeteaseSearchResult *out) {
-    if (!out) return -1;
-    memset(out, 0, sizeof(*out));
-
-    char *json = run_cli("%s search \"%s\" 2>/dev/null", CLI, keyword);
-    if (!json) return -1;
-
-    int max = limit > 0 ? limit : 30;
-    const char *songs = NULL;
-    const char *res = json_obj_start(json, "result");
-    if (res) songs = json_obj_start(res, "songs");
-    if (!songs || *songs != '[') { free(json); return 0; }
-
-    /* Skip offset first pass to position */
-    const char *p = songs + 1;
-    int skip = offset > 0 ? offset : 0;
-    while (*p && skip > 0) {
-        while (*p && *p != '{' && *p != ']') p++;
-        if (*p == ']') break;
-        p = json_match(p);
-        skip--;
-    }
-
-    /* Second pass: parse songs */
-    /* First count */
-    int count = 0;
-    const char *pc = p;
-    while (*pc && count < max) {
-        while (*pc && *pc != '{' && *pc != ']') pc++;
-        if (*pc == ']') break;
-        pc = json_match(pc);
-        count++;
-    }
-
-    if (count == 0) { free(json); return 0; }
-    out->songs = (NeteaseSongResult*)calloc((size_t)count, sizeof(NeteaseSongResult));
-    out->count = 0;
-
-    int oi = 0;
-    while (*p && oi < count) {
-        while (*p && *p != '{' && *p != ']') p++;
-        if (*p == ']') break;
-        const char *end = json_match(p);
-        NeteaseSongResult *sr = &out->songs[oi];
-        sr->id = json_str(p, "id");
-        if (!sr->id) sr->id = strdup("");
-        sr->title = json_str(p, "name");
-        if (!sr->title) sr->title = strdup("");
-        sr->artist = json_str(p, "artist");
-        if (!sr->artist) {
-            const char *ar = json_obj_start(p, "ar");
-            if (ar) {
-                const char *ap = ar + 1;
-                while (*ap && *ap != '{') ap++;
-                if (*ap == '{') sr->artist = json_str(ap, "name");
-            }
-        }
-        if (!sr->artist) sr->artist = strdup("");
-        sr->album = json_str(p, "album");
-        if (!sr->album) {
-            const char *al = json_obj_start(p, "al");
-            if (al) sr->album = json_str(al, "name");
-        }
-        if (!sr->album) sr->album = strdup("");
-        sr->duration_ms = (int)(json_int(p, "dt"));
-        oi++;
-        p = end;
-    }
-    out->count = oi;
-    free(json);
-    return 0;
-}
-
-void netease_search_result_free(NeteaseSearchResult *r) {
-    if (!r) return;
-    for (int i = 0; i < r->count; i++) {
-        free(r->songs[i].id);
-        free(r->songs[i].title);
-        free(r->songs[i].artist);
-        free(r->songs[i].album);
-    }
-    free(r->songs);
-    r->songs = NULL;
-    r->count = 0;
-}
-
-/* ── Login ───────────────────────────────────────────── */
-int netease_qr_get_key(char *out_unikey, size_t unikey_size,
-                       char *qr_url, size_t url_size) {
-    char *json = run_cli("%s qr-key 2>/dev/null", CLI);
-    if (!json) return -1;
-    char *u = json_str(json, "unikey");
-    char *url = json_str(json, "url");
-    int ret = -1;
-    if (u && url && u[0] && url[0]) {
-        snprintf(out_unikey, unikey_size, "%s", u);
-        snprintf(qr_url, url_size, "%s", url);
-        ret = 0;
-    }
-    free(u); free(url); free(json);
-    return ret;
-}
-
-char* netease_qr_render(const char *url) {
-    return run_cli("%s qr-render \"%s\" 2>/dev/null", CLI, url);
-}
-
-int netease_qr_poll(const char *unikey) {
-    char *json = run_cli("%s qr-check \"%s\" 2>/dev/null", CLI, unikey);
-    if (!json) return -1;
-    long long code = json_int(json, "code");
-    free(json);
-    if (code == 803) {
-        /* Login succeeded — refresh account info */
-        char *name = run_cli("%s account-name 2>/dev/null", CLI);
-        if (name) {
-            size_t n = strlen(name);
-            if (n > 0 && name[n-1] == '\n') name[n-1] = '\0';
-            if (strcmp(name, "error") != 0 && strcmp(name, "未登录") != 0)
-                snprintf(g_account_name, sizeof(g_account_name), "%s", name);
-            free(name);
-        }
-        return 0; /* success */
-    }
-    if (code == 800) return 2;  /* expired */
-    if (code == 802) return 3;  /* scanned, waiting for confirm */
-    return 1; /* waiting for scan (801 or unknown) */
-}
-
-/* ── User playlists ─────────────────────────────────── */
-int netease_get_playlists(NeteasePlaylistResult *out) {
-    if (!out) return -1;
-    memset(out, 0, sizeof(*out));
-
-    char *json = run_cli("%s playlists 2>/dev/null", CLI);
-    if (!json) return -1;
-
-    const char *pl = json_obj_start(json, "playlists");
-    if (!pl || *pl != '[') { free(json); return 0; }
-
-    /* Count items */
-    int count = 0;
-    const char *p = pl + 1;
-    while (*p) {
-        while (*p && *p != '{' && *p != ']') p++;
-        if (*p == ']') break;
-        p = json_match(p);
-        count++;
-    }
-
-    if (count == 0) { free(json); return 0; }
-    out->items = (NeteasePlaylistItem*)calloc((size_t)count, sizeof(NeteasePlaylistItem));
-
-    p = pl + 1;
-    int oi = 0;
-    while (*p && oi < count) {
-        while (*p && *p != '{' && *p != ']') p++;
-        if (*p == ']') break;
-        const char *end = json_match(p);
-        /* Extract id and name */
-        long long id = json_int(p, "id");
-        char *name = json_str(p, "name");
-        if (id > 0 && name) {
-            out->items[oi].id = (unsigned long)id;
-            out->items[oi].name = name;
-            /* subscribed: true = favorited, false = created */
-            out->items[oi].subscribed = (strstr(p, "\"subscribed\":true") != NULL);
-            oi++;
-        } else {
-            free(name);
-        }
-        p = end;
-    }
-    out->count = oi;
-    free(json);
-    return 0;
-}
-
-void netease_playlist_result_free(NeteasePlaylistResult *r) {
-    if (!r) return;
-    for (int i = 0; i < r->count; i++) free(r->items[i].name);
-    free(r->items);
-    r->items = NULL;
-    r->count = 0;
-}
-
-/* ── Songs from playlists / liked ───────────────────── */
-static int parse_songs_from_json(const char *json, SearchResult *out, int max) {
-    if (!json || !out) return -1;
-    memset(out, 0, sizeof(*out));
-
-    const char *songs = json_obj_start(json, "songs");
-    if (!songs || *songs != '[') {
-        /* Try result.songs (for liked / search) */
-        const char *res = json_obj_start(json, "result");
-        if (res) songs = json_obj_start(res, "songs");
-        if (!songs || *songs != '[') return 0;
-    }
-
-    /* Count */
-    int count = 0;
-    const char *p = songs + 1;
-    while (*p && count < max) {
-        while (*p && *p != '{' && *p != ']') p++;
-        if (*p == ']') break;
-        p = json_match(p);
-        count++;
-    }
-
-    if (count == 0) return 0;
-    out->songs = (SongInfo*)calloc((size_t)count, sizeof(SongInfo));
-    out->count = 0;
-    out->total = count;
-
-    p = songs + 1;
-    int oi = 0;
-    while (*p && oi < count) {
-        while (*p && *p != '{' && *p != ']') p++;
-        if (*p == ']') break;
-        const char *end = json_match(p);
-        if (parse_song(p, &out->songs[oi]) == 0) oi++;
-        p = end;
-    }
-    out->count = oi;
-    return oi > 0 ? 0 : -1;
-}
-
-int netease_get_playlist_songs(const char *playlist_id, SearchResult *out) {
-    char *json = run_cli("%s playlist-tracks \"%s\" 2>/dev/null", CLI, playlist_id);
-    if (!json) return -1;
-    int ret = parse_songs_from_json(json, out, 500);
-    free(json);
-    return ret;
-}
-
-int netease_get_liked_songs(SearchResult *out) {
-    char *json = run_cli("%s liked 2>/dev/null", CLI);
-    if (!json) return -1;
-    int ret = parse_songs_from_json(json, out, 500);
-    free(json);
-    return ret;
-}
-
-int netease_load_menu(int type, int limit, SearchResult *out) {
-    if (type == 0) {
-        char *json = run_cli("%s recommend-songs 2>/dev/null", CLI);
-        if (!json) return -1;
-        int ret = parse_songs_from_json(json, out, limit > 0 ? limit : 30);
-        free(json);
-        return ret;
-    }
-    /* type 1 (personalized) not directly available — fallback */
+int netease_menu_songs(int type, int limit __attribute__((unused)), SongInfo **out, int *count) {
+    if(type==0){char*j=run("%s recommend-songs 2>/dev/null",CLI);if(!j)return -1;int r=parselist(j,"songs",out,count);free(j);return r;}
     return -1;
 }
 
-/* ── Song URL ────────────────────────────────────────── */
-int netease_get_play_url(const char *song_id, int quality,
-                         char *out_url, size_t url_size) {
-    const char *level = "standard";
-    if (quality == 1) level = "higher";
-    if (quality >= 2) level = "lossless";
-
-    char *json = run_cli("%s song-url \"%s\" \"%s\" 2>/dev/null", CLI, song_id, level);
-    if (!json) return -1;
-
-    /* Response has {data:[{url:"..."}]} */
-    const char *data = json_obj_start(json, "data");
-    if (data && *data == '[') {
-        const char *p = data + 1;
-        while (*p && *p != '{') p++;
-        if (*p == '{') {
-            char *url = json_str(p, "url");
-            if (url && url[0]) {
-                snprintf(out_url, url_size, "%s", url);
-                free(url); free(json);
-                return 0;
-            }
-            free(url);
-        }
-    }
-    free(json);
-    if (url_size > 0) out_url[0] = '\0';
-    return -1;
+/* ── Play URL ──────────────────────────────────────── */
+int netease_play_url(const char *id, char *url, size_t sz) {
+    const char *lvl="standard";
+    char *j=run("%s song-url \"%s\" %s 2>/dev/null",CLI,id,lvl);if(!j)return -1;
+    const char *d=jobj(j,"data");int r=-1;
+    if(d&&*d=='['){const char*p=d+1;while(*p&&*p!='{')p++;if(*p=='{'){char*u=jstr(p,"url");if(u&&u[0]){snprintf(url,sz,"%s",u);r=0;}free(u);}}
+    free(j);if(r!=0&&sz>0)url[0]=0;return r;
 }
-
-/* ── Song detail ─────────────────────────────────────── */
-int netease_get_song_detail(const char *song_id,
-                            char **title, char **artist, char **album,
-                            int *duration_ms) {
-    if (!song_id) return -1;
-
-    char *json = run_cli("%s song-detail \"%s\" 2>/dev/null", CLI, song_id);
-    if (!json) return -1;
-
-    const char *songs = json_obj_start(json, "songs");
-    if (!songs || *songs != '[') { free(json); return -1; }
-
-    const char *p = songs + 1;
-    while (*p && *p != '{' && *p != ']') p++;
-    if (*p != '{') { free(json); return -1; }
-
-    /* Extract fields */
-    if (title) {
-        *title = json_str(p, "name");
-        if (!*title) *title = strdup("");
-    }
-    if (artist) {
-        *artist = artist_name(p);
-        if (!*artist) *artist = strdup("");
-    }
-    if (album) {
-        char *al = NULL;
-        const char *al_obj = json_obj_start(p, "al");
-        if (al_obj) al = json_str(al_obj, "name");
-        *album = al ? al : strdup("");
-    }
-    if (duration_ms)
-        *duration_ms = (int)(json_int(p, "dt"));
-
-    free(json);
-    return 0;
+char* netease_download(const char *id, const char *url) {
+    char path[256];snprintf(path,sizeof(path),"/tmp/netune_%s.mp3",id);
+    unlink(path);
+    char cmd[3072];snprintf(cmd,sizeof(cmd),"curl -sL --max-time 60 \"%s\" -o \"%s\"",url,path);
+    int rc=system(cmd);
+    if(rc!=0){unlink(path);return NULL;}
+    char *out=strdup(path);return out;
 }

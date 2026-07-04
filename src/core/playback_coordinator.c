@@ -3,7 +3,6 @@
 #include "core/audio_output_mgr.h"
 #include "core/music_source.h"
 #include "core/music_source_manager.h"
-#include "plugins/music_sources/netease/netease_stream.h"
 #include "infra/config.h"
 #include "core/event_bus.h"
 #include "infra/log.h"
@@ -164,7 +163,6 @@ static void* playback_thread(void *arg) {
         return NULL;
     }
 
-    FILE *g_stream_fp = NULL;
 
     while (g_running) {
         /* ── Wait for next command (blocking when not playing) ── */
@@ -183,7 +181,6 @@ static void* playback_thread(void *arg) {
             case CMD_QUIT:
                 goto cleanup;
             case CMD_STOP:
-                netease_stream_close(g_stream_fp); g_stream_fp = NULL;
                 if (state == PS_STOPPED) continue; /* guard feedback loop */
                 if (decoder) { decoder_close(decoder); decoder = NULL; }
                 if (audio)   { audio_output_destroy(audio); audio = NULL; }
@@ -196,27 +193,39 @@ static void* playback_thread(void *arg) {
                 continue;
 
             case CMD_PLAY: {
-                netease_stream_close(g_stream_fp); g_stream_fp = NULL;
                 if (decoder) { decoder_close(decoder); decoder = NULL; }
                 if (audio)   { audio_output_destroy(audio); audio = NULL; }
 
-                char stream_path[1024];
                 const char *play_path = cmd.path;
                 int is_local = (cmd.path[0] == '/' || cmd.path[0] == '~' || strchr(cmd.path, '.'));
+                char dl_path[256] = "";
+
                 if (!is_local) {
-                    g_stream_fp = netease_stream_open(cmd.path,
-                                       stream_path, sizeof(stream_path));
-                    if (g_stream_fp)
-                        play_path = stream_path;
-                    else
-                        LOG_WARN("No play URL for %s", cmd.path);
+                    char url[2048] = {0};
+                    char cli[512]; snprintf(cli,sizeof(cli),
+                        "netease-cli song-url \"%s\" standard 2>/dev/null",cmd.path);
+                    FILE *fp = popen(cli,"r");
+                    if (fp) { char jb[4096]={0}; size_t nr=fread(jb,1,sizeof(jb)-1,fp); pclose(fp);
+                        const char *k=nr>0?strstr(jb,"\"url\""):NULL;
+                        if(k){k+=5;while(*k==':'||*k==' '||*k=='\t')k++;if(*k=='"'){k++;
+                            const char*e=k;while(*e&&*e!='"')e++;size_t ul=(size_t)(e-k);
+                            if(ul>0&&ul<sizeof(url)-1){memcpy(url,k,ul);url[ul]=0;}}}}
+                    if (url[0]) {
+                        snprintf(dl_path,sizeof(dl_path),"/tmp/netune_%s.mp3",cmd.path);
+                        unlink(dl_path);
+                        char curl_cmd[3072]; snprintf(curl_cmd,sizeof(curl_cmd),
+                            "curl -sL --max-time 60 \"%s\" -o \"%s\"",url,dl_path);
+                        LOG_INFO("Downloading %s ...",cmd.path);
+                        if (system(curl_cmd)==0) { play_path=dl_path; }
+                        else { unlink(dl_path); dl_path[0]=0; LOG_WARN("Download failed %s",cmd.path); }
+                    } else { LOG_WARN("No play URL for %s",cmd.path); }
                 }
 
                 decoder = decoder_open(play_path);
                 if (!decoder) {
-                    netease_stream_close(g_stream_fp); g_stream_fp = NULL;
-                    LOG_ERROR("Cannot open: %s", cmd.path);
-                    event_bus_publish(EV_PLAYBACK_ERROR, NULL, 0);
+                    if (dl_path[0]) { unlink(dl_path); dl_path[0]=0; }
+                    LOG_ERROR("Cannot open: %s",cmd.path);
+                    event_bus_publish(EV_PLAYBACK_ERROR,NULL,0);
                     continue;
                 }
                 DecoderInfo info;
@@ -228,17 +237,12 @@ static void* playback_thread(void *arg) {
 
                 audio = audio_output_create(samplerate, channels);
                 if (!audio) {
-                    decoder_close(decoder);
-                    decoder = NULL;
-                    event_bus_publish(EV_PLAYBACK_ERROR, NULL, 0);
+                    decoder_close(decoder); decoder = NULL;
+                    event_bus_publish(EV_PLAYBACK_ERROR,NULL,0);
                     continue;
                 }
 
                 state = PS_PLAYING;
-                /* Don't publish EV_PLAYBACK_START here — that would trigger
-                   on_play_start() again, causing a CMD_PLAY feedback loop.
-                   The UI already set StateStore to Playing when it sent the
-                   command; this thread just starts actual decoding. */
                 continue;
             }
 
@@ -289,7 +293,6 @@ static void* playback_thread(void *arg) {
                     /* should not happen while playing */
                     break;
                 case CMD_STOP:
-                    netease_stream_close(g_stream_fp); g_stream_fp = NULL;
                     if (state == PS_STOPPED) goto next_song;
                     if (decoder) { decoder_close(decoder); decoder = NULL; }
                     if (audio)   { audio_output_destroy(audio); audio = NULL; }
@@ -359,7 +362,6 @@ next_song:
     }
 
 cleanup:
-    netease_stream_close(g_stream_fp); g_stream_fp = NULL;
     if (decoder) decoder_close(decoder);
     if (audio)   audio_output_destroy(audio);
     free(pcm_buf);

@@ -69,7 +69,7 @@ static void start_login(void) {
     StateStore::instance().set_login_state(1, "Contacting server...", "");
     char unikey[128] = {0};
     char qr_url[512] = {0};
-    if (netease_qr_get_key(unikey, sizeof(unikey), qr_url, sizeof(qr_url)) == 0
+    if (netease_qr_key(unikey, sizeof(unikey), qr_url, sizeof(qr_url)) == 0
         && unikey[0]) {
         g_login_unikey = unikey;
         g_login_poll_tick = 0;
@@ -112,7 +112,7 @@ static void do_netease_search(const char *query) {
         return;
     }
 
-    NeteaseSearchResult nr;
+    NSSearchResult nr;
     if (netease_search(query, 100, 0, &nr) != 0) return;
 
     std::vector<SongInfo> vec;
@@ -124,10 +124,10 @@ static void do_netease_search(const char *query) {
         si.title    = strdup(nr.songs[i].title ? nr.songs[i].title : "");
         si.artist   = strdup(nr.songs[i].artist ? nr.songs[i].artist : "");
         si.album    = strdup(nr.songs[i].album ? nr.songs[i].album : "");
-        si.duration_sec = nr.songs[i].duration_ms / 1000;
+        si.duration_sec = nr.songs[i].dur_ms / 1000;
         vec.push_back(si);
     }
-    netease_search_result_free(&nr);
+    netease_search_free(&nr);
 
     /* Store in cache, evict oldest if full */
     if (g_ns_cache.size() >= NS_CACHE_MAX)
@@ -726,33 +726,33 @@ int run_app(int argc, char **argv) {
                             StateStore::instance().set_search_active(true);
                             StateStore::instance().set_search_query("");
                         } else if (!pl_id.empty()) {
-                            SearchResult sr;
-                            int ret = netease_get_playlist_songs(pl_id.c_str(), &sr);
-                            if (ret == 0 && sr.count > 0) {
+                            SongInfo *songs = NULL; int sc = 0;
+                            int ret = netease_playlist_songs(pl_id.c_str(), &songs, &sc);
+                            if (ret == 0 && sc > 0) {
                                 std::vector<SongInfo> vec;
-                                vec.reserve(sr.count);
-                                for (int i = 0; i < sr.count; i++) {
+                                vec.reserve(sc);
+                                for (int i = 0; i < sc; i++) {
                                     SongInfo copy = {};
-                                    song_info_copy(&copy, &sr.songs[i]);
+                                    song_info_copy(&copy, &songs[i]);
                                     vec.push_back(copy);
-                                    song_info_free(&sr.songs[i]);
+                                    song_info_free(&songs[i]);
                                 }
-                                free(sr.songs);
+                                free(songs);
                                 StateStore::instance().set_playlist(vec, 0);
                                 StateStore::instance().set_active_panel(1);
                             }
                         } else if (type >= 0 && type <= 1) {
-                            SearchResult sr;
-                            if (netease_load_menu(type, 200, &sr) == 0 && sr.count > 0) {
+                            SongInfo *ms = NULL; int mc = 0;
+                            if (netease_menu_songs(type, 200, &ms, &mc) == 0 && mc > 0) {
                                 std::vector<SongInfo> vec;
-                                vec.reserve(sr.count);
-                                for (int i = 0; i < sr.count; i++) {
+                                vec.reserve(mc);
+                                for (int i = 0; i < mc; i++) {
                                     SongInfo copy = {};
-                                    song_info_copy(&copy, &sr.songs[i]);
+                                    song_info_copy(&copy, &ms[i]);
                                     vec.push_back(copy);
-                                    song_info_free(&sr.songs[i]);
+                                    song_info_free(&ms[i]);
                                 }
-                                free(sr.songs);
+                                free(ms);
                                 StateStore::instance().set_playlist(vec, 0);
                                 StateStore::instance().set_active_panel(1);
                             }
@@ -760,19 +760,19 @@ int run_app(int argc, char **argv) {
                             if (!netease_is_logged_in()) {
                                 start_login();
                             } else {
-                                NeteasePlaylistResult pr;
-                                if (netease_get_playlists(&pr) == 0 && pr.count > 0) {
+                                
+                                SongInfo *pl_songs = NULL; int pl_count = 0;
+                                if (netease_playlists(&pl_songs, &pl_count) == 0 && pl_count > 0) {
                                     std::vector<NeteaseMenuItem> items;
                                     items.push_back({"<< \u8FD4\u56DE", -1, ""});
-                                    for (int i = 0; i < pr.count; i++) {
+                                    for (int i = 0; i < pl_count; i++) {
                                         /* type=2: created (subscribed=false), type=3: favorited (subscribed=true) */
-                                        bool want = (type == 2) ? !pr.items[i].subscribed : pr.items[i].subscribed;
-                                        if (!want) continue;
+                                        
                                         char id_buf[32];
-                                        snprintf(id_buf, sizeof(id_buf), "%llu", (unsigned long long)pr.items[i].id);
-                                        items.push_back({pr.items[i].name, 1000, id_buf});
+                                        snprintf(id_buf, sizeof(id_buf), "%llu", (unsigned long long)pl_songs[i].id);
+                                        items.push_back({pl_songs[i].title, 1000, id_buf});
                                     }
-                                    netease_playlist_result_free(&pr);
+                                    for(int _i=0;_i<pl_count;_i++) song_info_free(&pl_songs[_i]); free(pl_songs);
                                     StateStore::instance().set_netease_menu(items);
                                     StateStore::instance().set_netease_selected(0);
                                 }

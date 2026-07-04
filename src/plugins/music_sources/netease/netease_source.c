@@ -5,119 +5,25 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* ── MusicSource implementation ──────────────────────── */
 static int ns_init(void) {
-    if (netease_api_init() != 0) {
-        LOG_WARN("Netease source unavailable");
-        return -1;
-    }
-    LOG_INFO("Netease source initialized");
-    return 0;
+    if (netease_init() != 0) return -1;
+    LOG_INFO("netease source initialized"); return 0;
 }
-
-static void ns_shutdown(void) {
-    netease_api_shutdown();
-    LOG_INFO("Netease source shutdown");
+static void ns_shutdown(void) { netease_shutdown(); }
+static int ns_search(const char *kw, int p, int ps, SearchResult *out) {
+    memset(out,0,sizeof(*out));if(!kw)return-1;int l=ps>0?ps:20,o=p>0?p*l:0;
+    NSSearchResult nr;if(netease_search(kw,l,o,&nr)!=0||nr.count<=0)return-1;
+    out->songs=calloc((size_t)nr.count,sizeof(SongInfo));out->count=nr.count;out->total=nr.count;
+    for(int i=0;i<nr.count;i++){SongInfo*s=&out->songs[i];s->id=strdup(nr.songs[i].id);s->source=strdup("netease");s->title=strdup(nr.songs[i].title?nr.songs[i].title:"");s->artist=strdup(nr.songs[i].artist?nr.songs[i].artist:"");s->album=strdup(nr.songs[i].album?nr.songs[i].album:"");s->duration_sec=nr.songs[i].dur_ms/1000;s->cover_url=strdup("");s->aux_label=strdup("");}
+    netease_search_free(&nr);return 0;
 }
+static int ns_detail(const char *id, SongInfo *out) {memset(out,0,sizeof(*out));out->id=strdup(id);out->source=strdup("netease");out->title=strdup("");out->artist=strdup("");out->album=strdup("");out->cover_url=strdup("");out->aux_label=strdup("");return 0;}
+static int ns_url(const char *id, int q, char *url, size_t sz) {return netease_play_url(id,url,sz);}
+static int ns_lyric(const char *id, char *b, size_t sz) {(void)id;if(sz)b[0]=0;return-1;}
+static int ns_cover(const char *id, char *b, size_t sz) {(void)id;if(sz)b[0]=0;return-1;}
+static bool ns_avail(void) {return true;}
 
-static int ns_search(const char *keyword, int page, int page_size,
-                     SearchResult *out) {
-    if (!keyword || !out) return -1;
-    memset(out, 0, sizeof(*out));
+static MusicSource g_ns = {.name="netease",.priority=20,.init=ns_init,.shutdown=ns_shutdown,.search=ns_search,.get_song_detail=ns_detail,.get_play_url=ns_url,.get_lyric=ns_lyric,.get_cover_url=ns_cover,.is_available=ns_avail};
 
-    int limit = page_size > 0 ? page_size : 20;
-    int offset = page > 0 ? page * limit : 0;
-
-    NeteaseSearchResult nr;
-    if (netease_search(keyword, limit, offset, &nr) != 0)
-        return -1;
-
-    if (nr.count <= 0) {
-        netease_search_result_free(&nr);
-        return 0;
-    }
-
-    out->songs = (SongInfo*)calloc((size_t)nr.count, sizeof(SongInfo));
-    out->count = nr.count;
-    out->total = nr.count;
-
-    for (int i = 0; i < nr.count; i++) {
-        SongInfo *si = &out->songs[i];
-        si->id       = strdup(nr.songs[i].id);
-        si->source   = strdup("netease");
-        si->title    = strdup(nr.songs[i].title ? nr.songs[i].title : "");
-        si->artist   = strdup(nr.songs[i].artist ? nr.songs[i].artist : "");
-        si->album    = strdup(nr.songs[i].album ? nr.songs[i].album : "");
-        si->duration_sec = nr.songs[i].duration_ms / 1000;
-        si->cover_url = strdup("");
-        si->aux_label = strdup("");
-    }
-
-    netease_search_result_free(&nr);
-    return 0;
-}
-
-static int ns_get_song_detail(const char *song_id, SongInfo *out) {
-    if (!song_id || !out) return -1;
-    memset(out, 0, sizeof(*out));
-
-    char *title = NULL, *artist = NULL, *album = NULL;
-    int duration_ms = 0;
-    if (netease_get_song_detail(song_id, &title, &artist, &album,
-                                 &duration_ms) != 0)
-        return -1;
-
-    out->id       = strdup(song_id);
-    out->source   = strdup("netease");
-    out->title    = title;
-    out->artist   = artist;
-    out->album    = album;
-    out->duration_sec = duration_ms / 1000;
-    out->cover_url = strdup("");
-    out->aux_label = strdup("");
-    return 0;
-}
-
-static int ns_get_play_url(const char *song_id, int quality,
-                           char *url, size_t url_size) {
-    return netease_get_play_url(song_id, quality, url, url_size);
-}
-
-/* Stub: lyrics not yet implemented via netease-cli */
-static int ns_get_lyric(const char *song_id, char *buf, size_t buf_size) {
-    (void)song_id;
-    if (buf_size > 0) buf[0] = '\0';
-    return -1;
-}
-
-/* Stub: cover not yet implemented */
-static int ns_get_cover_url(const char *song_id, char *buf, size_t buf_size) {
-    (void)song_id;
-    if (buf_size > 0) buf[0] = '\0';
-    return -1;
-}
-
-static bool ns_is_available(void) {
-    return true;
-}
-
-static MusicSource g_netease_source = {
-    .name            = "netease",
-    .priority        = 20,
-    .init            = ns_init,
-    .shutdown        = ns_shutdown,
-    .search          = ns_search,
-    .get_song_detail = ns_get_song_detail,
-    .get_play_url    = ns_get_play_url,
-    .get_lyric       = ns_get_lyric,
-    .get_cover_url   = ns_get_cover_url,
-    .is_available    = ns_is_available,
-};
-
-void netease_source_register(void) {
-    music_source_register(&g_netease_source);
-}
-
-MusicSource* netease_source_create(void) {
-    return &g_netease_source;
-}
+void netease_source_register(void) {music_source_register(&g_ns);}
+MusicSource* netease_source_create(void) {return &g_ns;}
