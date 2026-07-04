@@ -22,7 +22,6 @@ FetchContent_MakeAvailable(ftxui)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(YYJSON REQUIRED IMPORTED_TARGET yyjson)
 pkg_check_modules(YAML   REQUIRED IMPORTED_TARGET yaml-0.1)
-pkg_check_modules(CURL   REQUIRED IMPORTED_TARGET libcurl)
 pkg_check_modules(ALSA   REQUIRED IMPORTED_TARGET alsa)
 pkg_check_modules(PULSE  REQUIRED IMPORTED_TARGET libpulse-simple)
 find_package(Threads REQUIRED)
@@ -101,7 +100,6 @@ target_link_libraries(lmusic PRIVATE
   ftxui::component
   PkgConfig::YYJSON
   PkgConfig::YAML
-  PkgConfig::CURL
   PkgConfig::ALSA
   PkgConfig::PULSE
   Threads::Threads
