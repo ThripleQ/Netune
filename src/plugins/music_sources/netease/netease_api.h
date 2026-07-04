@@ -57,6 +57,7 @@ int  netease_qr_poll(const char *unikey);
 typedef struct {
     unsigned long id;
     char         *name;
+    bool          subscribed;
 } NeteasePlaylistItem;
 
 typedef struct {

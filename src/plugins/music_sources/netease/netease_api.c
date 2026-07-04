@@ -372,6 +372,8 @@ int netease_get_playlists(NeteasePlaylistResult *out) {
         if (id > 0 && name) {
             out->items[oi].id = (unsigned long)id;
             out->items[oi].name = name;
+            /* subscribed: true = favorited, false = created */
+            out->items[oi].subscribed = (strstr(p, "\"subscribed\":true") != NULL);
             oi++;
         } else {
             free(name);

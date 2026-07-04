@@ -1,6 +1,8 @@
 #include "playback_coordinator.h"
 #include "core/decoder_manager.h"
 #include "core/audio_output_mgr.h"
+#include "core/music_source.h"
+#include "core/music_source_manager.h"
 #include "infra/config.h"
 #include "core/event_bus.h"
 #include "infra/log.h"
@@ -10,6 +12,10 @@
 #include <string.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <signal.h>
 
 /* ── Constants ──────────────────────────────────────── */
 #define FRAMES_PER_CHUNK 4096
@@ -74,6 +80,22 @@ static Command cmd_queue_pop(CmdQueue *q) {
 static pthread_t       g_thread;
 static CmdQueue        g_cmd_queue;
 static volatile bool   g_running = false;
+
+/* ── Netease streaming fifo cleanup ─────────────────── */
+static pid_t g_fifo_child = 0;
+static char  g_fifo_path[2048] = "";
+
+static void cleanup_fifo(void) {
+    if (g_fifo_child > 0) {
+        kill(g_fifo_child, SIGKILL);
+        waitpid(g_fifo_child, NULL, 0);
+        g_fifo_child = 0;
+    }
+    if (g_fifo_path[0]) {
+        unlink(g_fifo_path);
+        g_fifo_path[0] = '\0';
+    }
+}
 
 /* ── Event bus handlers ────────────────────────────── */
 static void on_app_startup(const BusEvent *ev, void *ud) { (void)ev; (void)ud; }
@@ -170,6 +192,7 @@ static void* playback_thread(void *arg) {
             case CMD_QUIT:
                 goto cleanup;
             case CMD_STOP:
+                cleanup_fifo();
                 if (state == PS_STOPPED) continue; /* guard feedback loop */
                 if (decoder) { decoder_close(decoder); decoder = NULL; }
                 if (audio)   { audio_output_destroy(audio); audio = NULL; }
@@ -182,11 +205,45 @@ static void* playback_thread(void *arg) {
                 continue;
 
             case CMD_PLAY: {
+                cleanup_fifo();
                 if (decoder) { decoder_close(decoder); decoder = NULL; }
                 if (audio)   { audio_output_destroy(audio); audio = NULL; }
 
-                decoder = decoder_open(cmd.path);
+                /* Resolve netease streaming URL via fifo for non-local paths */
+                char resolved_path[2048];
+                const char *play_path = cmd.path;
+                int is_local = (cmd.path[0] == '/' || cmd.path[0] == '~' || strchr(cmd.path, '.'));
+                if (!is_local) {
+                    char url[1024] = {0};
+                    MusicSource *src = music_source_get("netease");
+                    if (src && src->get_play_url &&
+                        src->get_play_url(cmd.path, 0, url, sizeof(url)) == 0 && url[0]) {
+                        snprintf(resolved_path, sizeof(resolved_path),
+                                 "/tmp/netune_%s.mp3", cmd.path);
+                        mkfifo(resolved_path, 0600);
+                        pid_t child = fork();
+                        if (child == 0) {
+                            execl("/usr/bin/curl", "curl", "-sL", url,
+                                  "-o", resolved_path, NULL);
+                            _exit(1);
+                        }
+                        if (child > 0) {
+                            g_fifo_child = child;
+                            snprintf(g_fifo_path, sizeof(g_fifo_path), "%s", resolved_path);
+                            play_path = resolved_path;
+                            LOG_INFO("Streaming netease: %s", cmd.path);
+                        } else {
+                            unlink(resolved_path);
+                            LOG_ERROR("fork failed for netease stream %s", cmd.path);
+                        }
+                    } else {
+                        LOG_WARN("No play URL for %s", cmd.path);
+                    }
+                }
+
+                decoder = decoder_open(play_path);
                 if (!decoder) {
+                    cleanup_fifo();
                     LOG_ERROR("Cannot open: %s", cmd.path);
                     event_bus_publish(EV_PLAYBACK_ERROR, NULL, 0);
                     continue;
@@ -261,6 +318,7 @@ static void* playback_thread(void *arg) {
                     /* should not happen while playing */
                     break;
                 case CMD_STOP:
+                    cleanup_fifo();
                     if (state == PS_STOPPED) goto next_song;
                     if (decoder) { decoder_close(decoder); decoder = NULL; }
                     if (audio)   { audio_output_destroy(audio); audio = NULL; }
@@ -330,6 +388,7 @@ next_song:
     }
 
 cleanup:
+    cleanup_fifo();
     if (decoder) decoder_close(decoder);
     if (audio)   audio_output_destroy(audio);
     free(pcm_buf);

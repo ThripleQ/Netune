@@ -757,6 +757,9 @@ int run_app(int argc, char **argv) {
                                     std::vector<NeteaseMenuItem> items;
                                     items.push_back({"<< \u8FD4\u56DE", -1, ""});
                                     for (int i = 0; i < pr.count; i++) {
+                                        /* type=2: created (subscribed=false), type=3: favorited (subscribed=true) */
+                                        bool want = (type == 2) ? !pr.items[i].subscribed : pr.items[i].subscribed;
+                                        if (!want) continue;
                                         char id_buf[32];
                                         snprintf(id_buf, sizeof(id_buf), "%llu", (unsigned long long)pr.items[i].id);
                                         items.push_back({pr.items[i].name, 1000, id_buf});
