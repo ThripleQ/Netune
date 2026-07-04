@@ -211,29 +211,49 @@ static void* playback_thread(void *arg) {
                 if (audio)   { audio_output_destroy(audio); audio = NULL; }
 
                 /* Resolve netease streaming URL via fifo for non-local paths */
-                static char resolved_path[2048];
-                static char url_buf[2048];
+                char resolved_path[2048];
                 const char *play_path = cmd.path;
                 int is_local = (cmd.path[0] == '/' || cmd.path[0] == '~' || strchr(cmd.path, '.'));
-                /* Stream netease via FIFO + curl.
-                   MP3 decoder now supports pipes (custom I/O callbacks
-                   in dr_mp3 that handle non-seekable streams). */
                 if (!is_local) {
-                    DIAG("DIAG_PB: non-local path, resolving...");
-                    memset(url_buf, 0, sizeof(url_buf));
-                    DIAG("DIAG_PB: before get");
-                    MusicSource *src = music_source_get("netease");
-                    DIAG("DIAG_PB: after get");
-                    if (src && src->get_play_url &&
-                        src->get_play_url(cmd.path, 0, url_buf, sizeof(url_buf)) == 0 && url_buf[0]) {
+                    fprintf(stderr, "DIAG_PB: non-local path='%s', resolving...\n", cmd.path);
+                    char url_buf[2048] = {0};
+                    /* Fetch song URL via popen — bypasses music_source_get */
+                    char cli_cmd[2048];
+                    snprintf(cli_cmd, sizeof(cli_cmd),
+                             "netease-cli song-url \"%s\" standard 2>/dev/null", cmd.path);
+                    FILE *fp = popen(cli_cmd, "r");
+                    if (fp) {
+                        char jbuf[4096] = {0};
+                        size_t nr = fread(jbuf, 1, sizeof(jbuf)-1, fp);
+                        pclose(fp);
+                        fprintf(stderr, "DIAG_PB: song-url returned %zu bytes\n", nr);
+                        /* Extract URL from {data:[{url:"..."}]} */
+                        const char *k = nr > 0 ? strstr(jbuf, "\"url\"") : NULL;
+                        if (k) {
+                            k += 5;
+                            while (*k == ':' || *k == ' ' || *k == '\t') k++;
+                            if (*k == '"') {
+                                k++;
+                                const char *end = k;
+                                while (*end && *end != '"') end++;
+                                size_t ulen = (size_t)(end - k);
+                                if (ulen > 0 && ulen < sizeof(url_buf)-1) {
+                                    memcpy(url_buf, k, ulen);
+                                    url_buf[ulen] = '\0';
+                                }
+                            }
+                        }
+                    }
+                    if (url_buf[0]) {
                         fprintf(stderr, "DIAG_PB: got url='%.60s'\n", url_buf);
                         snprintf(resolved_path, sizeof(resolved_path),
                                  "/tmp/netune_%s.mp3", cmd.path);
+                        unlink(resolved_path);
                         mkfifo(resolved_path, 0600);
                         pid_t child = fork();
                         if (child == 0) {
                             execl("/usr/bin/curl", "curl", "-sL", url_buf,
-                                  "-o", resolved_path, NULL);
+                                  "--max-time", "30", "-o", resolved_path, NULL);
                             _exit(1);
                         }
                         if (child > 0) {
