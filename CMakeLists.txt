@@ -60,6 +60,7 @@ set(PLUGIN_MUSIC_SOURCES
   src/plugins/music_sources/local/local_source.c
   src/plugins/music_sources/netease/netease_source.c
   src/plugins/music_sources/netease/netease_api.c
+  src/plugins/music_sources/netease/netease_stream.c
 )
 
 set(UI_SOURCES

@@ -3,6 +3,7 @@
 #include "core/audio_output_mgr.h"
 #include "core/music_source.h"
 #include "core/music_source_manager.h"
+#include "plugins/music_sources/netease/netease_stream.h"
 #include "infra/config.h"
 #include "core/event_bus.h"
 #include "infra/log.h"
@@ -83,19 +84,7 @@ static CmdQueue        g_cmd_queue;
 static volatile bool   g_running = false;
 
 /* ── Netease streaming temp file cleanup ────────────── */
-static pid_t g_dl_child = 0;
-static char  g_dl_path[2048] = "";
 
-static void cleanup_dl(void) {
-    if (g_dl_child > 0) {
-        waitpid(g_dl_child, NULL, WNOHANG);
-        g_dl_child = 0;
-    }
-    if (g_dl_path[0]) {
-        unlink(g_dl_path);
-        g_dl_path[0] = '\0';
-    }
-}
 
 /* ── Event bus handlers ────────────────────────────── */
 static void on_app_startup(const BusEvent *ev, void *ud) { (void)ev; (void)ud; }
@@ -175,6 +164,8 @@ static void* playback_thread(void *arg) {
         return NULL;
     }
 
+    FILE *g_stream_fp = NULL;
+
     while (g_running) {
         /* ── Wait for next command (blocking when not playing) ── */
         Command cmd;
@@ -192,7 +183,7 @@ static void* playback_thread(void *arg) {
             case CMD_QUIT:
                 goto cleanup;
             case CMD_STOP:
-                cleanup_dl();
+                netease_stream_close(g_stream_fp); g_stream_fp = NULL;
                 if (state == PS_STOPPED) continue; /* guard feedback loop */
                 if (decoder) { decoder_close(decoder); decoder = NULL; }
                 if (audio)   { audio_output_destroy(audio); audio = NULL; }
@@ -205,70 +196,25 @@ static void* playback_thread(void *arg) {
                 continue;
 
             case CMD_PLAY: {
-                cleanup_dl();
+                netease_stream_close(g_stream_fp); g_stream_fp = NULL;
                 if (decoder) { decoder_close(decoder); decoder = NULL; }
                 if (audio)   { audio_output_destroy(audio); audio = NULL; }
 
-                /* Resolve netease streaming URL via fifo for non-local paths */
-                char resolved_path[2048];
+                char stream_path[1024];
                 const char *play_path = cmd.path;
                 int is_local = (cmd.path[0] == '/' || cmd.path[0] == '~' || strchr(cmd.path, '.'));
                 if (!is_local) {
-                    char url_buf[2048] = {0};
-                    /* Fetch song URL via popen — bypasses music_source_get */
-                    char cli_cmd[2048];
-                    snprintf(cli_cmd, sizeof(cli_cmd),
-                             "netease-cli song-url \"%s\" standard 2>/dev/null", cmd.path);
-                    FILE *fp = popen(cli_cmd, "r");
-                    if (fp) {
-                        char jbuf[4096] = {0};
-                        size_t nr = fread(jbuf, 1, sizeof(jbuf)-1, fp);
-                        pclose(fp);
-                        /* Extract URL from {data:[{url:"..."}]} */
-                        const char *k = nr > 0 ? strstr(jbuf, "\"url\"") : NULL;
-                        if (k) {
-                            k += 5;
-                            while (*k == ':' || *k == ' ' || *k == '\t') k++;
-                            if (*k == '"') {
-                                k++;
-                                const char *end = k;
-                                while (*end && *end != '"') end++;
-                                size_t ulen = (size_t)(end - k);
-                                if (ulen > 0 && ulen < sizeof(url_buf)-1) {
-                                    memcpy(url_buf, k, ulen);
-                                    url_buf[ulen] = '\0';
-                                }
-                            }
-                        }
-                    }
-                    if (url_buf[0]) {
-                        snprintf(resolved_path, sizeof(resolved_path),
-                                 "/tmp/netune_%s.mp3", cmd.path);
-                        unlink(resolved_path);
-                        mkfifo(resolved_path, 0600);
-                        pid_t child = fork();
-                        if (child == 0) {
-                            execl("/usr/bin/curl", "curl", "-sL", url_buf,
-                                  "--max-time", "30", "-o", resolved_path, NULL);
-                            _exit(1);
-                        }
-                        if (child > 0) {
-                            g_dl_child = child;
-                            snprintf(g_dl_path, sizeof(g_dl_path), "%s", resolved_path);
-                            play_path = resolved_path;
-                            LOG_INFO("Streaming netease: %s", cmd.path);
-                        } else {
-                            unlink(resolved_path);
-                            LOG_ERROR("fork failed for netease stream %s", cmd.path);
-                        }
-                    } else {
+                    g_stream_fp = netease_stream_open(cmd.path,
+                                       stream_path, sizeof(stream_path));
+                    if (g_stream_fp)
+                        play_path = stream_path;
+                    else
                         LOG_WARN("No play URL for %s", cmd.path);
-                    }
                 }
 
                 decoder = decoder_open(play_path);
                 if (!decoder) {
-                    cleanup_dl();
+                    netease_stream_close(g_stream_fp); g_stream_fp = NULL;
                     LOG_ERROR("Cannot open: %s", cmd.path);
                     event_bus_publish(EV_PLAYBACK_ERROR, NULL, 0);
                     continue;
@@ -343,7 +289,7 @@ static void* playback_thread(void *arg) {
                     /* should not happen while playing */
                     break;
                 case CMD_STOP:
-                    cleanup_dl();
+                    netease_stream_close(g_stream_fp); g_stream_fp = NULL;
                     if (state == PS_STOPPED) goto next_song;
                     if (decoder) { decoder_close(decoder); decoder = NULL; }
                     if (audio)   { audio_output_destroy(audio); audio = NULL; }
@@ -413,7 +359,7 @@ next_song:
     }
 
 cleanup:
-    cleanup_dl();
+    netease_stream_close(g_stream_fp); g_stream_fp = NULL;
     if (decoder) decoder_close(decoder);
     if (audio)   audio_output_destroy(audio);
     free(pcm_buf);
