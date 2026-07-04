@@ -71,6 +71,9 @@ struct AppState {
     /* help screen */
     bool show_help = false;
 
+    /* marquee width: computed from terminal size, updated per-frame */
+    int  song_panel_width = 50;
+
     /* search */
     bool search_active = false;
     std::string search_query;
@@ -98,6 +101,7 @@ public:
     void set_groups(const std::vector<SongGroup> &grps);
     void set_group_index(int idx);       /* switch group, updates right panel */
     void set_active_panel(int panel);    /* 0=left, 1=right */
+    void set_song_panel_width(int cols);
     void set_playlist(const std::vector<SongInfo> &list, int index);
     void set_selected_index(int idx);
     void set_loop_mode(LoopMode mode);

@@ -58,6 +58,7 @@ void config_free(Config *cfg) {
 
 /* resolve dotted key path: "a.b.c" -> obj["a"]["b"]["c"] */
 static yyjson_val* resolve(Config *cfg, const char *key) {
+    if (!cfg) return NULL;
     if (!cfg->root) return NULL;
     yyjson_val *v = cfg->root;
 

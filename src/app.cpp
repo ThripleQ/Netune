@@ -128,7 +128,7 @@ static void do_netease_search(const char *query) {
     }
 
     NeteaseSearchResult nr;
-    if (netease_search(query, 30, 0, &nr) != 0) return;
+    if (netease_search(query, 100, 0, &nr) != 0) return;
 
     std::vector<SongInfo> vec;
     vec.reserve(nr.count);
@@ -151,6 +151,7 @@ static void do_netease_search(const char *query) {
 
     /* Deep copy for StateStore (vec holds shallow ownership) */
     StateStore::instance().set_search_results(vec, (int)vec.size());
+    fprintf(stderr, "\nDIAG: search loaded %zu results\n", vec.size());
 }
 
 /* Free search cache on shutdown */
@@ -437,6 +438,8 @@ int run_app(int argc, char **argv) {
     auto component = Renderer([&]() -> Element {
         event_bus_poll();
         const AppState &s = state.state();
+
+        state.set_song_panel_width(screen.dimx() - 29);
 
         /* Login polling: every ~2s while waiting for QR scan;
            auto-close 2s after successful login */
@@ -728,15 +731,16 @@ int run_app(int argc, char **argv) {
                             StateStore::instance().set_search_active(true);
                             StateStore::instance().set_search_query("");
                         } else if (!pl_id.empty()) {
-                            long playlist_id = atol(pl_id.c_str());
+                            unsigned long playlist_id = strtoul(pl_id.c_str(), NULL, 10);
                             SearchResult sr;
                             int ret = netease_get_playlist_songs(playlist_id, &sr);
                             /* Fallback: liked songs playlist uses /likelist, not /playlist/detail */
                             if (ret != 0 || sr.count == 0) {
-                                long uid = netease_get_user_id();
+                                unsigned long uid = netease_get_user_id();
                                 ret = netease_get_liked_songs(uid, &sr);
                             }
                             if (ret == 0 && sr.count > 0) {
+                                fprintf(stderr, "\nDIAG: playlist loaded ret=%d count=%d\n", ret, sr.count);
                                 std::vector<SongInfo> vec;
                                 vec.reserve(sr.count);
                                 for (int i = 0; i < sr.count; i++) {
@@ -751,7 +755,8 @@ int run_app(int argc, char **argv) {
                             }
                         } else if (type >= 0 && type <= 1) {
                             SearchResult sr;
-                            if (netease_load_menu(type, 50, &sr) == 0 && sr.count > 0) {
+                            if (netease_load_menu(type, 200, &sr) == 0 && sr.count > 0) {
+                                fprintf(stderr, "\nDIAG: load_menu type=%d count=%d\n", type, sr.count);
                                 std::vector<SongInfo> vec;
                                 vec.reserve(sr.count);
                                 for (int i = 0; i < sr.count; i++) {
@@ -765,8 +770,8 @@ int run_app(int argc, char **argv) {
                                 StateStore::instance().set_active_panel(1);
                             }
                         } else if (type == 2 || type == 3) {
-                            long uid = netease_get_user_id();
-                            if (uid <= 0) {
+                            unsigned long uid = netease_get_user_id();
+                            if (uid == 0) {
                                 start_login();
                             } else {
                                 int mine_only = (type == 2) ? 1 : 2;
@@ -776,7 +781,7 @@ int run_app(int argc, char **argv) {
                                     items.push_back({"<< \u8FD4\u56DE", -1, ""});
                                     for (int i = 0; i < pr.count; i++) {
                                         char id_buf[32];
-                                        snprintf(id_buf, sizeof(id_buf), "%ld", pr.items[i].id);
+                                        snprintf(id_buf, sizeof(id_buf), "%lu", pr.items[i].id);
                                         items.push_back({pr.items[i].name, 1000, id_buf});
                                     }
                                     netease_playlist_result_free(&pr);

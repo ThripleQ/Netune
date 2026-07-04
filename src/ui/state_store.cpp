@@ -196,3 +196,8 @@ void StateStore::set_group_index(int idx) {
 void StateStore::set_active_panel(int panel) {
     state_.active_panel = (panel == 0 || panel == 1) ? panel : 0;
 }
+
+void StateStore::set_song_panel_width(int cols) {
+    if (cols < 20) cols = 20;
+    state_.song_panel_width = cols;
+}

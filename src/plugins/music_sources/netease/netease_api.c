@@ -136,7 +136,7 @@ static yyjson_doc* parse_ok(WriteBuf *buf) {
 
 /* ── Cookie persistence ─────────────────────────────── */
 /* ── User ID (stored after login) ──────────────────── */
-static long g_user_uid = 0;
+static unsigned long g_user_uid = 0;
 
 static void cookie_set_path(void) {
     if (g_cookie_path[0]) return;
@@ -181,7 +181,7 @@ static void cookie_load(void) {
     }
     fclose(fp);
     if (g_cookie[0])
-        LOG_INFO("Netease cookie restored: %s (uid=%ld)", g_account_name, g_user_uid);
+        LOG_INFO("Netease cookie restored: %s (uid=%lu)", g_account_name, g_user_uid);
 }
 
 /* ── Server lifecycle ────────────────────────────────── */
@@ -277,18 +277,18 @@ static int start_server(void) {
     return -1;
 }
 
-long netease_get_user_id(void) {
+unsigned long netease_get_user_id(void) {
     return g_user_uid;
 }
 
 /* ── User playlists ─────────────────────────────────── */
-int netease_get_playlists(long uid, int mine_only, NeteasePlaylistResult *out) {
+int netease_get_playlists(unsigned long uid, int mine_only, NeteasePlaylistResult *out) {
     if (!out) return -1;
     memset(out, 0, sizeof(*out));
-    if (uid <= 0) return -1;
+    if (uid == 0) return -1;
 
     char path[256];
-    snprintf(path, sizeof(path), "/user/playlist?uid=%ld&limit=100", uid);
+    snprintf(path, sizeof(path), "/user/playlist?uid=%lu&limit=100", uid);
 
     WriteBuf buf = {0};
     if (api_get(path, &buf) != 0) return -1;
@@ -311,9 +311,9 @@ int netease_get_playlists(long uid, int mine_only, NeteasePlaylistResult *out) {
     yyjson_val *pl;
     int oi = 0;
     yyjson_arr_foreach(playlists, idx, max, pl) {
-        long pid  = 0;
+        unsigned long pid  = 0;
         yyjson_val *v = yyjson_obj_get(pl, "id");
-        if (v) pid = (long)yyjson_get_int(v);
+        if (v) pid = (unsigned long)yyjson_get_uint(v);
 
         v = yyjson_obj_get(pl, "name");
         const char *name = v ? yyjson_get_str(v) : "";
@@ -351,75 +351,59 @@ void netease_playlist_result_free(NeteasePlaylistResult *r) {
 }
 
 /* ── Playlist songs ─────────────────────────────────── */
-int netease_get_playlist_songs(long playlist_id, SearchResult *out) {
+int netease_get_playlist_songs(unsigned long playlist_id, SearchResult *out) {
     if (!out) return -1;
     memset(out, 0, sizeof(*out));
 
     char path[256];
-    snprintf(path, sizeof(path), "/playlist/detail?id=%ld", playlist_id);
+    snprintf(path, sizeof(path), "/playlist/track/all?id=%lu&limit=100", playlist_id);
 
     WriteBuf buf = {0};
     if (api_get(path, &buf) != 0) return -1;
 
-    yyjson_doc *doc = yyjson_read(buf.data, buf.len, 0);
+        yyjson_doc *doc = yyjson_read(buf.data, buf.len, 0);
     free(buf.data);
     if (!doc) return -1;
 
     yyjson_val *root = yyjson_doc_get_root(doc);
-    yyjson_val *pl = yyjson_obj_get(root, "playlist");
-    yyjson_val *tracks = pl ? yyjson_obj_get(pl, "tracks") : NULL;
-    if (!tracks) { yyjson_doc_free(doc); return 0; }
+    yyjson_val *songs = yyjson_obj_get(root, "songs");
+    if (!songs || !yyjson_is_arr(songs)) { yyjson_doc_free(doc); return 0; }
 
-    size_t n = yyjson_arr_size(tracks);
-    size_t limit = n > 50 ? 50 : n;
+    size_t n = yyjson_arr_size(songs);
+    size_t limit = n > 100 ? 100 : n;
     out->songs = (SongInfo*)calloc(limit, sizeof(SongInfo));
     out->count = (int)limit;
     out->total = (int)n;
 
-    size_t idx, max;
-    yyjson_val *tr;
-    int oi = 0;
-    yyjson_arr_foreach(tracks, idx, max, tr) {
+    size_t i, m; yyjson_val *s; int oi = 0;
+    yyjson_arr_foreach(songs, i, m, s) {
         if (oi >= (int)limit) break;
         SongInfo *si = &out->songs[oi++];
-        yyjson_val *v;
-
-        v = yyjson_obj_get(tr, "id");
-        if (v) {
-            char id_buf[32];
-            snprintf(id_buf, sizeof(id_buf), "%llu", (unsigned long long)yyjson_get_int(v));
-            si->id = strdup(id_buf);
-        }
+        memset(si, 0, sizeof(*si));
+        yyjson_val *v = yyjson_obj_get(s, "id");
+        if (v) { char ib[32]; snprintf(ib, sizeof(ib), "%llu", (unsigned long long)yyjson_get_uint(v)); si->id = strdup(ib); }
         si->source = strdup("netease");
-
-        v = yyjson_obj_get(tr, "name");
+        v = yyjson_obj_get(s, "name");
         si->title = v ? strdup(yyjson_get_str(v)) : strdup("");
-
-        yyjson_val *artists = yyjson_obj_get(tr, "ar");
-        if (!artists) artists = yyjson_obj_get(tr, "artists");
-        if (artists && yyjson_arr_size(artists) > 0) {
-            v = yyjson_obj_get(yyjson_arr_get(artists, 0), "name");
+        yyjson_val *ar = yyjson_obj_get(s, "ar");
+        if (ar && yyjson_arr_size(ar) > 0) {
+            v = yyjson_obj_get(yyjson_arr_get(ar, 0), "name");
             si->artist = v ? strdup(yyjson_get_str(v)) : strdup("");
-        } else {
-            si->artist = strdup("");
-        }
-
-        v = yyjson_obj_get(tr, "dt");
-        if (!v) v = yyjson_obj_get(tr, "duration");
+        } else si->artist = strdup("");
+        v = yyjson_obj_get(s, "dt");
         si->duration_sec = v ? (int)(yyjson_get_int(v) / 1000) : 0;
     }
-
     yyjson_doc_free(doc);
-    return 0;
+    return out->count > 0 ? 0 : -1;
 }
 
 /* ── Liked songs (红心歌单) ────────────────────────── */
-int netease_get_liked_songs(long uid, SearchResult *out) {
-    if (!out || uid <= 0) return -1;
+int netease_get_liked_songs(unsigned long uid, SearchResult *out) {
+    if (!out || uid == 0) return -1;
     memset(out, 0, sizeof(*out));
 
     char path[256];
-    snprintf(path, sizeof(path), "/likelist?uid=%ld", uid);
+    snprintf(path, sizeof(path), "/likelist?uid=%lu", uid);
     WriteBuf buf = {0};
     if (api_get(path, &buf) != 0) return -1;
 
@@ -439,9 +423,9 @@ int netease_get_liked_songs(long uid, SearchResult *out) {
     size_t idx, max;
     yyjson_val *idv;
     yyjson_arr_foreach(ids, idx, max, idv) {
-        long long id_val = yyjson_get_int(idv);
+        unsigned long long id_val = yyjson_get_uint(idv);
         char tmp[32];
-        snprintf(tmp, sizeof(tmp), "%s%lld", id_list[0] ? "," : "", id_val);
+        snprintf(tmp, sizeof(tmp), "%s%llu", id_list[0] ? "," : "", id_val);
         strncat(id_list, tmp, sizeof(id_list) - strlen(id_list) - 1);
         if (strlen(id_list) > 4000) break;
     }
@@ -470,7 +454,7 @@ int netease_get_liked_songs(long uid, SearchResult *out) {
             yyjson_val *v = yyjson_obj_get(s, "id");
             if (v) {
                 char id_buf[32];
-                snprintf(id_buf, sizeof(id_buf), "%lld", (long long)yyjson_get_int(v));
+                snprintf(id_buf, sizeof(id_buf), "%llu", (unsigned long long)yyjson_get_uint(v));
                 si->id = strdup(id_buf);
             }
             si->source = strdup("netease");
@@ -513,7 +497,7 @@ int netease_api_init(void) {
         LOG_INFO("Saved cookie loaded, refreshing login status...");
         netease_refresh_login();
         if (g_user_uid > 0) {
-            LOG_INFO("Cookie persisted from previous session: %s (uid=%ld)",
+            LOG_INFO("Cookie persisted from previous session: %s (uid=%lu)",
                      g_account_name, g_user_uid);
         }
     }
@@ -594,7 +578,7 @@ int netease_search(const char *keyword, int limit, int offset,
         if (v) {
             char id_buf[32];
             snprintf(id_buf, sizeof(id_buf), "%llu",
-                     (unsigned long long)yyjson_get_int(v));
+                     (unsigned long long)yyjson_get_uint(v));
             s->id = strdup(id_buf);
         }
 
@@ -742,9 +726,9 @@ int netease_qr_poll(const char *unikey) {
     if (ret == 0) {
         LOG_INFO("QR login success (803)");
         netease_refresh_login();
-        LOG_INFO("After refresh: uid=%ld name=%s", g_user_uid, g_account_name);
+        LOG_INFO("After refresh: uid=%lu name=%s", g_user_uid, g_account_name);
         cookie_save();
-        LOG_INFO("Cookie saved to %s (uid=%ld)", g_cookie_path, g_user_uid);
+        LOG_INFO("Cookie saved to %s (uid=%lu)", g_cookie_path, g_user_uid);
     }
 
     yyjson_doc_free(doc);
@@ -777,14 +761,14 @@ void netease_refresh_login(void) {
     yyjson_val *profile = yyjson_obj_get(data, "profile");
     if (profile) {
         yyjson_val *uid_v = yyjson_obj_get(profile, "userId");
-        if (uid_v) g_user_uid = (long)yyjson_get_int(uid_v);
+        if (uid_v) g_user_uid = (unsigned long)yyjson_get_uint(uid_v);
 
         yyjson_val *nick = yyjson_obj_get(profile, "nickname");
         if (nick) snprintf(g_account_name, sizeof(g_account_name), "%s", yyjson_get_str(nick));
     }
 
     if (g_account_name[0])
-        LOG_INFO("Netease login refreshed: %s (uid=%ld)", g_account_name, g_user_uid);
+        LOG_INFO("Netease login refreshed: %s (uid=%lu)", g_account_name, g_user_uid);
     else
         LOG_WARN("Netease /login/status returned no profile (cookie may be invalid)");
 
@@ -942,15 +926,17 @@ int netease_load_menu(int type, int limit, SearchResult *out) {
     if (!out) return -1;
     memset(out, 0, sizeof(*out));
 
-    const char *path = NULL;
+    char path_buf[256];
+    const char *tmpl = NULL;
     switch (type) {
-    case 0:  path = "/personalized/newsong?limit=30"; break; /* 每日推荐 */
-    case 1:  path = "/personalized?limit=30"; break;          /* 推荐歌单 */
+    case 0:  tmpl = "/personalized/newsong?limit=%d"; break;
+    case 1:  tmpl = "/personalized?limit=%d"; break;
     default: return -1;
     }
+    snprintf(path_buf, sizeof(path_buf), tmpl, limit > 0 ? limit : 30);
 
     WriteBuf buf = {0};
-    if (api_get(path, &buf) != 0) return -1;
+    if (api_get(path_buf, &buf) != 0) return -1;
 
     yyjson_doc *doc = yyjson_read(buf.data, buf.len, 0);
     free(buf.data);
@@ -983,7 +969,7 @@ int netease_load_menu(int type, int limit, SearchResult *out) {
         if (v) {
             char id_buf[32];
             snprintf(id_buf, sizeof(id_buf), "%llu",
-                     (unsigned long long)yyjson_get_int(v));
+                     (unsigned long long)yyjson_get_uint(v));
             si->id = strdup(id_buf);
         }
         si->source = strdup("netease");

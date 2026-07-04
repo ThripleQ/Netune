@@ -64,7 +64,7 @@ bool netease_is_logged_in(void);
 const char* netease_account_name(void);
 
 /* Get user ID after login (0 if not logged in) */
-long netease_get_user_id(void);
+unsigned long netease_get_user_id(void);
 
 /* Refresh login status: call /login/status to populate uid and account name.
    Should be called after QR login succeeds (code 803) to get the profile. */
@@ -72,10 +72,10 @@ void netease_refresh_login(void);
 
 /* ── User playlists ──────────────────────────────────── */
 typedef struct {
-    long   id;
-    char  *name;
-    int    track_count;
-    bool   subscribed;  /* true = favorited, false = created */
+    unsigned long id;
+    char          *name;
+    int            track_count;
+    bool           subscribed;  /* true = favorited, false = created */
 } NeteasePlaylist;
 
 typedef struct {
@@ -85,14 +85,14 @@ typedef struct {
 
 /* Get user's playlists (requires login).
  * mine_only: 0=all, 1=created only, 2=subscribed only */
-int netease_get_playlists(long uid, int mine_only, NeteasePlaylistResult *out);
+int netease_get_playlists(unsigned long uid, int mine_only, NeteasePlaylistResult *out);
 void netease_playlist_result_free(NeteasePlaylistResult *r);
 
 /* Get songs in a playlist */
-int netease_get_playlist_songs(long playlist_id, SearchResult *out);
+int netease_get_playlist_songs(unsigned long playlist_id, SearchResult *out);
 
 /* Get liked songs (红心歌单). Uses /likelist endpoint. */
-int netease_get_liked_songs(long uid, SearchResult *out);
+int netease_get_liked_songs(unsigned long uid, SearchResult *out);
 
 /* ── Song detail / play URL ─────────────────────────── */
 /* Get song detail by id. out fields are allocated strings. */
