@@ -55,40 +55,25 @@ static void on_signal(int sig) { (void)sig; g_running = false; }
 static std::string g_login_unikey;
 static int         g_login_poll_tick = 0;
 
-/* Generate QR code text from a full URL */
+/* Generate QR code text using netease-cli's built-in qr-render */
 static std::string gen_qr(const char *url) {
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd),
-        "qrencode -t UTF8 '%s' 2>/dev/null", url);
-    FILE *fp = popen(cmd, "r");
-    if (!fp) return "";
-    char buf[8192] = {0};
-    size_t n = fread(buf, 1, sizeof(buf) - 1, fp);
-    pclose(fp);
-    buf[n] = '\0';
-    return std::string(buf);
+    char *qr = netease_qr_render(url);
+    if (!qr) return "";
+    std::string s(qr);
+    free(qr);
+    return s;
 }
 
-/* Start the QR login flow:
-   1) get unikey from /login/qr/key
-   2) get full QR URL (with chainId) from /login/qr/create
-   3) generate ASCII QR code from the full URL */
+/* Start the QR login flow using netease-cli */
 static void start_login(void) {
     StateStore::instance().set_login_state(1, "Contacting server...", "");
     char unikey[128] = {0};
     char qr_url[512] = {0};
     if (netease_qr_get_key(unikey, sizeof(unikey), qr_url, sizeof(qr_url)) == 0
         && unikey[0]) {
-        /* Get full QR URL with chainId */
-        char full_url[512] = {0};
-        if (netease_qr_create(unikey, full_url, sizeof(full_url)) != 0) {
-            /* Fallback: construct URL manually (without chainId) */
-            snprintf(full_url, sizeof(full_url),
-                     "https://music.163.com/login?codekey=%s", unikey);
-        }
         g_login_unikey = unikey;
         g_login_poll_tick = 0;
-        std::string qr = gen_qr(full_url);
+        std::string qr = gen_qr(qr_url);
         StateStore::instance().set_login_state(2,
             "Scan with Netease Music App", qr);
     } else {
@@ -731,14 +716,8 @@ int run_app(int argc, char **argv) {
                             StateStore::instance().set_search_active(true);
                             StateStore::instance().set_search_query("");
                         } else if (!pl_id.empty()) {
-                            unsigned long playlist_id = strtoul(pl_id.c_str(), NULL, 10);
                             SearchResult sr;
-                            int ret = netease_get_playlist_songs(playlist_id, &sr);
-                            /* Fallback: liked songs playlist uses /likelist, not /playlist/detail */
-                            if (ret != 0 || sr.count == 0) {
-                                unsigned long uid = netease_get_user_id();
-                                ret = netease_get_liked_songs(uid, &sr);
-                            }
+                            int ret = netease_get_playlist_songs(pl_id.c_str(), &sr);
                             if (ret == 0 && sr.count > 0) {
                                 fprintf(stderr, "\nDIAG: playlist loaded ret=%d count=%d\n", ret, sr.count);
                                 std::vector<SongInfo> vec;
@@ -770,18 +749,16 @@ int run_app(int argc, char **argv) {
                                 StateStore::instance().set_active_panel(1);
                             }
                         } else if (type == 2 || type == 3) {
-                            unsigned long uid = netease_get_user_id();
-                            if (uid == 0) {
+                            if (!netease_is_logged_in()) {
                                 start_login();
                             } else {
-                                int mine_only = (type == 2) ? 1 : 2;
                                 NeteasePlaylistResult pr;
-                                if (netease_get_playlists(uid, mine_only, &pr) == 0 && pr.count > 0) {
+                                if (netease_get_playlists(&pr) == 0 && pr.count > 0) {
                                     std::vector<NeteaseMenuItem> items;
                                     items.push_back({"<< \u8FD4\u56DE", -1, ""});
                                     for (int i = 0; i < pr.count; i++) {
                                         char id_buf[32];
-                                        snprintf(id_buf, sizeof(id_buf), "%lu", pr.items[i].id);
+                                        snprintf(id_buf, sizeof(id_buf), "%llu", (unsigned long long)pr.items[i].id);
                                         items.push_back({pr.items[i].name, 1000, id_buf});
                                     }
                                     netease_playlist_result_free(&pr);

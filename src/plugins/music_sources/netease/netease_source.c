@@ -7,7 +7,10 @@
 
 /* ── MusicSource implementation ──────────────────────── */
 static int ns_init(void) {
-    netease_api_init();
+    if (netease_api_init() != 0) {
+        LOG_WARN("Netease source unavailable");
+        return -1;
+    }
     LOG_INFO("Netease source initialized");
     return 0;
 }
@@ -80,21 +83,27 @@ static int ns_get_play_url(const char *song_id, int quality,
     return netease_get_play_url(song_id, quality, url, url_size);
 }
 
+/* Stub: lyrics not yet implemented via netease-cli */
 static int ns_get_lyric(const char *song_id, char *buf, size_t buf_size) {
-    return netease_get_lyric(song_id, buf, buf_size);
+    (void)song_id;
+    if (buf_size > 0) buf[0] = '\0';
+    return -1;
 }
 
+/* Stub: cover not yet implemented */
 static int ns_get_cover_url(const char *song_id, char *buf, size_t buf_size) {
-    return netease_get_cover_url(song_id, buf, buf_size);
+    (void)song_id;
+    if (buf_size > 0) buf[0] = '\0';
+    return -1;
 }
 
 static bool ns_is_available(void) {
-    return true; /* always available if compiled in */
+    return true;
 }
 
 static MusicSource g_netease_source = {
     .name            = "netease",
-    .priority        = 20,  /* lower priority than local */
+    .priority        = 20,
     .init            = ns_init,
     .shutdown        = ns_shutdown,
     .search          = ns_search,
