@@ -17,6 +17,8 @@
 #include <sys/wait.h>
 #include <signal.h>
 
+#define DIAG(msg) write(STDERR_FILENO, msg "\n", sizeof(msg))
+
 /* ── Constants ──────────────────────────────────────── */
 #define FRAMES_PER_CHUNK 4096
 #define PROGRESS_INTERVAL_MS 16
@@ -209,23 +211,28 @@ static void* playback_thread(void *arg) {
                 if (audio)   { audio_output_destroy(audio); audio = NULL; }
 
                 /* Resolve netease streaming URL via fifo for non-local paths */
-                char resolved_path[2048];
+                static char resolved_path[2048];
+                static char url_buf[2048];
                 const char *play_path = cmd.path;
                 int is_local = (cmd.path[0] == '/' || cmd.path[0] == '~' || strchr(cmd.path, '.'));
                 /* Stream netease via FIFO + curl.
                    MP3 decoder now supports pipes (custom I/O callbacks
                    in dr_mp3 that handle non-seekable streams). */
                 if (!is_local) {
-                    char url[2048] = {0};
+                    DIAG("DIAG_PB: non-local path, resolving...");
+                    memset(url_buf, 0, sizeof(url_buf));
+                    DIAG("DIAG_PB: before get");
                     MusicSource *src = music_source_get("netease");
+                    DIAG("DIAG_PB: after get");
                     if (src && src->get_play_url &&
-                        src->get_play_url(cmd.path, 0, url, sizeof(url)) == 0 && url[0]) {
+                        src->get_play_url(cmd.path, 0, url_buf, sizeof(url_buf)) == 0 && url_buf[0]) {
+                        fprintf(stderr, "DIAG_PB: got url='%.60s'\n", url_buf);
                         snprintf(resolved_path, sizeof(resolved_path),
                                  "/tmp/netune_%s.mp3", cmd.path);
                         mkfifo(resolved_path, 0600);
                         pid_t child = fork();
                         if (child == 0) {
-                            execl("/usr/bin/curl", "curl", "-sL", url,
+                            execl("/usr/bin/curl", "curl", "-sL", url_buf,
                                   "-o", resolved_path, NULL);
                             _exit(1);
                         }
@@ -239,6 +246,7 @@ static void* playback_thread(void *arg) {
                             LOG_ERROR("fork failed for netease stream %s", cmd.path);
                         }
                     } else {
+                        fprintf(stderr, "DIAG_PB: get_play_url failed or empty url\n");
                         LOG_WARN("No play URL for %s", cmd.path);
                     }
                 }

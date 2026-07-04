@@ -22,21 +22,6 @@ static size_t stream_read(void *pUserData, void *pBufferOut, size_t bytesToRead)
     return n;
 }
 
-static drmp3_bool32 stream_seek(void *pUserData, int offset, drmp3_seek_origin origin) {
-    StreamIO *io = (StreamIO*)pUserData;
-    /* For pipes, we can only seek to the start (position 0).
-       SEEK_END and SEEK_CUR will fail gracefully — dr_mp3 handles this
-       by skipping ID3 tag detection and using DRMP3_UINT64_MAX for length. */
-    if (origin == DRMP3_SEEK_SET && offset == 0) {
-        /* Can't rewind a pipe, but dr_mp3 only calls SEEK_SET|0
-           after a failed SEEK_END to "reset" the cursor.
-           For a pipe this is a no-op; the cursor is already at 0. */
-        io->bytes_read = 0;
-        return DRMP3_TRUE;
-    }
-    return DRMP3_FALSE;  /* SEEK_END, SEEK_CUR, or non-zero SEEK_SET all fail */
-}
-
 static drmp3_bool32 stream_tell(void *pUserData, drmp3_int64 *pCursor) {
     StreamIO *io = (StreamIO*)pUserData;
     if (pCursor) *pCursor = io->bytes_read;
@@ -59,8 +44,10 @@ static void* mp3_open(const char *path) {
     h->io.fp = fopen(path, "rb");
     if (!h->io.fp) { free(h); return NULL; }
 
+    /* Pass NULL for onSeek — dr_mp3 will use read+discard for ID3 tags
+       instead of seeking, which works on pipes/FIFOs. */
     drmp3_bool32 ok = drmp3_init_internal(&h->mp3,
-        stream_read, stream_seek, stream_tell,
+        stream_read, NULL, stream_tell,
         NULL,                     /* onMeta */
         &h->io,                   /* pUserData */
         NULL,                     /* pUserDataMeta */

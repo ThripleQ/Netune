@@ -781,6 +781,8 @@ int run_app(int argc, char **argv) {
                 playlist_manager_set_index(idx);
                 const auto &sel = cur.playlist[idx];
                 const char *path = sel.id ? sel.id : "";
+                fprintf(stderr, "\nDIAG_PLAY: id='%s' source='%s'\n",
+                        path, sel.source ? sel.source : "(null)");
                 StateStore::instance().set_current_song(sel);
                 event_bus_publish(EV_PLAYBACK_START, (void*)path, strlen(path) + 1);
             }
