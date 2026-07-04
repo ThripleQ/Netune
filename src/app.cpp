@@ -785,7 +785,11 @@ int run_app(int argc, char **argv) {
             if (cur.playlist.empty()) return true;
             if (cur.active_panel == 1) {
                 int idx = cur.selected_index;
-                playlist_manager_set_index(idx);
+                /* Sync playlist manager with current UI playlist (support auto-advance) */
+                {   std::vector<const char*> paths;
+                    for (auto &s : cur.playlist) paths.push_back(s.id);
+                    playlist_manager_sync(paths.data(), (int)paths.size());
+                    playlist_manager_set_index(idx); }
                 const auto &sel = cur.playlist[idx];
                 const char *path = sel.id ? sel.id : "";
                 StateStore::instance().set_current_song(sel);
