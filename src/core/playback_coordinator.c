@@ -206,6 +206,7 @@ static void* playback_thread(void *arg) {
 
                 if (!is_local) {
                     char url[2048] = {0};
+                    LOG_INFO("PB: path=%s resolving netease URL", cmd.path);
                     MusicSource *src = music_source_get("netease");
                     if (src && src->get_play_url &&
                         src->get_play_url(cmd.path, 0, url, sizeof(url)) == 0 && url[0]) {
@@ -213,12 +214,13 @@ static void* playback_thread(void *arg) {
                         unlink(dl_path);
                         char curl_cmd[3072]; snprintf(curl_cmd,sizeof(curl_cmd),
                             "curl -sL --max-time 60 \"%s\" -o \"%s\"",url,dl_path);
+                        LOG_INFO("PB: downloading %s ...", dl_path);
                         if (system(curl_cmd)==0) {
                             g_dl_path = strdup(dl_path);
                             play_path = dl_path;
                         }
-                        else { unlink(dl_path); dl_path[0]=0; LOG_WARN("Download failed %s",cmd.path); }
-                    } else { LOG_WARN("No play URL for %s",cmd.path); }
+                        else { unlink(dl_path); dl_path[0]=0; LOG_WARN("PB: download FAILED %s",cmd.path); }
+                    } else { LOG_WARN("PB: no URL for %s",cmd.path); }
                 }
 
                 decoder = decoder_open(play_path);

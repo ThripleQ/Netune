@@ -208,12 +208,6 @@ static void ev_playback_finish(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
     const auto &st = StateStore::instance().state();
     int total = (int)st.playlist.size();
-    if (total <= 0) {
-        StateStore::instance().set_playback_state(PlaybackState::Stopped);
-        return;
-    }
-    /* Calculate next index from UI playlist — not playlist_manager
-       which may contain stale data from a different song source. */
     int idx = st.selected_index;
     int next = -1;
     switch (st.loop_mode) {
@@ -221,8 +215,14 @@ static void ev_playback_finish(const BusEvent *ev, void *data) {
     case LoopMode::Playlist: next = (idx + 1 >= total) ? 0 : idx + 1; break;
     default:                next = (idx + 1 >= total) ? -1 : idx + 1; break;
     }
+    LOG_INFO("ADV: total=%d idx=%d next=%d loop=%d", total, idx, next, (int)st.loop_mode);
+    if (total <= 0) {
+        StateStore::instance().set_playback_state(PlaybackState::Stopped);
+        return;
+    }
     if (next >= 0 && next < total) {
         const char *path = st.playlist[next].id;
+        LOG_INFO("ADV: path=%s", path ? path : "null");
         if (path && path[0]) {
             StateStore::instance().set_selected_index(next);
             StateStore::instance().set_current_song(st.playlist[next]);
