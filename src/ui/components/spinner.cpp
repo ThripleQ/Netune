@@ -6,8 +6,20 @@
 using namespace ftxui;
 
 Element render_spinner(const AppState &s) {
-    if (!s.loading) return text("");
     static int frame = 0;
+    static bool was_loading = false;
+
+    if (!s.loading) {
+        was_loading = false;
+        return text("");
+    }
+
+    /* reset on new loading session */
+    if (!was_loading) {
+        frame = 0;
+        was_loading = true;
+    }
+
     frame++;
     const char *frames[] = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"};
     auto &f = frames[(frame / 8) % 10];

@@ -255,10 +255,57 @@ static void ev_playlist_loaded(const BusEvent *ev, void *data) {
         song_info_free(&ld->songs[i]);
     }
     free(ld->songs);
-    free(ld);
+    /* Note: ev->data is freed by event_bus_poll, do NOT free(ld) */
     StateStore::instance().set_playlist(vec, 0);
     StateStore::instance().set_active_panel(1);
     StateStore::instance().set_loading(false);
+}
+
+/* ── Menu songs loaded (daily recommend etc.) ────────── */
+static void ev_menu_loaded(const BusEvent *ev, void *data) {
+    (void)data;
+    auto *ld = (LoadedSongs*)ev->data;
+    if (!ld || ld->count <= 0) {
+        StateStore::instance().set_loading(false);
+        return;
+    }
+    std::vector<SongInfo> vec;
+    vec.reserve(ld->count);
+    for (int i = 0; i < ld->count; i++) {
+        SongInfo copy = {};
+        song_info_copy(&copy, &ld->songs[i]);
+        vec.push_back(copy);
+        song_info_free(&ld->songs[i]);
+    }
+    free(ld->songs);
+    /* Note: ev->data is freed by event_bus_poll, do NOT free(ld) */
+    StateStore::instance().set_playlist(vec, 0);
+    StateStore::instance().set_active_panel(1);
+    StateStore::instance().set_loading(false);
+}
+
+/* ── Playlist list loaded (netease folders) ──────────── */
+static void ev_playlist_list_loaded(const BusEvent *ev, void *data) {
+    (void)data;
+    StateStore::instance().set_loading(false);
+    if (!ev->data) return;
+    auto *ld = (LoadedSongs*)ev->data;
+    if (ld->count <= 0 || !ld->songs) {
+        /* ev->data freed by event_bus_poll, do NOT free(ld) */
+        return;
+    }
+    std::vector<NeteaseMenuItem> items;
+    items.push_back({"<< \u8FD4\u56DE", -1, ""});
+    for (int i = 0; i < ld->count; i++) {
+        char id_buf[32];
+        snprintf(id_buf, sizeof(id_buf), "%s", ld->songs[i].id);
+        items.push_back({ld->songs[i].title, 1000, id_buf});
+        song_info_free(&ld->songs[i]);
+    }
+    free(ld->songs);
+    /* Note: ev->data is freed by event_bus_poll, do NOT free(ld) */
+    StateStore::instance().set_netease_menu(items);
+    StateStore::instance().set_netease_selected(0);
 }
 
 static void ev_volume_changed(const BusEvent *ev, void *data) {
@@ -337,6 +384,8 @@ int run_app(int argc, char **argv) {
     event_bus_subscribe(EV_PLAYBACK_STOP,     ev_playback_stop, NULL);
     event_bus_subscribe(EV_PLAYBACK_FINISH,   ev_playback_finish, NULL);
         event_bus_subscribe(EV_PLAYLIST_LOADED, ev_playlist_loaded, NULL);
+    event_bus_subscribe(EV_MENU_LOADED, ev_menu_loaded, NULL);
+    event_bus_subscribe(EV_PLAYLIST_LIST_LOADED, ev_playlist_list_loaded, NULL);
     event_bus_subscribe(EV_PLAYBACK_ERROR,    ev_playback_error, NULL);
     event_bus_subscribe(EV_VOLUME_CHANGED,    ev_volume_changed, NULL);
     event_bus_subscribe(EV_MUTE_CHANGED,      ev_mute_changed, NULL);
@@ -767,48 +816,70 @@ int run_app(int argc, char **argv) {
                             std::thread([_pl_id]() {
                                 SongInfo *songs = NULL; int sc = 0;
                                 int ret = netease_playlist_songs(_pl_id.c_str(), &songs, &sc);
+                                LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
                                 if (ret == 0 && sc > 0) {
-                                    LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
                                     ld->songs = songs; ld->count = sc;
-                                    event_bus_publish(EV_PLAYLIST_LOADED, ld, sizeof(*ld));
+                                } else {
+                                    ld->songs = NULL; ld->count = 0;
+                                    free(songs); /* safe: NULL or alloc */
+                                }
+                                if (event_bus_publish(EV_PLAYLIST_LOADED, ld, sizeof(*ld)) != 0) {
+                                    /* shutdown — clean up data ourselves */
+                                    if (ld->songs) {
+                                        for (int i = 0; i < ld->count; i++)
+                                            song_info_free(&ld->songs[i]);
+                                        free(ld->songs);
+                                    }
+                                    free(ld);
                                 }
                             }).detach();
 
                         } else if (type >= 0 && type <= 1) {
-                            SongInfo *ms = NULL; int mc = 0;
-                            if (netease_menu_songs(type, 200, &ms, &mc) == 0 && mc > 0) {
-                                std::vector<SongInfo> vec;
-                                vec.reserve(mc);
-                                for (int i = 0; i < mc; i++) {
-                                    SongInfo copy = {};
-                                    song_info_copy(&copy, &ms[i]);
-                                    vec.push_back(copy);
-                                    song_info_free(&ms[i]);
+                            StateStore::instance().set_loading(true);
+                            int _type = type;
+                            std::thread([_type]() {
+                                SongInfo *ms = NULL; int mc = 0;
+                                int ret = netease_menu_songs(_type, 200, &ms, &mc);
+                                LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
+                                if (ret == 0 && mc > 0) {
+                                    ld->songs = ms; ld->count = mc;
+                                } else {
+                                    ld->songs = NULL; ld->count = 0;
+                                    free(ms);
                                 }
-                                free(ms);
-                                StateStore::instance().set_playlist(vec, 0);
-                                StateStore::instance().set_active_panel(1);
-                            }
+                                if (event_bus_publish(EV_MENU_LOADED, ld, sizeof(*ld)) != 0) {
+                                    if (ld->songs) {
+                                        for (int i = 0; i < ld->count; i++)
+                                            song_info_free(&ld->songs[i]);
+                                        free(ld->songs);
+                                    }
+                                    free(ld);
+                                }
+                            }).detach();
                         } else if (type == 2 || type == 3) {
                             if (!netease_is_logged_in()) {
                                 start_login();
                             } else {
-                                
-                                SongInfo *pl_songs = NULL; int pl_count = 0;
-                                if (netease_playlists(&pl_songs, &pl_count) == 0 && pl_count > 0) {
-                                    std::vector<NeteaseMenuItem> items;
-                                    items.push_back({"<< \u8FD4\u56DE", -1, ""});
-                                    for (int i = 0; i < pl_count; i++) {
-                                        /* type=2: created (subscribed=false), type=3: favorited (subscribed=true) */
-                                        
-                                        char id_buf[32];
-                                        snprintf(id_buf, sizeof(id_buf), "%s", pl_songs[i].id);
-                                        items.push_back({pl_songs[i].title, 1000, id_buf});
+                                StateStore::instance().set_loading(true);
+                                std::thread([]() {
+                                    SongInfo *pl = NULL; int pc = 0;
+                                    int ret = netease_playlists(&pl, &pc);
+                                    LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
+                                    if (ret == 0 && pc > 0) {
+                                        ld->songs = pl; ld->count = pc;
+                                    } else {
+                                        ld->songs = NULL; ld->count = 0;
+                                        free(pl);
                                     }
-                                    for (int _i = 0; _i < pl_count; _i++) { song_info_free(&pl_songs[_i]); } free(pl_songs);
-                                    StateStore::instance().set_netease_menu(items);
-                                    StateStore::instance().set_netease_selected(0);
-                                }
+                                    if (event_bus_publish(EV_PLAYLIST_LIST_LOADED, ld, sizeof(*ld)) != 0) {
+                                        if (ld->songs) {
+                                            for (int i = 0; i < ld->count; i++)
+                                                song_info_free(&ld->songs[i]);
+                                            free(ld->songs);
+                                        }
+                                        free(ld);
+                                    }
+                                }).detach();
                             }
                         }
                     }

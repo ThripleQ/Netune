@@ -22,6 +22,8 @@ typedef enum {
     EV_PLAYLIST_CHANGED,
     EV_TRACK_CHANGED,
     EV_PLAYLIST_LOADED,
+    EV_MENU_LOADED,
+    EV_PLAYLIST_LIST_LOADED,
 
     /* volume */
     EV_VOLUME_CHANGED,
