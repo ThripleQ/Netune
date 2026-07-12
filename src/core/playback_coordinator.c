@@ -198,32 +198,26 @@ static void* playback_thread(void *arg) {
 
                 const char *play_path = cmd.path;
                 int is_local = (cmd.path[0] == '/' || cmd.path[0] == '~' || strchr(cmd.path, '.'));
-                char dl_path[256] = "";
+                char *dl_path = NULL;
 
                 if (!is_local) {
                     char url[2048] = {0};
-                    char cli[512]; snprintf(cli,sizeof(cli),
-                        "netease-cli song-url \"%s\" standard 2>/dev/null",cmd.path);
-                    FILE *fp = popen(cli,"r");
-                    if (fp) { char jb[4096]={0}; size_t nr=fread(jb,1,sizeof(jb)-1,fp); pclose(fp);
-                        const char *k=nr>0?strstr(jb,"\"url\""):NULL;
-                        if(k){k+=5;while(*k==':'||*k==' '||*k=='\t')k++;if(*k=='"'){k++;
-                            const char*e=k;while(*e&&*e!='"')e++;size_t ul=(size_t)(e-k);
-                            if(ul>0&&ul<sizeof(url)-1){memcpy(url,k,ul);url[ul]=0;}}}}
-                    if (url[0]) {
-                        snprintf(dl_path,sizeof(dl_path),"/tmp/netune_%s.mp3",cmd.path);
-                        unlink(dl_path);
+                    MusicSource *src = music_source_get("netease");
+                    if (src && src->get_play_url &&
+                        src->get_play_url(cmd.path, 0, url, sizeof(url)) == 0 && url[0]) {
+                        /* download to temp file */
+                        char dl[256]; snprintf(dl,sizeof(dl),"/tmp/netune_%s.mp3",cmd.path);
+                        unlink(dl);
                         char curl_cmd[3072]; snprintf(curl_cmd,sizeof(curl_cmd),
-                            "curl -sL --max-time 60 \"%s\" -o \"%s\"",url,dl_path);
-                        LOG_INFO("Downloading %s ...",cmd.path);
-                        if (system(curl_cmd)==0) { play_path=dl_path; }
-                        else { unlink(dl_path); dl_path[0]=0; LOG_WARN("Download failed %s",cmd.path); }
+                            "curl -sL --max-time 60 \"%s\" -o \"%s\"",url,dl);
+                        if (system(curl_cmd)==0) { dl_path=strdup(dl); play_path=dl_path; }
+                        else { unlink(dl); LOG_WARN("Download failed %s",cmd.path); }
                     } else { LOG_WARN("No play URL for %s",cmd.path); }
                 }
 
                 decoder = decoder_open(play_path);
                 if (!decoder) {
-                    if (dl_path[0]) { unlink(dl_path); dl_path[0]=0; }
+                    if (dl_path) { unlink(dl_path); free(dl_path); dl_path = NULL; }
                     LOG_ERROR("Cannot open: %s",cmd.path);
                     event_bus_publish(EV_PLAYBACK_ERROR,NULL,0);
                     continue;
