@@ -293,7 +293,7 @@ static void* playback_thread(void *arg) {
            commands", avoiding audio starvation. */
         int64_t last_progress_ms = 0;
 
-        while (state == PS_PLAYING && decoder && audio && g_running) {
+        while (state == PS_PLAYING && (ffstream || decoder) && audio && g_running) {
             /* Peek for commands (non-blocking) */
             Command icmd;
             if (cmd_queue_try_pop(&g_cmd_queue, &icmd)) {
@@ -307,6 +307,7 @@ static void* playback_thread(void *arg) {
                     break;
                 case CMD_STOP:
                     if (state == PS_STOPPED) goto next_song;
+                    if (ffstream) { ffstream_close(ffstream); ffstream = NULL; }
                     if (decoder) { decoder_close(decoder); decoder = NULL; }
                     if (audio)   { audio_output_destroy(audio); audio = NULL; }
                     state = PS_STOPPED;
@@ -316,6 +317,7 @@ static void* playback_thread(void *arg) {
                     goto next_song;
                 case CMD_PLAY:
                     /* switch to new track */
+                    if (ffstream) { ffstream_close(ffstream); ffstream = NULL; }
                     if (decoder) { decoder_close(decoder); decoder = NULL; }
                     if (audio)   { audio_output_destroy(audio); audio = NULL; }
                     state = PS_STOPPED;
