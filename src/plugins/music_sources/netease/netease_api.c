@@ -45,6 +45,13 @@ static long long jint(const char *j, const char *k) {
     const char *p = strstr(j,s); if(!p)return 0; p+=strlen(s);
     while(*p==':'||*p==' '||*p=='\t'||*p=='\n')p++; return atoll(p);
 }
+static bool jbool(const char *j, const char *k) {
+    char s[128]; snprintf(s,sizeof(s),"\"%s\"",k);
+    const char *p = strstr(j,s); if(!p)return false; p+=strlen(s);
+    while(*p==':'||*p==' '||*p=='\t'||*p=='\n')p++;
+    if(*p=='t'&&strncmp(p,"true",4)==0)return true;
+    return atoll(p)!=0;
+}
 static const char *jobj(const char *j, const char *k) {
     char s[128]; snprintf(s,sizeof(s),"\"%s\"",k);
     const char *p = strstr(j,s); if(!p)return NULL; p+=strlen(s);
@@ -132,13 +139,14 @@ int netease_qr_poll(const char *uk) {
 bool netease_is_logged_in(void) { return g_name[0]!=0; }
 
 /* ── Playlists ────────────────────────────────────── */
-int netease_playlists(SongInfo **out, int *count) {
+int netease_playlists(bool favorited, SongInfo **out, int *count) {
     char *j=run("%s playlists 2>/dev/null",CLI);if(!j)return -1;
     const char *pl=jobj(j,"playlists");if(!pl||*pl!='['){free(j);return -1;}
     int n=0;const char*p=pl+1;while(*p){while(*p&&*p!='{'&&*p!=']')p++;if(*p==']')break;p=jmatch(p);n++;}
     if(!n){free(j);return -1;}
     *out=calloc((size_t)n,sizeof(SongInfo));*count=0;
     p=pl+1;int oi=0;while(*p){while(*p&&*p!='{'&&*p!=']')p++;if(*p==']')break;const char*e=jmatch(p);
+        bool sub=jbool(p,"subscribed");if(sub!=favorited){p=e;continue;}
         SongInfo *s=&(*out)[oi];memset(s,0,sizeof(*s));s->source=strdup("netease");s->cover_url=strdup("");s->aux_label=strdup("歌单");
         char *id=jstr(p,"id");s->id=id?id:strdup("");
         s->title=jstr(p,"name");if(!s->title)s->title=strdup("");

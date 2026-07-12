@@ -26,7 +26,7 @@ int  netease_qr_poll(const char *unikey);
 bool netease_is_logged_in(void);
 
 /* ── Playlists ─────────────────────────────────────── */
-int  netease_playlists(SongInfo **out, int *count);     /* user playlists */
+int  netease_playlists(bool favorited, SongInfo **out, int *count);
 int  netease_playlist_songs(const char *id,        /* songs in a playlist */
                             SongInfo **out, int *count);
 int  netease_liked_songs(SongInfo **out, int *count);   /* liked songs */

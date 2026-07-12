@@ -861,9 +861,9 @@ int run_app(int argc, char **argv) {
                                 start_login();
                             } else {
                                 StateStore::instance().set_loading(true);
-                                std::thread([]() {
+                                std::thread([type]() {
                                     SongInfo *pl = NULL; int pc = 0;
-                                    int ret = netease_playlists(&pl, &pc);
+                                    int ret = netease_playlists(type == 3, &pl, &pc);
                                     LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
                                     if (ret == 0 && pc > 0) {
                                         ld->songs = pl; ld->count = pc;
