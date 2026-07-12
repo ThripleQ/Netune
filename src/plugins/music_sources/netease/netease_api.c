@@ -57,7 +57,15 @@ static const char *jmatch(const char *o) {
 /* ── parse one song ────────────────────────────────── */
 static void fill(SongInfo *s, const char *jsn) {
     memset(s,0,sizeof(*s)); s->source=strdup("netease"); s->cover_url=strdup(""); s->aux_label=strdup("");
-    char *id=jstr(jsn,"id"); s->id=id?id:strdup("");
+    /* skip past al, ar objects to get the song-level id */
+    const char *p = jsn;
+    const char *skip_keys[] = {"al", "ar"};
+    for (int sk = 0; sk < 2; sk++) {
+        char skey[128]; snprintf(skey,sizeof(skey),"\"%s\"",skip_keys[sk]);
+        const char *f = strstr(p, skey);
+        if (f) { const char *o = f + strlen(skey); while (*o && *o != '{' && *o != '[') o++; if (*o == '{' || *o == '[') p = jmatch(o); }
+    }
+    char *id=jstr(p,"id"); s->id=id?id:strdup("");
     char *t=jstr(jsn,"name"); s->title=t?t:strdup("");
     const char *ar=jobj(jsn,"ar");if(ar){const char*ap=ar+1;while(*ap&&*ap!='{')ap++;if(*ap=='{'){char*an=jstr(ap,"name");s->artist=an?an:strdup("");}else s->artist=strdup("");}else s->artist=strdup("");
     const char *al=jobj(jsn,"al");if(al){char*an=jstr(al,"name");s->album=an?an:strdup("");}else s->album=strdup("");
@@ -97,7 +105,7 @@ int netease_search(const char *kw, int l, int o __attribute__((unused)), NSSearc
     int n=0,max=l>0?l:30;const char*p=s+1;while(*p){while(*p&&*p!='{'&&*p!=']')p++;if(*p==']')break;p=jmatch(p);n++;if(n>=max)break;}
     if(n==0){free(j);return 0;} out->songs=calloc((size_t)n,sizeof(NSSong)); out->count=n;
     int oi=0;p=s+1;while(*p&&oi<n){while(*p&&*p!='{'&&*p!=']')p++;if(*p==']')break;const char*e=jmatch(p);
-        NSSong *r=&out->songs[oi]; r->id=jstr(p,"id");r->title=jstr(p,"name");r->artist=jstr(p,"artist");
+        NSSong *r=&out->songs[oi]; { const char *pp = p; const char *skipk[]={"al","ar"}; for(int si=0;si<2;si++){char k[128];snprintf(k,sizeof(k),"\"%s\"",skipk[si]);const char*f=strstr(pp,k);if(f){const char*o=f+strlen(k);while(*o&&*o!='{'&&*o!='[')o++;if(*o=='{'||*o=='[')pp=jmatch(o);}} r->id=jstr(pp,"id"); } r->title=jstr(p,"name");r->artist=jstr(p,"artist");
         if(!r->artist){const char*a=jobj(p,"ar");if(a){const char*ap=a+1;while(*ap&&*ap!='{')ap++;if(*ap=='{')r->artist=jstr(ap,"name");}}if(!r->artist)r->artist=strdup("");
         r->album=jstr(p,"album");if(!r->album){const char*a=jobj(p,"al");if(a)r->album=jstr(a,"name");}if(!r->album)r->album=strdup("");
         r->dur_ms=(int)jint(p,"dt");oi++;p=e;}
