@@ -79,6 +79,7 @@ set(UI_SOURCES
   src/ui/components/help_screen.cpp
   src/ui/components/search_bar.cpp
   src/ui/components/login_screen.cpp
+  src/ui/components/spinner.cpp
 )
 
 set(ALL_SOURCES

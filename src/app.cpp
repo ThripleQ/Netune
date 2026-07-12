@@ -39,6 +39,7 @@ extern "C" {
 #include "ui/components/help_screen.h"
 #include "ui/components/search_bar.h"
 #include "ui/components/login_screen.h"
+#include "ui/components/spinner.h"
 #include "ui/theme.h"
 #include "ui/layout_engine.h"
 
@@ -235,6 +236,31 @@ static void ev_playback_finish(const BusEvent *ev, void *data) {
 }
 
 /* ── Volume / Mute / Playlist event handlers ──────── */
+
+/* ── Async playlist loading helper ───────────────────── */
+struct LoadedSongs { SongInfo *songs; int count; };
+static void ev_playlist_loaded(const BusEvent *ev, void *data) {
+    (void)data;
+    auto *ld = (LoadedSongs*)ev->data;
+    if (!ld || ld->count <= 0) {
+        StateStore::instance().set_loading(false);
+        return;
+    }
+    std::vector<SongInfo> vec;
+    vec.reserve(ld->count);
+    for (int i = 0; i < ld->count; i++) {
+        SongInfo copy = {};
+        song_info_copy(&copy, &ld->songs[i]);
+        vec.push_back(copy);
+        song_info_free(&ld->songs[i]);
+    }
+    free(ld->songs);
+    free(ld);
+    StateStore::instance().set_playlist(vec, 0);
+    StateStore::instance().set_active_panel(1);
+    StateStore::instance().set_loading(false);
+}
+
 static void ev_volume_changed(const BusEvent *ev, void *data) {
     (void)data;
     if (ev->data_size == sizeof(int)) {
@@ -310,6 +336,7 @@ int run_app(int argc, char **argv) {
     event_bus_subscribe(EV_PLAYBACK_RESUME,   ev_playback_resume, NULL);
     event_bus_subscribe(EV_PLAYBACK_STOP,     ev_playback_stop, NULL);
     event_bus_subscribe(EV_PLAYBACK_FINISH,   ev_playback_finish, NULL);
+        event_bus_subscribe(EV_PLAYLIST_LOADED, ev_playlist_loaded, NULL);
     event_bus_subscribe(EV_PLAYBACK_ERROR,    ev_playback_error, NULL);
     event_bus_subscribe(EV_VOLUME_CHANGED,    ev_volume_changed, NULL);
     event_bus_subscribe(EV_MUTE_CHANGED,      ev_mute_changed, NULL);
@@ -482,6 +509,15 @@ int run_app(int argc, char **argv) {
             main = vbox(Elements{
                 main,
                 render_help_screen(s) | center | clear_under,
+            });
+        }
+
+        if (s.loading) {
+            main = vbox(Elements{
+                main,
+                filler(),
+                render_spinner(s) | center,
+                filler(),
             });
         }
 
@@ -726,21 +762,18 @@ int run_app(int argc, char **argv) {
                             StateStore::instance().set_search_active(true);
                             StateStore::instance().set_search_query("");
                         } else if (!pl_id.empty()) {
-                            SongInfo *songs = NULL; int sc = 0;
-                            int ret = netease_playlist_songs(pl_id.c_str(), &songs, &sc);
-                            if (ret == 0 && sc > 0) {
-                                std::vector<SongInfo> vec;
-                                vec.reserve(sc);
-                                for (int i = 0; i < sc; i++) {
-                                    SongInfo copy = {};
-                                    song_info_copy(&copy, &songs[i]);
-                                    vec.push_back(copy);
-                                    song_info_free(&songs[i]);
+                            StateStore::instance().set_loading(true);
+                            std::string _pl_id = pl_id;
+                            std::thread([_pl_id]() {
+                                SongInfo *songs = NULL; int sc = 0;
+                                int ret = netease_playlist_songs(_pl_id.c_str(), &songs, &sc);
+                                if (ret == 0 && sc > 0) {
+                                    LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
+                                    ld->songs = songs; ld->count = sc;
+                                    event_bus_publish(EV_PLAYLIST_LOADED, ld, sizeof(*ld));
                                 }
-                                free(songs);
-                                StateStore::instance().set_playlist(vec, 0);
-                                StateStore::instance().set_active_panel(1);
-                            }
+                            }).detach();
+
                         } else if (type >= 0 && type <= 1) {
                             SongInfo *ms = NULL; int mc = 0;
                             if (netease_menu_songs(type, 200, &ms, &mc) == 0 && mc > 0) {
@@ -772,7 +805,7 @@ int run_app(int argc, char **argv) {
                                         snprintf(id_buf, sizeof(id_buf), "%s", pl_songs[i].id);
                                         items.push_back({pl_songs[i].title, 1000, id_buf});
                                     }
-                                    for(int _i=0;_i<pl_count;_i++) song_info_free(&pl_songs[_i]); free(pl_songs);
+                                    for (int _i = 0; _i < pl_count; _i++) { song_info_free(&pl_songs[_i]); } free(pl_songs);
                                     StateStore::instance().set_netease_menu(items);
                                     StateStore::instance().set_netease_selected(0);
                                 }

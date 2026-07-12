@@ -71,6 +71,9 @@ struct AppState {
     /* help screen */
     bool show_help = false;
 
+    /* loading state (for async operations like playlist load) */
+    bool loading = false;
+
     /* marquee width: computed from terminal size, updated per-frame */
     int  song_panel_width = 50;
 
@@ -112,6 +115,10 @@ public:
 
     /* help screen */
     void set_show_help(bool show);
+
+    /* loading */
+    void set_loading(bool v);
+    bool get_loading(void) const { return state_.loading; }
 
     /* search */
     void set_search_active(bool active);

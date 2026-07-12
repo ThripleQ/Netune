@@ -124,6 +124,10 @@ void StateStore::set_show_help(bool show) {
     state_.show_help = show;
 }
 
+void StateStore::set_loading(bool v) {
+    state_.loading = v;
+}
+
 void StateStore::set_search_active(bool active) {
     state_.search_active = active;
 }
