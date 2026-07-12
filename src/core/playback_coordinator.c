@@ -3,6 +3,7 @@
 #include "core/audio_output_mgr.h"
 #include "core/music_source.h"
 #include "core/music_source_manager.h"
+#include "plugins/decoders/ffmpeg/ffmpeg_stream.h"
 #include "infra/config.h"
 #include "core/event_bus.h"
 #include "infra/log.h"
@@ -164,7 +165,9 @@ static void* playback_thread(void *arg) {
     }
 
 
-    static char *g_dl_path = NULL;
+    
+
+    FFStream *ffstream = NULL;
 
     while (g_running) {
         /* ── Wait for next command (blocking when not playing) ── */
@@ -195,55 +198,63 @@ static void* playback_thread(void *arg) {
                 continue;
 
             case CMD_PLAY: {
-                /* cleanup previous download */
-                if (g_dl_path) { unlink(g_dl_path); free(g_dl_path); g_dl_path = NULL; }
+                /* cleanup previous */
+                if (ffstream) { ffstream_close(ffstream); ffstream = NULL; }
                 if (decoder) { decoder_close(decoder); decoder = NULL; }
                 if (audio)   { audio_output_destroy(audio); audio = NULL; }
 
                 const char *play_path = cmd.path;
-                int is_local = (cmd.path[0] == '/' || cmd.path[0] == '~' || strchr(cmd.path, '.'));
-                char dl_path[256] = "";
+                int is_local = (cmd.path[0] == '/' || cmd.path[0] == '~'
+                                || strchr(cmd.path, '.'));
+                int is_ff = 0;  /* using FFmpeg stream */
 
                 if (!is_local) {
                     char url[2048] = {0};
-                    LOG_INFO("PB: path=%s resolving netease URL", cmd.path);
                     MusicSource *src = music_source_get("netease");
                     if (src && src->get_play_url &&
-                        src->get_play_url(cmd.path, 0, url, sizeof(url)) == 0 && url[0]) {
-                        snprintf(dl_path,sizeof(dl_path),"/tmp/netune_%s.mp3",cmd.path);
-                        unlink(dl_path);
-                        char curl_cmd[3072]; snprintf(curl_cmd,sizeof(curl_cmd),
-                            "curl -sL --max-time 60 \"%s\" -o \"%s\"",url,dl_path);
-                        LOG_INFO("PB: downloading %s ...", dl_path);
-                        if (system(curl_cmd)==0) {
-                            g_dl_path = strdup(dl_path);
-                            play_path = dl_path;
+                        src->get_play_url(cmd.path, 0, url, sizeof(url)) == 0
+                        && url[0]) {
+                        LOG_INFO("Streaming netease: %s", cmd.path);
+                        int dur_sec = 0;
+                        ffstream = ffstream_open(url, &samplerate,
+                                                  &channels, &dur_sec);
+                        if (ffstream) {
+                            total_frames = (int64_t)dur_sec * samplerate;
+                            is_ff = 1;
+                        } else {
+                            LOG_WARN("FFmpeg stream open failed %s",cmd.path);
                         }
-                        else { unlink(dl_path); dl_path[0]=0; LOG_WARN("PB: download FAILED %s",cmd.path); }
-                    } else { LOG_WARN("PB: no URL for %s",cmd.path); }
+                    } else {
+                        LOG_WARN("No play URL for %s", cmd.path);
+                    }
                 }
 
-                decoder = decoder_open(play_path);
-                if (!decoder) {
-                    if (g_dl_path) { unlink(g_dl_path); free(g_dl_path); g_dl_path = NULL; }
-                    LOG_ERROR("Cannot open: %s",cmd.path);
-                    event_bus_publish(EV_PLAYBACK_ERROR,NULL,0);
+                if (!is_ff && is_local) {
+                    decoder = decoder_open(play_path);
+                }
+                if ((!is_ff && !decoder) || (!is_local && !ffstream)) {
+                    LOG_ERROR("Cannot open: %s", cmd.path);
+                    event_bus_publish(EV_PLAYBACK_ERROR, NULL, 0);
                     continue;
                 }
-                DecoderInfo info;
-                decoder_get_info(decoder, &info);
-                samplerate   = info.sample_rate;
-                channels     = info.channels;
-                total_frames = info.total_frames;
-                current_frame = 0;
 
-                audio = audio_output_create(samplerate, channels);
+                if (is_ff) {
+                    audio = audio_output_create(samplerate, channels);
+                } else {
+                    DecoderInfo info;
+                    decoder_get_info(decoder, &info);
+                    samplerate   = info.sample_rate;
+                    channels     = info.channels;
+                    total_frames = info.total_frames;
+                    audio = audio_output_create(samplerate, channels);
+                }
                 if (!audio) {
-                    decoder_close(decoder); decoder = NULL;
-                    event_bus_publish(EV_PLAYBACK_ERROR,NULL,0);
+                    if (ffstream) { ffstream_close(ffstream); ffstream = NULL; }
+                    if (decoder)  { decoder_close(decoder); decoder = NULL; }
+                    event_bus_publish(EV_PLAYBACK_ERROR, NULL, 0);
                     continue;
                 }
-
+                current_frame = 0;
                 state = PS_PLAYING;
                 continue;
             }
@@ -333,7 +344,8 @@ static void* playback_thread(void *arg) {
             }
 
             /* Decode next chunk */
-            int frames = decoder_decode(decoder, pcm_buf, FRAMES_PER_CHUNK);
+            int frames = ffstream ? ffstream_decode(ffstream, pcm_buf, FRAMES_PER_CHUNK)
+                                    : decoder_decode(decoder, pcm_buf, FRAMES_PER_CHUNK);
             if (frames <= 0) {
                 state = PS_STOPPED;
                 event_bus_publish(EV_PLAYBACK_FINISH, NULL, 0);
@@ -364,6 +376,7 @@ next_song:
     }
 
 cleanup:
+    if (ffstream) ffstream_close(ffstream); ffstream = NULL;
     if (decoder) decoder_close(decoder);
     if (audio)   audio_output_destroy(audio);
     free(pcm_buf);

@@ -24,6 +24,8 @@ pkg_check_modules(YYJSON REQUIRED IMPORTED_TARGET yyjson)
 pkg_check_modules(YAML   REQUIRED IMPORTED_TARGET yaml-0.1)
 pkg_check_modules(ALSA   REQUIRED IMPORTED_TARGET alsa)
 pkg_check_modules(PULSE  REQUIRED IMPORTED_TARGET libpulse-simple)
+pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
+  libavformat libavcodec libswresample libavutil)
 find_package(Threads REQUIRED)
 
 # ── Sources ───────────────────────────────────────────
@@ -48,6 +50,7 @@ set(INFRA_SOURCES
 
 set(PLUGIN_DECODER_SOURCES
   src/plugins/decoders/dr_mp3/mp3_decoder.c
+  src/plugins/decoders/ffmpeg/ffmpeg_stream.c
   src/plugins/decoders/dr_flac/flac_decoder.c
   src/plugins/decoders/dr_flac/wav_decoder.c
 )
@@ -102,6 +105,7 @@ target_link_libraries(lmusic PRIVATE
   PkgConfig::YAML
   PkgConfig::ALSA
   PkgConfig::PULSE
+  PkgConfig::FFMPEG
   Threads::Threads
   dl m
 )
