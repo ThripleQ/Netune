@@ -37,10 +37,6 @@ int  netease_menu_songs(int type, int limit,            /* daily etc */
 /* Get streaming URL.                                      */
 int  netease_play_url(const char *song_id, char *url, size_t url_sz);
 
-/* Download the URL to a temp file. Blocks until done.
-   Returns path to file (caller must free + unlink later). */
-char* netease_download(const char *song_id,
-                       const char *url);
 
 #ifdef __cplusplus
 }
