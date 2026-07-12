@@ -60,12 +60,15 @@ static void fill(SongInfo *s, const char *jsn) {
     char *id=jstr(jsn,"id"); s->id=id?id:strdup("");
     char *t=jstr(jsn,"name"); s->title=t?t:strdup("");
     const char *ar=jobj(jsn,"ar");if(ar){const char*ap=ar+1;while(*ap&&*ap!='{')ap++;if(*ap=='{'){char*an=jstr(ap,"name");s->artist=an?an:strdup("");}else s->artist=strdup("");}else s->artist=strdup("");
+    const char *al=jobj(jsn,"al");if(al){char*an=jstr(al,"name");s->album=an?an:strdup("");}else s->album=strdup("");
     s->duration_sec=(int)(jint(jsn,"dt")/1000);
 }
 /* ── parse songs array into SongInfo* ──────────────── */
 static int parselist(const char *json, const char *loc __attribute__((unused)), SongInfo **out, int *cnt) {
     *out=NULL; *cnt=0; if(!json)return -1;
-    const char *s=jobj(json,"songs");if(!s||*s!='['){const char*r=jobj(json,"result");if(r)s=jobj(r,"songs");}
+    const char *s=jobj(json,"songs");
+    if(!s||*s!='['){const char*r=jobj(json,"result");if(r)s=jobj(r,"songs");}
+    if(!s||*s!='['){const char*d=jobj(json,"data");if(d)s=jobj(d,"dailySongs");}
     if(!s||*s!='[')return -1;
     int n=0;const char*p=s+1;while(*p){while(*p&&*p!='{'&&*p!=']')p++;if(*p==']')break;p=jmatch(p);n++;}
     if(!n)return -1;
