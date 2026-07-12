@@ -62,9 +62,9 @@ static void* mp3_open(const char *path) {
     h->sample_rate  = h->mp3.sampleRate;
     h->channels     = h->mp3.channels;
 
-    /* total frames: drmp3_get_pcm_frame_count scans the entire file
-       without seeking, which would consume all data. Set to -1. */
-    h->total_frames  = -1;
+    /* total frames: will fail on pipes (returns 0) — set to -1 */
+    drmp3_uint64 total = drmp3_get_pcm_frame_count(&h->mp3);
+    h->total_frames  = (total > 0) ? (int)total : -1;
 
     return h;
 }
