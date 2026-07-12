@@ -68,7 +68,21 @@ Element render_song_list(const AppState &s) {
     if (mw < 15) mw = 15;
 
     for (size_t i = 0; i < s.playlist.size(); i++) {
-        std::string label = s.playlist[i].title ? s.playlist[i].title : "(unknown)";
+        /* format: Title — Artist   03:45 */
+        std::string label;
+        if (s.playlist[i].title && s.playlist[i].title[0])
+            label = s.playlist[i].title;
+        else
+            label = "(unknown)";
+        if (s.playlist[i].artist && s.playlist[i].artist[0])
+            label += std::string(" \u2014 ") + s.playlist[i].artist;
+        if (s.playlist[i].duration_sec > 0) {
+            char buf[16];
+            snprintf(buf, sizeof(buf), "  %02d:%02d",
+                     s.playlist[i].duration_sec / 60,
+                     s.playlist[i].duration_sec % 60);
+            label += buf;
+        }
         bool sel = ((int)i == s.selected_index);
 
         if (s.active_panel == 1 && sel) {
