@@ -274,7 +274,7 @@ static void ev_playlist_changed(const BusEvent *ev, void *data) {
 /* ───────────────────────────────────────────────────── */
 
 int run_app(int argc, char **argv) {
-    log_init(NULL);
+    log_init("/tmp/lmusic.log");
     LOG_INFO("Netune v2.0.0 starting");
 
     if (argc > 1 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
@@ -769,7 +769,7 @@ int run_app(int argc, char **argv) {
                                         /* type=2: created (subscribed=false), type=3: favorited (subscribed=true) */
                                         
                                         char id_buf[32];
-                                        snprintf(id_buf, sizeof(id_buf), "%llu", (unsigned long long)pl_songs[i].id);
+                                        snprintf(id_buf, sizeof(id_buf), "%s", pl_songs[i].id);
                                         items.push_back({pl_songs[i].title, 1000, id_buf});
                                     }
                                     for(int _i=0;_i<pl_count;_i++) song_info_free(&pl_songs[_i]); free(pl_songs);
