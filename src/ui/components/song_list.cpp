@@ -85,39 +85,18 @@ static std::string marquee_text(const std::string &text, int width) {
     return result;
 }
 
-/* ── Build a single row: [prefix][content][     time] ── */
+/* ── Build row: Title — Artist, truncated or marquee ── */
 static std::string build_row(const std::string &content,
                              int duration_sec,
                              int panel_width,
                              bool marquee) {
-    /* Time part: "  03:45" (width 7) or empty */
-    std::string time_part;
-    if (duration_sec > 0) {
-        char buf[16];
-        snprintf(buf, sizeof(buf), "%02d:%02d",
-                 duration_sec / 60, duration_sec % 60);
-        time_part = std::string(" ") + buf;
-    }
+    (void)duration_sec;  /* time shown in progress bar */
+    int avail_w = panel_width - 2;  /* "  " or "> " prefix */
+    if (avail_w < 5) avail_w = 5;
 
-    int prefix_w = 2;                       /* "  " or "> " */
-    int time_w    = string_width(time_part); /* 6 or 0 */
-    int content_w = panel_width - prefix_w - time_w;
-    if (content_w < 5) content_w = 5;
-
-    std::string display;
-    if (marquee && string_width(content) > content_w) {
-        /* selected: marquee scroll the content */
-        display = marquee_text(content, content_w);
-    } else {
-        display = fit_text(content, content_w);
-    }
-
-    /* Right-pad display to content_w for alignment with time */
-    int cur_w = string_width(display);
-    if (cur_w < content_w)
-        display.append((size_t)(content_w - cur_w), ' ');
-
-    return display + time_part;
+    if (marquee)
+        return marquee_text(content, avail_w);
+    return fit_text(content, avail_w);
 }
 
 /* ── Render ────────────────────────────────────────── */
