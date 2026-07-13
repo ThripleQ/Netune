@@ -102,6 +102,7 @@ static void ev_search_done(const BusEvent *ev, void *data) {
     StateStore::instance().set_loading(false);
     StateStore::instance().set_search_active(false);
     StateStore::instance().set_search_query("");
+    StateStore::instance().set_search_scope(0);
     StateStore::instance().set_active_panel(1);
 }
 
@@ -1034,8 +1035,9 @@ int run_app(int argc, char **argv) {
                 search_manager_clear();
                 StateStore::instance().set_search_active(false);
                 StateStore::instance().set_search_query("");
+                StateStore::instance().set_search_scope(0);
             } else {
-                /* filter mode (scope=0): always real-time client-side */
+                /* filter mode (scope=0) */
                 search_manager_clear();
                 StateStore::instance().set_search_scope(0);
                 StateStore::instance().set_search_active(true);
