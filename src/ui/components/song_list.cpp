@@ -262,7 +262,7 @@ Element render_song_list(const AppState &s) {
                     Element ch = (rr >= 0)
                         ? color(Color::RGB(rr,gg,bb), text("\u2588"))
                         : text(" ");
-                    cells.push_back(ch | clear_under);
+                    cells.push_back(ch);
                 }
                 rows.push_back(hbox(std::move(cells)));
             }
