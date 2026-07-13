@@ -4,6 +4,7 @@
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <signal.h>
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -384,9 +385,25 @@ int run_app(int argc, char **argv) {
     }
 
     Config *cfg = NULL;
-    const char *cfg_path = "data/config.json";
-    if (argc > 1) cfg_path = argv[1];
-    cfg = config_load(cfg_path);
+    /* Resolve data dir relative to executable */
+    char exe_dir[1024] = {0};
+    {
+        char link[1024];
+        snprintf(link, sizeof(link), "/proc/self/exe");
+        ssize_t r = readlink(link, exe_dir, sizeof(exe_dir) - 1);
+        if (r > 0) {
+            exe_dir[r] = 0;
+            char *s = strrchr(exe_dir, '/');
+            if (s) *s = 0;
+        }
+    }
+    char cfg_buf[1024];
+    if (argc > 1) {
+        snprintf(cfg_buf, sizeof(cfg_buf), "%s", argv[1]);
+    } else {
+        snprintf(cfg_buf, sizeof(cfg_buf), "%s/data/config.json", exe_dir);
+    }
+    cfg = config_load(cfg_buf);
     if (!cfg) LOG_WARN("No config loaded, using defaults");
     config_set_global(cfg);
 
@@ -442,8 +459,14 @@ int run_app(int argc, char **argv) {
 
     /* load theme */
     const char *t_name = config_get_str(cfg, "ui.theme", NULL);
-    const char *t_path = "data/themes/default.yaml";
-    if (t_name && strcmp(t_name, "default") != 0) t_path = t_name;
+    char t_buf[1024];
+    const char *t_path;
+    if (t_name && strcmp(t_name, "default") != 0) {
+        t_path = t_name;
+    } else {
+        snprintf(t_buf, sizeof(t_buf), "%s/data/themes/default.yaml", exe_dir);
+        t_path = t_buf;
+    }
     ThemeManager::instance().load(t_path);
 
     /* layout engine */
@@ -453,8 +476,14 @@ int run_app(int argc, char **argv) {
     layout_engine.register_component("group_list", render_group_list);
     layout_engine.register_component("song_list", render_song_list);
     const char *l_name = config_get_str(cfg, "ui.layout", NULL);
-    const char *l_path = "data/layouts/default.yaml";
-    if (l_name && strcmp(l_name, "default") != 0) l_path = l_name;
+    char l_buf[1024];
+    const char *l_path;
+    if (l_name && strcmp(l_name, "default") != 0) {
+        l_path = l_name;
+    } else {
+        snprintf(l_buf, sizeof(l_buf), "%s/data/layouts/default.yaml", exe_dir);
+        l_path = l_buf;
+    }
     layout_engine.load(l_path);
 
     music_source_manager_init();
