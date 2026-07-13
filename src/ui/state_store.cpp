@@ -83,6 +83,13 @@ void StateStore::set_playlist(const std::vector<SongInfo> &list, int index) {
 
 void StateStore::set_music_mode(MusicMode mode) {
     state_.music_mode = mode;
+
+    /* Clear playlist when switching modes */
+    for (auto &s : state_.playlist) song_info_free(&s);
+    state_.playlist.clear();
+    state_.selected_index = 0;
+    state_.active_panel = 0;
+
     /* When switching to Netease, populate default menu items */
     if (mode == MusicMode::Netease && state_.netease_menu.empty()) {
         state_.netease_menu = {
