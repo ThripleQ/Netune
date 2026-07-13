@@ -3,57 +3,57 @@
   "_comment": "Netune v2.0 全局配置 — 所有设置集中于此",
 
   "audio": {
-    "backend": "auto",         /* 音频后端: auto/alsa/pulseaudio/sdl */
-    "sample_rate": 44100,      /* PCM 采样率 */
-    "channels": 2,             /* 声道数: 1=单声道 2=立体声 */
-    "bits_per_sample": 16,     /* 位深: 16 */
-    "buffer_frames": 4096,     /* 内部 PCM 缓冲区大小 */
-    "volume": 80,              /* 默认音量 0-100 */
-    "device": "default"        /* 音频设备名, default=系统默认 */
+    "backend": "auto",
+    "sample_rate": 44100,
+    "channels": 2,
+    "bits_per_sample": 16,
+    "buffer_frames": 4096,
+    "volume": 80,
+    "device": "default"
   },
 
   "playback": {
-    "loop_mode": 0,            /* 0=None 1=单曲循环 2=列表循环 */
-    "gapless": true,           /* 无缝播放下首 */
-    "crossfade_sec": 0,        /* 淡入淡出秒数 (0=关闭) */
-    "resume_on_startup": false,/* 启动时恢复上次播放位置 */
-    "seek_step_sec": 5         /* 快进/快退步进秒数 */
+    "loop_mode": 0,
+    "gapless": true,
+    "crossfade_sec": 0,
+    "resume_on_startup": false,
+    "seek_step_sec": 5
   },
 
   "ui": {
-    "theme": "netease_light",     /* 主题名: default/catppuccin/dracula/netease_dark/netease_light */
-    "layout": "data/layouts/default.yaml",  /* 布局文件 */
-    "keybindings": "default",     /* 快捷键配置 (暂未实现) */
-    "show_lyric": true,           /* 显示歌词面板 (暂未实现) */
-    "show_cover": false,          /* 显示封面 (暂未实现) */
-    "show_status_bar": true       /* 显示底部状态栏 */
+    "theme": "default",
+    "layout": "data/layouts/default.yaml",
+    "keybindings": "default",
+    "show_lyric": true,
+    "show_cover": false,
+    "show_status_bar": true
   },
 
   "music_sources": {
     "local": {
-      "enabled": true,           /* 启用本地音乐扫描 */
+      "enabled": true,
       "dirs": ["/home/liu/Music/pop", "/home/liu/Music/rock", "/home/liu/Music/jazz"],
-      "recursive": true,         /* 递归扫描子目录 */
-      "show_hidden": false       /* 是否显示隐藏文件 */
+      "recursive": true,
+      "show_hidden": false
     },
     "netease": {
-      "enabled": true,           /* 启用网易云音乐 */
-      "quality": "standard",     /* 音质: standard/high/lossless */
-      "cookie_file": "",         /* cookie 文件路径, 空=自动 */
-      "auto_login": false        /* 启动时自动登录 */
+      "enabled": true,
+      "quality": "standard",
+      "cookie_file": "",
+      "auto_login": false
     }
   },
 
   "network": {
-    "proxy": "",                 /* HTTP 代理: http://127.0.0.1:7890 */
-    "timeout_sec": 10,           /* 网络请求超时 */
-    "max_retries": 2,            /* 失败重试次数 */
-    "user_agent": "Netune/2.0"   /* User-Agent */
+    "proxy": "",
+    "timeout_sec": 10,
+    "max_retries": 2,
+    "user_agent": "Netune/2.0"
   },
 
   "plugins": {
     "decoders": {
-      "preferred": ["dr_mp3", "dr_flac", "dr_wav", "ffmpeg"]
+      "preferred": ["dr_mp3", "dr_flac", "dr_wav"]
     },
     "audio_outputs": {
       "preferred": ["alsa", "pulseaudio", "sdl"]

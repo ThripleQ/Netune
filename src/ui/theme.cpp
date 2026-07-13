@@ -34,7 +34,7 @@ bool ThemeManager::load(const std::string &yaml_path) {
     yaml_parser_set_input_file(&parser, fp);
 
     bool in_colors = false;
-    std::string hex_bg, hex_fg, hex_accent, hex_overlay;
+    std::string hex_bg, hex_fg, hex_accent;
     std::string current_field;
 
     while (yaml_parser_parse(&parser, &event)) {
@@ -49,10 +49,9 @@ bool ThemeManager::load(const std::string &yaml_path) {
                     current_field = val;  /* "bg", "fg", "accent" */
                 } else {
                     /* value for current_field */
-                    if (current_field == "bg")         hex_bg = val;
-                    else if (current_field == "fg")        hex_fg = val;
-                    else if (current_field == "accent")    hex_accent = val;
-                    else if (current_field == "overlay_bg") hex_overlay = val;
+                    if (current_field == "bg")      hex_bg = val;
+                    else if (current_field == "fg") hex_fg = val;
+                    else if (current_field == "accent") hex_accent = val;
                     current_field.clear();
                 }
             } else if (strcmp(val, "name") == 0) {
@@ -73,7 +72,6 @@ bool ThemeManager::load(const std::string &yaml_path) {
     if (!hex_bg.empty())     theme_.bg = theme_color_from_hex(hex_bg);
     if (!hex_fg.empty())     theme_.fg = theme_color_from_hex(hex_fg);
     if (!hex_accent.empty()) theme_.accent = theme_color_from_hex(hex_accent);
-    if (!hex_overlay.empty()) theme_.overlay_bg = theme_color_from_hex(hex_overlay);
 
     LOG_INFO("Theme loaded: '%s'  bg=%s fg=%s accent=%s",
              theme_.name.c_str(), hex_bg.c_str(), hex_fg.c_str(), hex_accent.c_str());
