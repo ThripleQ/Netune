@@ -14,19 +14,22 @@ cmake --build build -j$(nproc)
 
 ### Dependencies
 
-Install these before building:
+| Package | Required for |
+|---------|-------------|
+| CMake | Build system |
+| FFmpeg (libavformat, libavcodec, libswresample) | Streaming decoder |
+| ALSA | Audio output (Linux) |
+| PulseAudio | Audio output (Linux) |
+| SDL2 | Audio output (cross-platform) |
+| yyjson | JSON parsing |
+| libyaml | Config loading |
+| Go | Building netease-cli (needed for Netease features) |
 
-| Package | Arch Linux | Debian/Ubuntu |
-|---------|-----------|---------------|
-| CMake | `cmake` | `cmake` |
-| FFmpeg | `ffmpeg` | `libavformat-dev libavcodec-dev libswresample-dev` |
-| ALSA | `alsa-lib` | `libasound2-dev` |
-| PulseAudio | `libpulse` | `libpulse-dev` |
-| SDL2 (optional) | `sdl2` | `libsdl2-dev` |
-| yyjson | `yyjson` | `libyyjson-dev` |
-| libyaml | `libyaml` | `libyaml-dev` |
+FTXUI is auto-downloaded by CMake.
 
-FTXUI is auto-downloaded by CMake. `netease-cli` Go binary is included pre-built.
+Install with your system's package manager. For example on Debian/Ubuntu:
+`apt install cmake libavformat-dev libavcodec-dev libswresample-dev \
+  libasound2-dev libpulse-dev libsdl2-dev libyyjson-dev libyaml-dev`
 
 ### Install to PATH
 
