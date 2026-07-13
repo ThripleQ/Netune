@@ -37,6 +37,7 @@ typedef enum {
     EV_SEARCH_START,
     EV_SEARCH_RESULT,
     EV_SEARCH_ERROR,
+    EV_SEARCH_DONE,
 
     /* config */
     EV_CONFIG_CHANGED,

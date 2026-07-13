@@ -97,9 +97,21 @@ static void update_login_menu(void) {
 
 #include <map>
 
-/* ── Netease search cache (in-memory LRU, max 32 entries) ── */
-static std::map<std::string, std::vector<SongInfo>> g_ns_cache;
+static void ev_search_done(const BusEvent *ev, void *data) {
+    (void)ev; (void)data;
+    LOG_INFO("Search done — results in playlist");
+    StateStore::instance().set_loading(false);
+    StateStore::instance().set_search_active(false);
+    StateStore::instance().set_search_query("");
+    StateStore::instance().set_active_panel(1);
+}
+
+/* ── Netease search: async, results go to playlist ─── */
 #define NS_CACHE_MAX 32
+static std::map<std::string, std::vector<SongInfo>> g_ns_cache;
+
+struct LoadedSongs { SongInfo *songs; int count; };
+
 
 static void do_netease_search(const char *query) {
     if (!query || !query[0]) return;
@@ -108,43 +120,63 @@ static void do_netease_search(const char *query) {
     /* Check cache first */
     auto it = g_ns_cache.find(q);
     if (it != g_ns_cache.end()) {
-        StateStore::instance().set_search_results(it->second, (int)it->second.size());
+        StateStore::instance().set_playlist(it->second, 0);
+        StateStore::instance().set_active_panel(1);
+        StateStore::instance().set_search_active(false);
+        StateStore::instance().set_search_query("");
         return;
     }
 
-    NSSearchResult nr;
-    if (netease_search(query, 100, 0, &nr) != 0) return;
+    StateStore::instance().set_loading(true);
 
-    std::vector<SongInfo> vec;
-    vec.reserve(nr.count);
-    for (int i = 0; i < nr.count; i++) {
-        SongInfo si = {};
-        si.id       = strdup(nr.songs[i].id);
-        si.source   = strdup("netease");
-        si.title    = strdup(nr.songs[i].title ? nr.songs[i].title : "");
-        si.artist   = strdup(nr.songs[i].artist ? nr.songs[i].artist : "");
-        si.album    = strdup(nr.songs[i].album ? nr.songs[i].album : "");
-        si.duration_sec = nr.songs[i].dur_ms / 1000;
-        vec.push_back(si);
-    }
-    netease_search_free(&nr);
+    std::thread([q]() {
+        NSSearchResult nr;
+        if (netease_search(q.c_str(), 100, 0, &nr) != 0) {
+            /* search failed — publish done to clear search+loading */
+            event_bus_publish(EV_SEARCH_DONE, NULL, 0);
+            return;
+        }
 
-    /* Store in cache, evict oldest if full */
-    if (g_ns_cache.size() >= NS_CACHE_MAX)
-        g_ns_cache.erase(g_ns_cache.begin());
-    g_ns_cache[q] = vec;
+        std::vector<SongInfo> vec;
+        vec.reserve(nr.count);
+        for (int i = 0; i < nr.count; i++) {
+            SongInfo si = {};
+            si.id       = strdup(nr.songs[i].id);
+            si.source   = strdup("netease");
+            si.title    = strdup(nr.songs[i].title ? nr.songs[i].title : "");
+            si.artist   = strdup(nr.songs[i].artist ? nr.songs[i].artist : "");
+            si.album    = strdup(nr.songs[i].album ? nr.songs[i].album : "");
+            si.duration_sec = nr.songs[i].dur_ms / 1000;
+            vec.push_back(si);
+        }
+        netease_search_free(&nr);
 
-    /* Deep copy for StateStore (vec holds shallow ownership) */
-    StateStore::instance().set_search_results(vec, (int)vec.size());
+        /* Store in cache, evict oldest if full */
+        if (g_ns_cache.size() >= NS_CACHE_MAX)
+            g_ns_cache.erase(g_ns_cache.begin());
+        g_ns_cache[q] = vec;
+
+        /* Set playlist on main thread via event */
+        LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
+        int sc = (int)vec.size();
+        SongInfo *songs = (SongInfo*)calloc((size_t)sc, sizeof(SongInfo));
+        for (int i = 0; i < sc; i++) {
+            song_info_copy(&songs[i], &vec[i]);
+            song_info_free(&vec[i]);
+        }
+        ld->songs = songs; ld->count = sc;
+        if (event_bus_publish(EV_PLAYLIST_LOADED, ld, sizeof(*ld)) != 0) {
+            for (int i = 0; i < sc; i++) song_info_free(&songs[i]);
+            free(songs); free(ld);
+            return;
+        }
+
+        /* Signal search done — exit search mode */
+        event_bus_publish(EV_SEARCH_DONE, NULL, 0);
+    }).detach();
 }
 
 /* Free search cache on shutdown */
-static void free_ns_cache(void) {
-    for (auto &entry : g_ns_cache)
-        for (auto &s : entry.second)
-            song_info_free(&s);
-    g_ns_cache.clear();
-}
 
 /* ── Search event → StateStore bridge ─────────────── */
 static void ev_search_start(const BusEvent *ev, void *data) {
@@ -237,7 +269,6 @@ static void ev_playback_finish(const BusEvent *ev, void *data) {
 /* ── Volume / Mute / Playlist event handlers ──────── */
 
 /* ── Async playlist loading helper ───────────────────── */
-struct LoadedSongs { SongInfo *songs; int count; };
 static void ev_playlist_loaded(const BusEvent *ev, void *data) {
     (void)data;
     auto *ld = (LoadedSongs*)ev->data;
@@ -394,6 +425,7 @@ int run_app(int argc, char **argv) {
     event_bus_subscribe(EV_SEARCH_START, ev_search_start, NULL);
     event_bus_subscribe(EV_SEARCH_RESULT, ev_search_result, NULL);
     event_bus_subscribe(EV_SEARCH_ERROR, ev_search_error, NULL);
+    event_bus_subscribe(EV_SEARCH_DONE, ev_search_done, NULL);
 
     if (cfg) {
         int vol = config_get_int(cfg, "audio.volume", -1);
@@ -549,8 +581,8 @@ int run_app(int argc, char **argv) {
         }
         if (s.search_active) {
             main = vbox(Elements{
-                main,
-                render_search_bar(s) | center | clear_under,
+                main | flex,
+                render_search_bar(s) | clear_under,
             });
         } else if (s.show_help) {
             /* overlay help screen centered on top of main content */
@@ -1022,7 +1054,6 @@ int run_app(int argc, char **argv) {
     event_bus_publish(EV_APP_SHUTDOWN, NULL, 0);
     playback_coordinator_shutdown();
     music_source_manager_shutdown();
-    free_ns_cache();
     event_bus_shutdown();
     config_free(cfg);
     log_shutdown();
