@@ -20,6 +20,17 @@ struct NeteaseMenuItem {
     std::string id;    /* playlist id for types 1-3 */
 };
 
+/* ── Navigation state (for Esc-back) ────────────── */
+struct NavState {
+    std::vector<SongInfo>      playlist;
+    int                        selected_index  = 0;
+    int                        active_panel    = 0;
+    std::vector<NeteaseMenuItem> netease_menu;
+    int                        netease_selected = 0;
+    bool                       search_active    = false;
+    std::string                search_query;
+};
+
 /* ── Loop mode ─────────────────────────────────────── */
 enum class LoopMode { None = 0, Track = 1, Playlist = 2 };
 
@@ -83,9 +94,10 @@ struct AppState {
     std::vector<SongInfo> search_results;
     int search_selected = 0;
     int search_total = 0;
-    /* playlist backup for search result restore */
-    std::vector<SongInfo> pre_search_playlist;
+    /* navigation stack for Esc-back */
+    std::vector<NavState> nav_stack;
 };
+
 
 /* ── State store singleton ─────────────────────────── */
 class StateStore {
@@ -127,9 +139,9 @@ public:
     void set_search_query(const std::string &query);
     void set_search_selected(int idx);
     void set_search_results(const std::vector<SongInfo> &results, int total);
-    /* playlist backup for search result restore */
-    void backup_playlist(void);
-    void restore_playlist(void);
+    /* nav stack push/pop for Esc-back */
+    void nav_push(void);
+    bool nav_pop(void);  /* returns true if state restored */
 
 private:
     StateStore() = default;

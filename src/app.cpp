@@ -120,7 +120,7 @@ static void do_netease_search(const char *query) {
     /* Check cache first */
     auto it = g_ns_cache.find(q);
     if (it != g_ns_cache.end()) {
-        StateStore::instance().backup_playlist();
+        StateStore::instance().nav_push();
         StateStore::instance().set_playlist(it->second, 0);
         StateStore::instance().set_active_panel(1);
         StateStore::instance().set_search_active(false);
@@ -128,7 +128,7 @@ static void do_netease_search(const char *query) {
         return;
     }
 
-    StateStore::instance().backup_playlist();
+    StateStore::instance().nav_push();
     StateStore::instance().set_loading(true);
 
     std::thread([q]() {
@@ -726,8 +726,8 @@ int run_app(int argc, char **argv) {
         }
 
         /* Esc while viewing search results: restore previous playlist */
-        if (ev_key == "escape" && !cur.search_active && cur.pre_search_playlist.size() > 0) {
-            StateStore::instance().restore_playlist();
+        if (ev_key == "escape" && !cur.search_active && !cur.nav_stack.empty()) {
+            StateStore::instance().nav_pop();
             return true;
         }
 
@@ -845,6 +845,7 @@ int run_app(int argc, char **argv) {
                             StateStore::instance().set_search_active(true);
                             StateStore::instance().set_search_query("");
                         } else if (!pl_id.empty()) {
+                            StateStore::instance().nav_push();
                             StateStore::instance().set_loading(true);
                             std::string _pl_id = pl_id;
                             std::thread([_pl_id]() {
@@ -869,6 +870,7 @@ int run_app(int argc, char **argv) {
                             }).detach();
 
                         } else if (type >= 0 && type <= 1) {
+                            StateStore::instance().nav_push();
                             StateStore::instance().set_loading(true);
                             int _type = type;
                             std::thread([_type]() {
@@ -894,6 +896,7 @@ int run_app(int argc, char **argv) {
                             if (!netease_is_logged_in()) {
                                 start_login();
                             } else {
+                                StateStore::instance().nav_push();
                                 StateStore::instance().set_loading(true);
                                 std::thread([type]() {
                                     SongInfo *pl = NULL; int pc = 0;

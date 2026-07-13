@@ -204,26 +204,41 @@ void StateStore::set_group_index(int idx) {
     set_playlist(grp.songs, 0);
 }
 
-void StateStore::backup_playlist(void) {
-    /* Save current playlist for restore after search */
-    for (auto &s : state_.pre_search_playlist)
-        song_info_free(&s);
-    state_.pre_search_playlist.clear();
+void StateStore::nav_push(void) {
+    NavState ns;
     for (auto &s : state_.playlist) {
         SongInfo copy = {};
         copy_song_info(copy, s);
-        state_.pre_search_playlist.push_back(copy);
+        ns.playlist.push_back(copy);
     }
+    ns.selected_index   = state_.selected_index;
+    ns.active_panel     = state_.active_panel;
+    ns.netease_menu     = state_.netease_menu;
+    ns.netease_selected = state_.netease_selected;
+    ns.search_active    = state_.search_active;
+    ns.search_query     = state_.search_query;
+    state_.nav_stack.push_back(std::move(ns));
 }
 
-void StateStore::restore_playlist(void) {
-    /* Replace playlist with pre-search backup */
-    for (auto &s : state_.playlist)
-        song_info_free(&s);
+bool StateStore::nav_pop(void) {
+    if (state_.nav_stack.empty()) return false;
+
+    NavState ns = std::move(state_.nav_stack.back());
+    state_.nav_stack.pop_back();
+
+    /* free current state */
+    for (auto &s : state_.playlist) song_info_free(&s);
     state_.playlist.clear();
-    state_.playlist = std::move(state_.pre_search_playlist);
-    state_.pre_search_playlist.clear();
-    state_.selected_index = 0;
+
+    /* restore from saved state */
+    state_.playlist         = std::move(ns.playlist);
+    state_.selected_index   = ns.selected_index;
+    state_.active_panel     = ns.active_panel;
+    state_.netease_menu     = std::move(ns.netease_menu);
+    state_.netease_selected = ns.netease_selected;
+    state_.search_active    = ns.search_active;
+    state_.search_query     = ns.search_query;
+    return true;
 }
 
 void StateStore::set_active_panel(int panel) {
