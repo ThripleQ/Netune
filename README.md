@@ -11,16 +11,86 @@ A terminal-based music player with local file support and Netease Cloud Music in
 - 🔍 **In-list filter** — `/` to filter current playlist in real-time
 - 📜 **Scrolling marquee** — Long names auto-scroll on selection
 - ⏩ **Seek support** — `←`/`→` forward/backward (local + streaming)
-- 🔄 **Loop modes** — Off / One / All via `l` key
+- 🔄 **Audo backends** — ALSA, PulseAudio, SDL2 (auto-detected)
 - ⚡ **Async loading** — Non-blocking network operations with loading spinner
 - 🧭 **Navigation stack** — `Esc` to go back through history
+- 🖼️ **Colored watermark** — Brand logo displayed when list is empty
 
-## Screenshot
+## Dependencies
+
+| Package | Linux (Arch) | Linux (Debian/Ubuntu) |
+|---------|-------------|----------------------|
+| Compiler | `base-devel` | `build-essential` |
+| CMake | `cmake` | `cmake` |
+| FFmpeg | `ffmpeg` | `libavformat-dev libavcodec-dev libswresample-dev libavutil-dev` |
+| ALSA | `alsa-lib` | `libasound2-dev` |
+| PulseAudio | `libpulse` | `libpulse-dev` |
+| SDL2 | `sdl2` (optional) | `libsdl2-dev` (optional) |
+| yyjson | `yyjson` | `libyyjson-dev` |
+| libyaml | `libyaml` | `libyaml-dev` |
+
+FTXUI is auto-downloaded by CMake (FetchContent).
+
+## Build & Install
+
+### Linux
+
+```bash
+# Install dependencies (Arch)
+sudo pacman -S base-devel cmake ffmpeg alsa-lib libpulse sdl2 yyjson libyaml
+
+# Install dependencies (Debian/Ubuntu)
+sudo apt install build-essential cmake pkg-config \
+  libavformat-dev libavcodec-dev libswresample-dev \
+  libasound2-dev libpulse-dev libsdl2-dev \
+  libyyjson-dev libyaml-dev
+
+# Build
+git clone https://github.com/ThripleQ/Netune.git
+cd Netune
+cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+
+# Install
+cp build/netune ~/.local/bin/
+cp bin/netease-cli ~/.local/bin/
+cp -r data ~/.local/bin/data/
+
+# Run
+netune
+```
+
+You can also run directly from the build directory without installing:
+
+```bash
+./build/netune
+```
+
+### Windows (manual)
+
+Windows build requires [vcpkg](https://github.com/microsoft/vcpkg) and [Go](https://go.dev/).
+
+```powershell
+# Install deps via vcpkg
+vcpkg install ffmpeg:x64-windows sdl2:x64-windows yyjson:x64-windows libyaml:x64-windows
+
+# Build
+cmake -B build -DCMAKE_BUILD_TYPE=Release `
+  -DCMAKE_TOOLCHAIN_FILE="[vcpkg-path]\scripts\buildsystems\vcpkg.cmake"
+cmake --build build --config Release -j
+
+# Build netease-cli (Go)
+cd src\plugins\music_sources\netease\netease-cli
+go build -o netease-cli.exe .
+move netease-cli.exe ..\..\..\..\build\Release\
+```
+
+## Usage
 
 ```
 ┌─ left panel ──┐──┌─ right panel (song list) ─────────┐
 │ 本地音乐      │  │  Title — Artist                     │
-│ 网易云音乐    │  │  Another Song — Artist        03:45 │
+│ 网易云音乐    │  │  Another Song — Artist              │
 │               │  │  ...                                │
 ├──── status ───┤  │  Netease logo watermark             │
 │ ▶ Off 00:00   │  │  (when list empty)                  │
@@ -28,30 +98,7 @@ A terminal-based music player with local file support and Netease Cloud Music in
 └───────────────┘──┴─────────────────────────────────────┘
 ```
 
-## Dependencies
-
-- C11/C++17 compiler
-- CMake ≥ 3.16
-- FFmpeg (libavformat, libavcodec, libswresample)
-- ALSA (libasound2)
-- FTXUI (auto-downloaded via FetchContent)
-- yyjson, libyaml (included)
-
-## Build
-
-```bash
-git clone https://github.com/ThripleQ/Netune.git
-cd Netune
-cmake -B build
-cmake --build build -j$(nproc)
-./build/lmusic
-```
-
-### Startup config
-
-Edit `data/config.json` to set audio device, playback behavior, theme, etc.
-
-## Keybindings
+### Keybindings
 
 | Key | Action |
 |-----|--------|
@@ -69,14 +116,24 @@ Edit `data/config.json` to set audio device, playback behavior, theme, etc.
 | `?` | Help |
 | `q` | Quit |
 
-## Search
-
-Two search modes:
+### Search
 
 | Mode | Trigger | Behavior |
 |------|---------|----------|
 | **Filter** | `/` key | Real-time filter of current playlist (local + netease) |
 | **Global** | Menu "搜索网易云" | Enter to submit, async Netease API search |
+
+### Themes
+
+Edit `data/config.json` → `"theme": "name"`:
+
+| Name | Description |
+|------|-------------|
+| `default` | Tokyo Night-inspired dark |
+| `catppuccin` | Catppuccin Mocha |
+| `dracula` | Dracula |
+| `netease_dark` | Netease-style dark |
+| `netease_light` | Netease-style light |
 
 ## Architecture
 
@@ -95,18 +152,6 @@ Two search modes:
 │  Decoder           │
 └────────────────────┘
 ```
-
-## Themes
-
-Edit `data/config.json` → `"theme": "name"`:
-
-| Name | File | Description |
-|------|------|-------------|
-| `default` | `themes/default.yaml` | Tokyo Night-inspired dark |
-| `catppuccin` | `themes/catppuccin.yaml` | Catppuccin Mocha |
-| `dracula` | `themes/dracula.yaml` | Dracula |
-| `netease_dark` | `themes/netease_dark.yaml` | Netease-style dark |
-| `netease_light` | `themes/netease_light.yaml` | Netease-style light |
 
 ## License
 
