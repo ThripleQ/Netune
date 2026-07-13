@@ -79,5 +79,5 @@ Element render_login_screen(const AppState &s) {
 
     auto page = vbox(std::move(col));
     /* yframe + flex: fills available height, adds scrollbar if needed */
-    return page | yframe | flex | bgcolor(Color::RGB(15, 15, 25));
+    return page | yframe | flex | theme_overlay_bg;
 }

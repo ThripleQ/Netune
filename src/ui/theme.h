@@ -12,9 +12,10 @@ struct ThemeColor {
 /* ── Theme ──────────────────────────────────────────── */
 struct Theme {
     std::string name = "default";
-    ThemeColor bg;       /* background */
-    ThemeColor fg;       /* foreground */
-    ThemeColor accent;   /* accent (selection, highlights) */
+    ThemeColor bg;         /* main background */
+    ThemeColor fg;         /* foreground text */
+    ThemeColor accent;     /* accent (selection, highlights) */
+    ThemeColor overlay_bg; /* overlay/modal background (if unset, uses bg) */
 };
 
 /* ── Theme manager (singleton) ──────────────────────── */

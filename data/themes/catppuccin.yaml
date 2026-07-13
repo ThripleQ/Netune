@@ -2,4 +2,5 @@ name: "Catppuccin Mocha"
 colors:
   bg: "#1e1e2e"
   fg: "#cdd6f4"
+  overlay_bg: "#181825"
   accent: "#89b4fa"

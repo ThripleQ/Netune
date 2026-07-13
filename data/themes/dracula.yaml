@@ -2,4 +2,5 @@ name: "Dracula"
 colors:
   bg: "#282a36"
   fg: "#f8f8f2"
+  overlay_bg: "#21222c"
   accent: "#bd93f9"

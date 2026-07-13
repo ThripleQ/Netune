@@ -40,7 +40,7 @@ Element render_help_screen(const AppState &s) {
     col.push_back(text(" Press ? again or Escape to close ") | dim | center);
 
     auto help_box = vbox(std::move(col));
-    auto framed = help_box | border | center | clear_under | bgcolor(Color::RGB(20,20,30));
+    auto framed = help_box | border | center | clear_under | theme_overlay_bg;
 
     return framed;
 }
