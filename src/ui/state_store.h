@@ -83,6 +83,8 @@ struct AppState {
     std::vector<SongInfo> search_results;
     int search_selected = 0;
     int search_total = 0;
+    /* playlist backup for search result restore */
+    std::vector<SongInfo> pre_search_playlist;
 };
 
 /* ── State store singleton ─────────────────────────── */
@@ -125,6 +127,9 @@ public:
     void set_search_query(const std::string &query);
     void set_search_selected(int idx);
     void set_search_results(const std::vector<SongInfo> &results, int total);
+    /* playlist backup for search result restore */
+    void backup_playlist(void);
+    void restore_playlist(void);
 
 private:
     StateStore() = default;

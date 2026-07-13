@@ -120,6 +120,7 @@ static void do_netease_search(const char *query) {
     /* Check cache first */
     auto it = g_ns_cache.find(q);
     if (it != g_ns_cache.end()) {
+        StateStore::instance().backup_playlist();
         StateStore::instance().set_playlist(it->second, 0);
         StateStore::instance().set_active_panel(1);
         StateStore::instance().set_search_active(false);
@@ -127,6 +128,7 @@ static void do_netease_search(const char *query) {
         return;
     }
 
+    StateStore::instance().backup_playlist();
     StateStore::instance().set_loading(true);
 
     std::thread([q]() {
@@ -685,6 +687,10 @@ int run_app(int argc, char **argv) {
                 StateStore::instance().set_search_query("");
                 return true;
             }
+            /* Whether in search mode or viewing search results, backspace
+               on empty query or Esc restores previous playlist. Handled
+               in the non-search event handler below when cur contains
+               the results. */
             if (ev_key == "backspace") {
                 /* remove last char (UTF-8 safe) */
                 std::string q = cur.search_query;
@@ -717,6 +723,12 @@ int run_app(int argc, char **argv) {
                 return true;
             }
             return true; /* consume all keys while searching */
+        }
+
+        /* Esc while viewing search results: restore previous playlist */
+        if (ev_key == "escape" && !cur.search_active && cur.pre_search_playlist.size() > 0) {
+            StateStore::instance().restore_playlist();
+            return true;
         }
 
         auto action = g_keybindings.lookup(ev_key);

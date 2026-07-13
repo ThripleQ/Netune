@@ -204,6 +204,28 @@ void StateStore::set_group_index(int idx) {
     set_playlist(grp.songs, 0);
 }
 
+void StateStore::backup_playlist(void) {
+    /* Save current playlist for restore after search */
+    for (auto &s : state_.pre_search_playlist)
+        song_info_free(&s);
+    state_.pre_search_playlist.clear();
+    for (auto &s : state_.playlist) {
+        SongInfo copy = {};
+        copy_song_info(copy, s);
+        state_.pre_search_playlist.push_back(copy);
+    }
+}
+
+void StateStore::restore_playlist(void) {
+    /* Replace playlist with pre-search backup */
+    for (auto &s : state_.playlist)
+        song_info_free(&s);
+    state_.playlist.clear();
+    state_.playlist = std::move(state_.pre_search_playlist);
+    state_.pre_search_playlist.clear();
+    state_.selected_index = 0;
+}
+
 void StateStore::set_active_panel(int panel) {
     state_.active_panel = (panel == 0 || panel == 1) ? panel : 0;
 }
