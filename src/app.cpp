@@ -397,6 +397,15 @@ int run_app(int argc, char **argv) {
             if (s) *s = 0;
         }
     }
+    /* If data/ not in exe_dir, check parent dir (e.g. build/ → project root) */
+    char data_dir[1024];
+    snprintf(data_dir, sizeof(data_dir), "%s/data/config.json", exe_dir);
+    if (access(data_dir, F_OK) != 0) {
+        char *s = strrchr(exe_dir, '/');
+        if (s) {
+            *s = 0;  /* go up one more level */
+        }
+    }
     char cfg_buf[1024];
     if (argc > 1) {
         snprintf(cfg_buf, sizeof(cfg_buf), "%s", argv[1]);
