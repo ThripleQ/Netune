@@ -197,7 +197,16 @@ Element render_song_list(const AppState &s) {
             els.push_back(inline_spinner(true));
         }
 
-        for (size_t i = 0; i < s.playlist.size(); i++) {
+                        /* Watermark: show netease logo when empty */
+        if (!s.loading && s.playlist.empty()) {
+            els.push_back(filler());
+            els.push_back(theme_fg(text(
+                "    ~~~ Netease Music ~~~\n"
+                "     ~  ~  ~  ~  ~")) | dim | center);
+            els.push_back(filler());
+        }
+
+                for (size_t i = 0; i < s.playlist.size(); i++) {
             const auto &song = s.playlist[i];
             bool sel = ((int)i == s.selected_index);
 

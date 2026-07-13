@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/liu/Projects/lmusic2/build_debug/_deps/ftxui-subbuild/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
