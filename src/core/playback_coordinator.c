@@ -277,11 +277,13 @@ static void* playback_thread(void *arg) {
                     if (target < 0) target = 0;
                     if (target >= total_frames)
                         target = total_frames - 1;
+                    int ok = 1;
                     if (ffstream)
-                        ffstream_seek(ffstream, cmd.seek_frame);
+                        ok = (ffstream_seek(ffstream, cmd.seek_frame) == 0);
                     if (decoder)
                         decoder_seek(decoder, target);
-                    current_frame = target;
+                    if (ok)
+                        current_frame = target;
                 }
                 continue;
             default:
@@ -332,11 +334,13 @@ static void* playback_thread(void *arg) {
                         if (target < 0) target = 0;
                         if (target >= total_frames)
                             target = total_frames - 1;
+                        int ok = 1;
                         if (ffstream)
-                            ffstream_seek(ffstream, icmd.seek_frame);
+                            ok = (ffstream_seek(ffstream, icmd.seek_frame) == 0);
                         if (decoder)
                             decoder_seek(decoder, target);
-                        current_frame = target;
+                        if (ok)
+                            current_frame = target;
                         /* flush residual audio from output buffer */
                         if (audio) audio_output_flush(audio);
                         /* force progress update — now_ms went backward */
