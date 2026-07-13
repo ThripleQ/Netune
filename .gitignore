@@ -16,3 +16,4 @@ images.png
 
 # Keep pre-built binaries
 !bin/
+!bin/*
