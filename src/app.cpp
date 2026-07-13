@@ -35,7 +35,6 @@ extern "C" {
 #include "ui/components/status_bar.h"
 #include "ui/components/group_list.h"
 #include "ui/components/song_list.h"
-#include "ui/components/player_controls.h"
 #include "ui/components/help_screen.h"
 #include "ui/components/login_screen.h"
 #include "ui/theme.h"
@@ -457,7 +456,6 @@ int run_app(int argc, char **argv) {
     layout_engine.register_component("status_bar", render_status_bar);
     layout_engine.register_component("group_list", render_group_list);
     layout_engine.register_component("song_list", render_song_list);
-    layout_engine.register_component("player_controls", render_player_controls);
     const char *l_name = config_get_str(cfg, "ui.layout", NULL);
     const char *l_path = "data/layouts/default.yaml";
     if (l_name && strcmp(l_name, "default") != 0) l_path = l_name;

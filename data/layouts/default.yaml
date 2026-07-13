@@ -12,5 +12,4 @@ layout:
           width: 20
         - component: "song_list"
           flex: 1
-    - component: "player_controls"
-      height: 1
+
