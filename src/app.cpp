@@ -1065,7 +1065,7 @@ int run_app(int argc, char **argv) {
         }
 
         case Action::SeekForward: {
-            if (cur.playback_state != PlaybackState::Stopped) {
+            if (cur.playback_state != PlaybackState::Stopped && cur.total_time_sec > 0) {
                 int step = config_get_int(config_global(), "playback.seek_step_sec", 5);
                 int target = cur.current_time_sec + step;
                 if (target > cur.total_time_sec) target = cur.total_time_sec;
@@ -1075,7 +1075,7 @@ int run_app(int argc, char **argv) {
         }
 
         case Action::SeekBackward: {
-            if (cur.playback_state != PlaybackState::Stopped) {
+            if (cur.playback_state != PlaybackState::Stopped && cur.total_time_sec > 0) {
                 int step = config_get_int(config_global(), "playback.seek_step_sec", 5);
                 int target = cur.current_time_sec - step;
                 if (target < 0) target = 0;
