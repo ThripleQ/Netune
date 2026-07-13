@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "_comment": "Netune v2.0 全局配置 — 所有设置集中于此",
+  "_comment": "Netune v2.0.0 全局配置 — 所有设置集中于此",
 
   "audio": {
     "backend": "auto",
