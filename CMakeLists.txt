@@ -22,10 +22,10 @@ FetchContent_MakeAvailable(ftxui)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(YYJSON REQUIRED IMPORTED_TARGET yyjson)
 pkg_check_modules(YAML   REQUIRED IMPORTED_TARGET yaml-0.1)
-pkg_check_modules(ALSA   REQUIRED IMPORTED_TARGET alsa)
-pkg_check_modules(PULSE  REQUIRED IMPORTED_TARGET libpulse-simple)
+pkg_check_modules(ALSA   QUIET IMPORTED_TARGET alsa)
+pkg_check_modules(PULSE  QUIET IMPORTED_TARGET libpulse-simple)
 pkg_check_modules(SDL2   QUIET IMPORTED_TARGET sdl2)
-pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
+pkg_check_modules(FFMPEG QUIET IMPORTED_TARGET
   libavformat libavcodec libswresample libavutil)
 find_package(Threads REQUIRED)
 
@@ -55,16 +55,27 @@ set(PLUGIN_DECODER_SOURCES
   src/plugins/decoders/dr_flac/wav_decoder.c
 )
 
-set(PLUGIN_AUDIO_SOURCES
-  src/plugins/audio_outputs/alsa/alsa_plugin.c
-  src/plugins/audio_outputs/pulseaudio/pulse_plugin.c
-)
+set(PLUGIN_AUDIO_SOURCES)
+
+if(ALSA_FOUND)
+  list(APPEND PLUGIN_AUDIO_SOURCES src/plugins/audio_outputs/alsa/alsa_plugin.c)
+  message(STATUS "ALSA found: building ALSA audio backend")
+else()
+  message(STATUS "ALSA not found: skipping ALSA")
+endif()
+
+if(PULSE_FOUND)
+  list(APPEND PLUGIN_AUDIO_SOURCES src/plugins/audio_outputs/pulseaudio/pulse_plugin.c)
+  message(STATUS "PulseAudio found: building PulseAudio backend")
+else()
+  message(STATUS "PulseAudio not found: skipping PulseAudio")
+endif()
 
 if(SDL2_FOUND)
   list(APPEND PLUGIN_AUDIO_SOURCES src/plugins/audio_outputs/sdl/sdl_plugin.c)
   message(STATUS "SDL2 found: building SDL audio backend")
 else()
-  message(STATUS "SDL2 not found: skipping SDL audio backend (Windows users may need it)")
+  message(STATUS "SDL2 not found: skipping SDL (needed on Windows)")
 endif()
 
 set(PLUGIN_MUSIC_SOURCES
@@ -103,6 +114,15 @@ set(ALL_SOURCES
 add_executable(netune ${ALL_SOURCES})
 target_include_directories(netune PRIVATE src)
 target_compile_definitions(netune PRIVATE _GNU_SOURCE)
+if(ALSA_FOUND)
+  target_compile_definitions(netune PRIVATE HAS_ALSA)
+endif()
+if(PULSE_FOUND)
+  target_compile_definitions(netune PRIVATE HAS_PULSE)
+endif()
+if(SDL2_FOUND)
+  target_compile_definitions(netune PRIVATE HAS_SDL)
+endif()
 
 target_link_libraries(netune PRIVATE
   ftxui::screen
@@ -110,15 +130,22 @@ target_link_libraries(netune PRIVATE
   ftxui::component
   PkgConfig::YYJSON
   PkgConfig::YAML
-  PkgConfig::ALSA
-  PkgConfig::PULSE
   PkgConfig::FFMPEG
   Threads::Threads
-  dl m
 )
 
+if(ALSA_FOUND)
+  target_link_libraries(netune PRIVATE PkgConfig::ALSA)
+endif()
+if(PULSE_FOUND)
+  target_link_libraries(netune PRIVATE PkgConfig::PULSE)
+endif()
 if(SDL2_FOUND)
   target_link_libraries(netune PRIVATE PkgConfig::SDL2)
+endif()
+
+if(NOT WIN32)
+  target_link_libraries(netune PRIVATE dl m)
 endif()
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
