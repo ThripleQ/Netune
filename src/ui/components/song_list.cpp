@@ -17,13 +17,15 @@ static Element inline_spinner(bool active) {
     if (!active) { was_active = false; return text(""); }
     if (!was_active) { frame = 0; was_active = true; start = std::chrono::steady_clock::now(); }
     frame++;
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+    const char *frames[] = {"\u281B", "\u2819", "\u2819", "\u280B",
+                           "\u2803", "\u2807", "\u2807", "\u2812"};
+    auto &f = frames[(frame % 8)];
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - start).count();
     return hbox({
-        text(" [*") | dim,
-        text(std::to_string(ms / 1000) + "." + std::to_string((ms / 100) % 10)) | dim,
-        text("s] ") | dim,
-        text("Loading...") | dim,
+        text(" " + std::string(f) + " "),
+        text("Loading ") | dim,
+        text(std::to_string(ms / 1000) + "." + std::to_string((ms / 100) % 10) + "s") | dim,
     });
 }
 
