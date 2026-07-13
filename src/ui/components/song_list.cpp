@@ -15,7 +15,8 @@ static Element inline_spinner(bool active) {
     static std::chrono::steady_clock::time_point start;
     if (!active) { was_active = false; return text(""); }
     if (!was_active) { was_active = true; start = std::chrono::steady_clock::now(); }
-    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+    frame++;
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - start).count();
     return hbox({
         text(" [*") | dim,
