@@ -487,8 +487,9 @@ int run_app(int argc, char **argv) {
     const char *l_name = config_get_str(cfg, "ui.layout", NULL);
     char l_buf[1024];
     const char *l_path;
-    if (l_name && strcmp(l_name, "default") != 0) {
-        l_path = l_name;
+    if (l_name && strcmp(l_name, "default") != 0
+        && access(l_name, F_OK) == 0) {
+        l_path = l_name;  /* absolute or valid relative path */
     } else {
         snprintf(l_buf, sizeof(l_buf), "%s/data/layouts/default.yaml", exe_dir);
         l_path = l_buf;
