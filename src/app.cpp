@@ -673,10 +673,19 @@ int run_app(int argc, char **argv) {
                     return true;
                 }
                 if (ev_key == "enter" || ev_key == "\r") {
-                    /* exit filter, then normal Enter plays the selection */
+                    /* exit filter and play the selected song */
                     StateStore::instance().set_search_active(false);
                     StateStore::instance().set_search_query("");
                     StateStore::instance().set_search_scope(0);
+                    if (cur.active_panel == 1 && !cur.playlist.empty()) {
+                        int idx = cur.selected_index;
+                        if (idx >= 0 && idx < (int)cur.playlist.size()) {
+                            const auto &sel = cur.playlist[idx];
+                            const char *path = sel.id ? sel.id : "";
+                            StateStore::instance().set_current_song(sel);
+                            event_bus_publish(EV_PLAYBACK_START, (void*)path, strlen(path) + 1);
+                        }
+                    }
                     return true;
                 }
             }
