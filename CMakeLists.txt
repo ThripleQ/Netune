@@ -24,6 +24,7 @@ pkg_check_modules(YYJSON REQUIRED IMPORTED_TARGET yyjson)
 pkg_check_modules(YAML   REQUIRED IMPORTED_TARGET yaml-0.1)
 pkg_check_modules(ALSA   REQUIRED IMPORTED_TARGET alsa)
 pkg_check_modules(PULSE  REQUIRED IMPORTED_TARGET libpulse-simple)
+pkg_check_modules(SDL2   QUIET IMPORTED_TARGET sdl2)
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
   libavformat libavcodec libswresample libavutil)
 find_package(Threads REQUIRED)
@@ -58,6 +59,13 @@ set(PLUGIN_AUDIO_SOURCES
   src/plugins/audio_outputs/alsa/alsa_plugin.c
   src/plugins/audio_outputs/pulseaudio/pulse_plugin.c
 )
+
+if(SDL2_FOUND)
+  list(APPEND PLUGIN_AUDIO_SOURCES src/plugins/audio_outputs/sdl/sdl_plugin.c)
+  message(STATUS "SDL2 found: building SDL audio backend")
+else()
+  message(STATUS "SDL2 not found: skipping SDL audio backend (Windows users may need it)")
+endif()
 
 set(PLUGIN_MUSIC_SOURCES
   src/plugins/music_sources/local/local_source.c
@@ -108,6 +116,10 @@ target_link_libraries(netune PRIVATE
   Threads::Threads
   dl m
 )
+
+if(SDL2_FOUND)
+  target_link_libraries(netune PRIVATE PkgConfig::SDL2)
+endif()
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(netune PRIVATE -Wall -Wextra)
