@@ -10,3 +10,4 @@ build/
 .idea/
 compile_commands.json
 .cache/
+build_debug/
