@@ -15,18 +15,20 @@ Element render_status_bar(const AppState &s) {
     snprintf(buf, sizeof(buf), "%02d:%02d", m, sc);
     std::string time_str = buf;
 
-    std::string loop_str;
+    const char *loop_str;
     switch (s.loop_mode) {
-    case LoopMode::None:     loop_str = "\u2192"; break;
-    case LoopMode::Track:    loop_str = "\u21BA"; break;
-    case LoopMode::Playlist: loop_str = "\u21BB"; break;
+    case LoopMode::None:     loop_str = "Off";  break;
+    case LoopMode::Track:    loop_str = "One";  break;
+    case LoopMode::Playlist: loop_str = "All";  break;
     }
-    std::string vol_str = "Vol:" + std::to_string(s.volume);
-    std::string title = s.current_song.title ? s.current_song.title : "";
+    char info[128];
+    snprintf(info, sizeof(info), " %s  %s  %s  V:%d  %s",
+             state_str.c_str(), loop_str, time_str.c_str(),
+             s.volume,
+             s.current_song.title ? s.current_song.title : "");
 
     return theme_bg(vbox(Elements{
-        theme_fg(text(" " + state_str + " " + loop_str + "  " + time_str
-                      + "  " + vol_str + "  " + title)) | dim,
+        theme_fg(text(info)) | dim,
         gauge(s.progress) | theme_accent,
     }));
 }

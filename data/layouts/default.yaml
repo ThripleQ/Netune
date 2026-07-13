@@ -3,8 +3,6 @@ layout:
   children:
     - component: "top_bar"
       height: 1
-    - component: "status_bar"
-      height: 2
     - type: "horizontal"
       flex: 1
       children:
@@ -12,4 +10,5 @@ layout:
           width: 20
         - component: "song_list"
           flex: 1
-
+    - component: "status_bar"
+      height: 2
