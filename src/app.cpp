@@ -641,8 +641,8 @@ int run_app(int argc, char **argv) {
                     }
                     return true;
                 }
-                /* Local mode: navigate to selected result's folder */
-                if (!cur.search_results.empty()) {
+                /* scope=1 local: navigate to selected result */
+                if (cur.search_scope == 1 && !cur.search_results.empty()) {
                     const auto &sel = cur.search_results[cur.search_selected];
                     if (sel.source && strcmp(sel.source, "local") == 0 &&
                         sel.id && sel.id[0]) {
@@ -695,8 +695,8 @@ int run_app(int argc, char **argv) {
                 }
                 StateStore::instance().set_search_query(q);
                 StateStore::instance().set_search_results({}, 0);
-                /* Local: real-time; Netease: wait for Enter */
-                if (!q.empty() && cur.music_mode != MusicMode::Netease)
+                /* scope=1 local: real-time search; scope=0: just filter */
+                if (!q.empty() && cur.music_mode != MusicMode::Netease && cur.search_scope == 1)
                     search_manager_search_source("local", q.c_str(), 0);
                 return true;
             }
@@ -709,11 +709,11 @@ int run_app(int argc, char **argv) {
                 std::string q = cur.search_query + ch;
                 StateStore::instance().set_search_query(q);
                 StateStore::instance().set_search_results({}, 0);
-                /* Local: real-time; Netease: wait for Enter */
-                if (q.size() == 1 && cur.music_mode != MusicMode::Netease)
-                    search_manager_search_source("local", q.c_str(), 0);
-                if (cur.music_mode != MusicMode::Netease && q.size() > 1)
-                    search_manager_search_source("local", q.c_str(), 0);
+                /* scope=1 local: real-time */
+                if (cur.music_mode != MusicMode::Netease && cur.search_scope == 1) {
+                    if (q.size() == 1 || q.size() > 1)
+                        search_manager_search_source("local", q.c_str(), 0);
+                }
                 return true;
             }
             return true; /* consume all keys while searching */
@@ -838,6 +838,7 @@ int run_app(int argc, char **argv) {
                             start_login();
                         } else if (type == 100) {
                             search_manager_clear();
+                            StateStore::instance().set_search_scope(1);
                             StateStore::instance().set_search_active(true);
                             StateStore::instance().set_search_query("");
                         } else if (!pl_id.empty()) {
@@ -1034,8 +1035,9 @@ int run_app(int argc, char **argv) {
                 StateStore::instance().set_search_active(false);
                 StateStore::instance().set_search_query("");
             } else {
-                /* show empty search bar — user types to start searching */
+                /* filter mode (scope=0): always real-time client-side */
                 search_manager_clear();
+                StateStore::instance().set_search_scope(0);
                 StateStore::instance().set_search_active(true);
                 StateStore::instance().set_search_query("");
             }

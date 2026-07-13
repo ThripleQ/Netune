@@ -27,6 +27,7 @@ struct NavState {
     int                        active_panel    = 0;
     std::vector<NeteaseMenuItem> netease_menu;
     int                        netease_selected = 0;
+    int                        search_scope     = 0;
     bool                       search_active    = false;
     std::string                search_query;
 };
@@ -88,7 +89,8 @@ struct AppState {
     /* marquee width: computed from terminal size, updated per-frame */
     int  song_panel_width = 50;
 
-    /* search */
+    /* search: scope=0 filter in-list, scope=1 global search */
+    int  search_scope = 0;
     bool search_active = false;
     std::string search_query;
     std::vector<SongInfo> search_results;
@@ -135,6 +137,7 @@ public:
     bool get_loading(void) const { return state_.loading; }
 
     /* search */
+    void set_search_scope(int scope);
     void set_search_active(bool active);
     void set_search_query(const std::string &query);
     void set_search_selected(int idx);

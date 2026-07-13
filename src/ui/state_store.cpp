@@ -135,6 +135,10 @@ void StateStore::set_loading(bool v) {
     state_.loading = v;
 }
 
+void StateStore::set_search_scope(int scope) {
+    state_.search_scope = scope;
+}
+
 void StateStore::set_search_active(bool active) {
     state_.search_active = active;
 }
@@ -217,6 +221,7 @@ void StateStore::nav_push(void) {
     ns.netease_selected = state_.netease_selected;
     ns.search_active    = state_.search_active;
     ns.search_query     = state_.search_query;
+    ns.search_scope     = state_.search_scope;
     state_.nav_stack.push_back(std::move(ns));
 }
 
@@ -239,6 +244,7 @@ bool StateStore::nav_pop(void) {
     /* Esc always exits search mode, never restores it */
     state_.search_active    = false;
     state_.search_query     = "";
+    state_.search_scope     = 0;
     return true;
 }
 
