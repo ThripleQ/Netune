@@ -11,10 +11,11 @@ using namespace ftxui;
 
 /* ── Inline spinner (Braille animation + elapsed) ── */
 static Element inline_spinner(bool active) {
+    static int frame = 0;
     static bool was_active = false;
     static std::chrono::steady_clock::time_point start;
     if (!active) { was_active = false; return text(""); }
-    if (!was_active) { was_active = true; start = std::chrono::steady_clock::now(); }
+    if (!was_active) { frame = 0; was_active = true; start = std::chrono::steady_clock::now(); }
     frame++;
         auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - start).count();
