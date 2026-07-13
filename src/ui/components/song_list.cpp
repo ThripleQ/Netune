@@ -118,11 +118,12 @@ Element render_song_list(const AppState &s) {
 
     if (s.search_active) {
         /* ── Search input line ──────────────────────── */
-        const char *tag = (s.music_mode == MusicMode::Netease) ? "Netease" : "Local";
+        const char *tag = s.search_scope == 0 ? "Filter" :
+                          (s.music_mode == MusicMode::Netease ? "Netease" : "Local");
         std::string input = std::string(" [/] ") + tag + " > " + s.search_query + "\u258C";
         els.push_back(text(input) | bold);
 
-        /* ── Search results / hints ──────────────────── */
+        /* ── Search hints per scope ──────────────────── */
         if (s.search_query.empty()) {
             els.push_back(theme_fg(text("  Type to search...")) | dim);
         } else if (s.music_mode == MusicMode::Netease && s.search_results.empty() && !s.loading) {
@@ -135,8 +136,35 @@ Element render_song_list(const AppState &s) {
         if (s.loading)
             els.push_back(inline_spinner(true));
 
-        /* ── Local search results inline ─────────────── */
-        if (s.music_mode != MusicMode::Netease && !s.search_results.empty()) {
+        /* ── scope=0 (filter): show filtered playlist ─── */
+        if (s.search_scope == 0 && !s.search_query.empty()) {
+            std::string q = s.search_query;
+            std::transform(q.begin(), q.end(), q.begin(), ::tolower);
+            int shown = 0;
+            for (size_t i = 0; i < s.playlist.size(); i++) {
+                const auto &song = s.playlist[i];
+                std::string haystack;
+                if (song.title) haystack += song.title;
+                if (song.artist) haystack += std::string(" ") + song.artist;
+                std::transform(haystack.begin(), haystack.end(), haystack.begin(), ::tolower);
+                if (haystack.find(q) == std::string::npos) continue;
+                bool sel = ((int)i == s.selected_index && s.active_panel == 1);
+                std::string content;
+                if (song.title) content += song.title;
+                if (song.artist) content += std::string(" — ") + song.artist;
+                std::string row = build_info_row(content, avail_w, sel);
+                if (sel)
+                    els.push_back(theme_accent(text("> " + row) | inverted | focus));
+                else
+                    els.push_back(theme_fg(text("  " + row)));
+                shown++;
+            }
+            if (shown == 0)
+                els.push_back(theme_fg(text("  No matches.")) | dim);
+        }
+
+        /* ── Local search results inline (scope=1) ──── */
+        if (s.search_scope == 1 && !s.search_results.empty()) {
             char hdr[32];
             snprintf(hdr, sizeof(hdr), "  %d/%d results:",
                      (int)s.search_results.size(), s.search_total);
