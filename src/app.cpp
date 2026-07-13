@@ -39,7 +39,6 @@ extern "C" {
 #include "ui/components/help_screen.h"
 #include "ui/components/search_bar.h"
 #include "ui/components/login_screen.h"
-#include "ui/components/spinner.h"
 #include "ui/theme.h"
 #include "ui/layout_engine.h"
 
@@ -558,15 +557,6 @@ int run_app(int argc, char **argv) {
             main = vbox(Elements{
                 main,
                 render_help_screen(s) | center | clear_under,
-            });
-        }
-
-        if (s.loading) {
-            main = vbox(Elements{
-                main,
-                filler(),
-                render_spinner(s) | center,
-                filler(),
             });
         }
 

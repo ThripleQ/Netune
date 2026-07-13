@@ -8,6 +8,22 @@
 #include <algorithm>
 using namespace ftxui;
 
+/* ── Inline spinner (Braille animation) ────────────── */
+static Element inline_spinner(bool active) {
+    static int frame = 0;
+    static bool was_active = false;
+    if (!active) { was_active = false; return text(""); }
+    if (!was_active) { frame = 0; was_active = true; }
+    frame++;
+    const char *frames[] = {"\u281B", "\u2819", "\u2819", "\u280B",
+                           "\u2803", "\u2807", "\u2807", "\u2812"};
+    auto &f = frames[(frame % 8)];
+    return hbox({
+        text(" " + std::string(f) + " "),
+        text("Loading...") | dim,
+    });
+}
+
 #define MARQUEE_SPEED  8
 #define MARQUEE_PAUSE 45
 
@@ -104,6 +120,15 @@ Element render_song_list(const AppState &s) {
     Elements els;
     int mw = s.song_panel_width;
     if (mw < 15) mw = 15;
+
+    /* Inline spinner during async load */
+    if (s.loading && s.playlist.empty()) {
+        els.push_back(filler());
+        els.push_back(inline_spinner(true) | center);
+        els.push_back(filler());
+    } else if (s.loading) {
+        els.push_back(inline_spinner(true));
+    }
 
     for (size_t i = 0; i < s.playlist.size(); i++) {
         const auto &song = s.playlist[i];
