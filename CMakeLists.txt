@@ -151,22 +151,20 @@ target_link_libraries(netune PRIVATE
   ftxui::screen
   ftxui::dom
   ftxui::component
+  PkgConfig::YYJSON
+  PkgConfig::YAML
+  PkgConfig::FFMPEG
   Threads::Threads
 )
 
-if(PkgConfig_FOUND)
-  target_link_libraries(netune PRIVATE
-    PkgConfig::YYJSON PkgConfig::YAML PkgConfig::FFMPEG)
-  if(ALSA_FOUND)  target_link_libraries(netune PRIVATE PkgConfig::ALSA)  endif()
-  if(PULSE_FOUND) target_link_libraries(netune PRIVATE PkgConfig::PULSE) endif()
-  if(SDL2_FOUND)  target_link_libraries(netune PRIVATE PkgConfig::SDL2)  endif()
-else()
-  target_link_libraries(netune PRIVATE yyjson::yyjson yaml::yaml)
-  if(ALSA_FOUND)       target_link_libraries(netune PRIVATE ALSA::ALSA)         endif()
-  if(PulseAudio_FOUND) target_link_libraries(netune PRIVATE PulseAudio::PulseAudio) endif()
-  if(SDL2_FOUND)       target_link_libraries(netune PRIVATE SDL2::SDL2)         endif()
-  if(FFMPEG_FOUND)     target_link_libraries(netune PRIVATE
-    FFMPEG::libavformat FFMPEG::libavcodec FFMPEG::libswresample FFMPEG::libavutil) endif()
+if(ALSA_FOUND)
+  target_link_libraries(netune PRIVATE PkgConfig::ALSA)
+endif()
+if(PULSE_FOUND)
+  target_link_libraries(netune PRIVATE PkgConfig::PULSE)
+endif()
+if(SDL2_FOUND)
+  target_link_libraries(netune PRIVATE PkgConfig::SDL2)
 endif()
 
 if(NOT WIN32)

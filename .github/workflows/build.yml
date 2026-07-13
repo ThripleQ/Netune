@@ -55,7 +55,7 @@ jobs:
           echo "VCPKG_ROOT=$pwd\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Install deps
-        run: vcpkg install ffmpeg:x64-windows sdl2:x64-windows yyjson:x64-windows libyaml:x64-windows
+        run: vcpkg install ffmpeg:x64-windows sdl2:x64-windows yyjson:x64-windows libyaml:x64-windows pkgconf:x64-windows
 
       - name: Configure
         run: |
