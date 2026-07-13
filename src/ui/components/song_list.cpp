@@ -259,10 +259,8 @@ Element render_song_list(const AppState &s) {
                 Elements cells;
                 for (int c = 0; c < 40; c++) {
                     int rr = wp[ip++], gg = wp[ip++], bb = wp[ip++];
-                    Element ch = (rr >= 0)
-                        ? color(Color::RGB(rr,gg,bb), text("\u2588"))
-                        : text(" ");
-                    cells.push_back(ch | clear_under);
+                    if (rr >= 0)
+                        cells.push_back(color(Color::RGB(rr,gg,bb), text("\u2588") | clear_under));
                 }
                 rows.push_back(hbox(std::move(cells)));
             }
