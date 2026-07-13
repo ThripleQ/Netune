@@ -28,7 +28,6 @@ static Element inline_spinner(bool active) {
 #define MARQUEE_PAUSE 45
 
 /* ── Truncate or marquee-scroll text within width ─── */
-/* Returns (fit part, is_truncated)                       */
 static std::string fit_text(const std::string &text, int width) {
     if (width <= 0) return "";
     int total_w = string_width(text);
@@ -42,10 +41,10 @@ static std::string fit_text(const std::string &text, int width) {
         size_t rc = mbrtowc(&wc, text.data() + i, text.size() - i, &st);
         if (rc == 0 || rc == (size_t)-1 || rc == (size_t)-2) break;
         int cw = wcwidth(wc); if (cw < 0) cw = 1;
-        if (col_run + cw > width - 1) break; /* leave room for "…" */
+        if (col_run + cw > width - 1) break;
         result.append(text, i, rc); col_run += cw; i += rc;
     }
-    result += "\u2026"; /* ellipsis */
+    result += "\u2026";
     return result;
 }
 
@@ -62,7 +61,6 @@ static std::string marquee_text(const std::string &text, int width) {
     int cycle = max_offset + MARQUEE_PAUSE;
     int pos = (frame / MARQUEE_SPEED) % cycle;
     int offset_cols = (pos < max_offset) ? pos : max_offset;
-
     size_t start_i = 0;
     int col_run = 0;
     std::mbstate_t st = {};
@@ -74,7 +72,6 @@ static std::string marquee_text(const std::string &text, int width) {
         if (col_run + cw > offset_cols) break;
         start_i = i + rc; col_run += cw; i += rc;
     }
-
     std::string result;
     col_run = 0; st = {};
     for (size_t i = start_i; i < text.size(); ) {
@@ -102,56 +99,99 @@ static std::string marquee_text(const std::string &text, int width) {
 }
 
 /* ── Build row: Title — Artist, truncated or marquee ── */
-static std::string build_row(const std::string &content,
-                             int duration_sec,
-                             int panel_width,
-                             bool marquee) {
-    (void)duration_sec;  /* time shown in progress bar */
-    int avail_w = panel_width - 2;  /* "  " or "> " prefix */
-    if (avail_w < 5) avail_w = 5;
-
+static std::string build_info_row(const std::string &content, int avail_w, bool marquee) {
     if (marquee)
         return marquee_text(content, avail_w);
     return fit_text(content, avail_w);
 }
 
-/* ── Render ────────────────────────────────────────── */
+/* ══════════════════════════════════════════════════
+   Render: either search UI or normal song list
+   ══════════════════════════════════════════════════ */
 Element render_song_list(const AppState &s) {
-    Elements els;
     int mw = s.song_panel_width;
-    if (mw < 15) mw = 15;
+    if (mw < 10) mw = 10;
+    int avail_w = mw - 2;  /* minus prefix */
+    if (avail_w < 5) avail_w = 5;
 
-    /* Inline spinner during async load */
-    if (s.loading && s.playlist.empty()) {
-        els.push_back(filler());
-        els.push_back(inline_spinner(true) | center);
-        els.push_back(filler());
-    } else if (s.loading) {
-        els.push_back(inline_spinner(true));
+    Elements els;
+
+    if (s.search_active) {
+        /* ── Search input line ──────────────────────── */
+        const char *tag = (s.music_mode == MusicMode::Netease) ? "Netease" : "Local";
+        std::string input = std::string(" [/] ") + tag + " > " + s.search_query + "\u258C";
+        els.push_back(text(input) | bold);
+
+        /* ── Search results / hints ──────────────────── */
+        if (s.search_query.empty()) {
+            els.push_back(theme_fg(text("  Type to search...")) | dim);
+        } else if (s.music_mode == MusicMode::Netease && s.search_results.empty() && !s.loading) {
+            els.push_back(theme_fg(text("  Press [Enter] to search Netease")) | dim);
+        } else if (s.music_mode != MusicMode::Netease && s.search_results.empty() && !s.loading) {
+            els.push_back(theme_fg(text("  No results.")) | dim);
+        }
+
+        /* Inline loading spinner during netease search */
+        if (s.loading)
+            els.push_back(inline_spinner(true));
+
+        /* ── Local search results inline ─────────────── */
+        if (s.music_mode != MusicMode::Netease && !s.search_results.empty()) {
+            char hdr[32];
+            snprintf(hdr, sizeof(hdr), "  %d/%d results:",
+                     (int)s.search_results.size(), s.search_total);
+            els.push_back(theme_accent(text(hdr) | bold));
+            int shown = 0;
+            for (auto &song : s.search_results) {
+                if (shown >= 30) break;
+                bool selected = (shown == s.search_selected);
+                std::string label;
+                if (song.title) label += song.title;
+                if (song.artist) { label += " \u2014 "; label += song.artist; }
+                label = fit_text(label, avail_w);
+                if (selected)
+                    els.push_back(theme_accent(text("> " + label) | inverted | focus));
+                else
+                    els.push_back(theme_fg(text("  " + label)));
+                shown++;
+            }
+        }
+
+    } else {
+        /* ── Normal playlist display ─────────────────── */
+
+        /* Spinner during async load */
+        if (s.loading && s.playlist.empty()) {
+            els.push_back(filler());
+            els.push_back(inline_spinner(true) | center);
+            els.push_back(filler());
+        } else if (s.loading) {
+            els.push_back(inline_spinner(true));
+        }
+
+        for (size_t i = 0; i < s.playlist.size(); i++) {
+            const auto &song = s.playlist[i];
+            bool sel = ((int)i == s.selected_index);
+
+            std::string content;
+            if (song.title && song.title[0])
+                content = song.title;
+            else
+                content = "(unknown)";
+            if (song.artist && song.artist[0])
+                content += std::string(" \u2014 ") + song.artist;
+
+            bool scroll = (s.active_panel == 1 && sel);
+            std::string row = build_info_row(content, avail_w, scroll);
+
+            if (s.active_panel == 1 && sel)
+                els.push_back(theme_accent(text("> " + row) | inverted | focus));
+            else if (s.active_panel == 0 && sel)
+                els.push_back(theme_fg(text("  " + row) | focus));
+            else
+                els.push_back(theme_fg(text("  " + row)));
+        }
     }
 
-    for (size_t i = 0; i < s.playlist.size(); i++) {
-        const auto &song = s.playlist[i];
-        bool sel = ((int)i == s.selected_index);
-
-        /* Build content: "Title — Artist" */
-        std::string content;
-        if (song.title && song.title[0])
-            content = song.title;
-        else
-            content = "(unknown)";
-        if (song.artist && song.artist[0])
-            content += std::string(" \u2014 ") + song.artist;
-
-        bool scroll = (s.active_panel == 1 && sel);
-        std::string row = build_row(content, song.duration_sec, mw, scroll);
-
-        if (s.active_panel == 1 && sel)
-            els.push_back(theme_accent(text("> " + row) | inverted | focus));
-        else if (s.active_panel == 0 && sel)
-            els.push_back(theme_fg(text("  " + row) | focus));
-        else
-            els.push_back(theme_fg(text("  " + row)));
-    }
     return theme_bg(vbox(std::move(els)) | vscroll_indicator | frame | flex | border);
 }

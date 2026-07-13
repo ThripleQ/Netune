@@ -37,7 +37,6 @@ extern "C" {
 #include "ui/components/song_list.h"
 #include "ui/components/player_controls.h"
 #include "ui/components/help_screen.h"
-#include "ui/components/search_bar.h"
 #include "ui/components/login_screen.h"
 #include "ui/theme.h"
 #include "ui/layout_engine.h"
@@ -581,12 +580,7 @@ int run_app(int argc, char **argv) {
             /* Full-page login screen */
             return render_login_screen(s);
         }
-        if (s.search_active) {
-            main = vbox(Elements{
-                main | flex,
-                render_search_bar(s) | clear_under,
-            });
-        } else if (s.show_help) {
+        if (s.show_help) {
             /* overlay help screen centered on top of main content */
             main = vbox(Elements{
                 main,
