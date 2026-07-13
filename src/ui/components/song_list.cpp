@@ -121,17 +121,12 @@ Element render_song_list(const AppState &s) {
         bool scroll = (s.active_panel == 1 && sel);
         std::string row = build_row(content, song.duration_sec, mw, scroll);
 
-        float fy = s.playlist.size() > 1
-            ? (float)i / (float)(s.playlist.size() - 1) : 0.0f;
-
         if (s.active_panel == 1 && sel)
-            els.push_back(theme_accent(text("> " + row) | inverted
-                                       | focusPositionRelative(0, fy)));
+            els.push_back(theme_accent(text("> " + row) | inverted | focus));
         else if (s.active_panel == 0 && sel)
-            els.push_back(theme_fg(text("  " + row)
-                                   | focusPositionRelative(0, fy)));
+            els.push_back(theme_fg(text("  " + row) | focus));
         else
             els.push_back(theme_fg(text("  " + row)));
     }
-    return theme_bg(vbox(std::move(els)) | frame | flex | border);
+    return theme_bg(vbox(std::move(els)) | vscroll_indicator | frame | flex | border);
 }
