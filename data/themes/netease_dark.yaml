@@ -1,0 +1,5 @@
+name: "Netease Dark"
+colors:
+  bg: "#1a1a2e"
+  fg: "#c8c8dc"
+  accent: "#e3322d"

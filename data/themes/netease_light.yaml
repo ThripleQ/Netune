@@ -1,0 +1,5 @@
+name: "Netease Light"
+colors:
+  bg: "#f5f5f5"
+  fg: "#333333"
+  accent: "#d43c33"
