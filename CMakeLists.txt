@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(lmusic VERSION 2.0.0 LANGUAGES C CXX)
+project(netune VERSION 2.0.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -92,11 +92,11 @@ set(ALL_SOURCES
 )
 
 # ── Executable ───────────────────────────────────────
-add_executable(lmusic ${ALL_SOURCES})
-target_include_directories(lmusic PRIVATE src)
-target_compile_definitions(lmusic PRIVATE _GNU_SOURCE)
+add_executable(netune ${ALL_SOURCES})
+target_include_directories(netune PRIVATE src)
+target_compile_definitions(netune PRIVATE _GNU_SOURCE)
 
-target_link_libraries(lmusic PRIVATE
+target_link_libraries(netune PRIVATE
   ftxui::screen
   ftxui::dom
   ftxui::component
@@ -110,8 +110,8 @@ target_link_libraries(lmusic PRIVATE
 )
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
-  target_compile_options(lmusic PRIVATE -Wall -Wextra)
+  target_compile_options(netune PRIVATE -Wall -Wextra)
 endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-  target_compile_options(lmusic PRIVATE -Wall -Wextra)
+  target_compile_options(netune PRIVATE -Wall -Wextra)
 endif()

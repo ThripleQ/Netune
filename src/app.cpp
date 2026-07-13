@@ -378,7 +378,7 @@ static void ev_playlist_changed(const BusEvent *ev, void *data) {
 /* ───────────────────────────────────────────────────── */
 
 int run_app(int argc, char **argv) {
-    log_init("/tmp/lmusic.log");
+    log_init("/tmp/netune.log");
     LOG_INFO("Netune v2.0.0 starting");
 
     if (argc > 1 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
@@ -398,7 +398,7 @@ int run_app(int argc, char **argv) {
         const char *home = getenv("HOME");
         char cache_dir[512];
         if (home) {
-            snprintf(cache_dir, sizeof(cache_dir), "%s/.cache/lmusic", home);
+            snprintf(cache_dir, sizeof(cache_dir), "%s/.cache/netune", home);
         } else {
             snprintf(cache_dir, sizeof(cache_dir), "/tmp/netune-cache");
         }

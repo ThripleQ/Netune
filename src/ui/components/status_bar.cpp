@@ -15,7 +15,7 @@ Element render_status_bar(const AppState &s) {
     snprintf(buf, sizeof(buf), "%02d:%02d", m, sc);
     std::string time_str = buf;
 
-    const char *loop_str;
+    const char *loop_str = "Off";
     switch (s.loop_mode) {
     case LoopMode::None:     loop_str = "Off";  break;
     case LoopMode::Track:    loop_str = "One";  break;
