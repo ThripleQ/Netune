@@ -4,13 +4,10 @@ on:
   push:
     branches: [ master ]
     tags: [ "v*" ]
-  pull_request:
-    branches: [ master ]
   release:
     types: [ published ]
 
 jobs:
-  # ── Linux ───────────────────────────────────────────
   linux:
     runs-on: ubuntu-latest
     steps:
@@ -33,15 +30,14 @@ jobs:
       - name: Strip
         run: strip build/netune
 
-      - name: Upload artifact
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: netune-linux-x86_64
+          name: netune-linux
           path: |
             build/netune
             build/netease-cli
 
-  # ── Windows ─────────────────────────────────────────
   windows:
     runs-on: windows-latest
     defaults:
@@ -50,18 +46,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      - uses: lukka/get-cmake@latest
+      - uses: microsoft/setup-msbuild@v2
 
       - name: Setup vcpkg
-        uses: lukka/get-vcpkg@v5
+        uses: microsoft/setup-vcpkg@v1
 
       - name: Install deps
-        run: |
-          $env:VCPKG_ROOT\vcpkg install ffmpeg:x64-windows sdl2:x64-windows `
-            yyjson:x64-windows libyaml:x64-windows
+        run: vcpkg install ffmpeg:x64-windows sdl2:x64-windows yyjson:x64-windows libyaml:x64-windows
 
-      - name: Configure CMake
+      - name: Configure
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
@@ -71,43 +64,38 @@ jobs:
 
       - name: Collect DLLs
         run: |
-          $vcpkg_bin = "$env:VCPKG_ROOT\installed\x64-windows\bin"
-          Copy-Item "$vcpkg_bin\avformat*.dll"    build\Release\
-          Copy-Item "$vcpkg_bin\avcodec*.dll"     build\Release\
-          Copy-Item "$vcpkg_bin\avutil*.dll"      build\Release\
-          Copy-Item "$vcpkg_bin\swresample*.dll"  build\Release\
-          Copy-Item "$vcpkg_bin\SDL2*.dll"        build\Release\
-          Copy-Item "$vcpkg_bin\yyjson*.dll"      build\Release\
-          Copy-Item "$vcpkg_bin\yaml*.dll"        build\Release\
+          $bin = "$env:VCPKG_ROOT\installed\x64-windows\bin"
+          Copy-Item "$bin\avformat*.dll", "$bin\avcodec*.dll", "$bin\avutil*.dll",
+            "$bin\swresample*.dll", "$bin\SDL2*.dll",
+            "$bin\yyjson*.dll", "$bin\yaml*.dll" build\Release\
 
-      - name: Build netease-cli (Go)
+      - name: Build netease-cli
         run: |
           cd src\plugins\music_sources\netease\netease-cli
           go build -ldflags="-s -w" -o netease-cli.exe .
           move netease-cli.exe ..\..\..\..\build\Release\
 
-      - name: Upload artifact
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: netune-windows-x86_64
+          name: netune-windows
           path: build\Release\*
 
-  # ── Package release ────────────────────────────────
-  package:
+  release:
     if: github.event_name == 'release'
     needs: [linux, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
 
-      - name: Create archives
+      - name: Package
         run: |
-          cd netune-linux-x86_64 && tar czf ../netune-linux-x86_64.tar.gz * && cd ..
-          cd netune-windows-x86_64 && zip -r ../netune-windows-x86_64.zip * && cd ..
+          cd netune-linux && tar czf ../netune-linux.tar.gz * && cd ..
+          cd netune-windows && zip -r ../netune-windows.zip * && cd ..
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            netune-linux-x86_64.tar.gz
-            netune-windows-x86_64.zip
+            netune-linux.tar.gz
+            netune-windows.zip
