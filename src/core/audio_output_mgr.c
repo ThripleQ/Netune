@@ -21,11 +21,13 @@ int audio_output_register_backend(AudioOutputBackend *backend) {
 
 /* built-in backends */
 extern AudioOutputBackend g_alsa_backend;
+extern AudioOutputBackend g_pulse_backend;
 
 static void register_builtins(void) {
     static int done = 0;
     if (done) return;
     audio_output_register_backend(&g_alsa_backend);
+    audio_output_register_backend(&g_pulse_backend);
     done = 1;
 }
 

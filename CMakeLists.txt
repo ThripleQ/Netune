@@ -56,6 +56,7 @@ set(PLUGIN_DECODER_SOURCES
 
 set(PLUGIN_AUDIO_SOURCES
   src/plugins/audio_outputs/alsa/alsa_plugin.c
+  src/plugins/audio_outputs/pulseaudio/pulse_plugin.c
 )
 
 set(PLUGIN_MUSIC_SOURCES
