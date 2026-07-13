@@ -272,13 +272,15 @@ static void* playback_thread(void *arg) {
                 }
                 continue;
             case CMD_SEEK:
-                /* seek while paused — update decoder position */
-                if (decoder && total_frames > 0) {
+                if (total_frames > 0) {
                     int target = cmd.seek_frame * samplerate;
                     if (target < 0) target = 0;
                     if (target >= total_frames)
                         target = total_frames - 1;
-                    decoder_seek(decoder, target);
+                    if (ffstream)
+                        ffstream_seek(ffstream, cmd.seek_frame);
+                    if (decoder)
+                        decoder_seek(decoder, target);
                     current_frame = target;
                 }
                 continue;
@@ -325,12 +327,15 @@ static void* playback_thread(void *arg) {
                     cmd_queue_push(&g_cmd_queue, &icmd);
                     goto next_song;
                 case CMD_SEEK:
-                    if (decoder && total_frames > 0) {
+                    if (total_frames > 0) {
                         int target = icmd.seek_frame * samplerate;
                         if (target < 0) target = 0;
                         if (target >= total_frames)
                             target = total_frames - 1;
-                        decoder_seek(decoder, target);
+                        if (ffstream)
+                            ffstream_seek(ffstream, icmd.seek_frame);
+                        if (decoder)
+                            decoder_seek(decoder, target);
                         current_frame = target;
                         /* flush residual audio from output buffer */
                         if (audio) audio_output_flush(audio);

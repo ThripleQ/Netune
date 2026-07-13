@@ -93,6 +93,19 @@ int ffstream_decode(FFStream *s, int16_t *pcm, int max_frames) {
     }
 }
 
+int ffstream_seek(FFStream *s, int64_t timestamp_sec) {
+    if (!s) return -1;
+    int64_t ts = timestamp_sec * AV_TIME_BASE;
+    if (av_seek_frame(s->fmt, -1, ts, AVSEEK_FLAG_BACKWARD) < 0)
+        return -1;
+    avcodec_flush_buffers(s->codec);
+    swr_close(s->swr);
+    swr_init(s->swr);
+    s->eof = 0;
+    s->flushing = 0;
+    return 0;
+}
+
 void ffstream_close(FFStream *s) {
     if (!s) return;
     av_frame_free(&s->frm);

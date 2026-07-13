@@ -16,6 +16,9 @@ FFStream* ffstream_open(const char *url,
 /* Decode up to max_frames of PCM S16. Returns actual frames decoded (0=EOF). */
 int ffstream_decode(FFStream *s, int16_t *pcm, int max_frames);
 
+/* Seek to timestamp in seconds. Returns 0 on success. */
+int ffstream_seek(FFStream *s, int64_t timestamp_sec);
+
 /* Close and free. */
 void ffstream_close(FFStream *s);
 
