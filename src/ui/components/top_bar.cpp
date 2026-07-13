@@ -9,6 +9,8 @@ Element render_top_bar(const AppState &s) {
         if (s.current_song.artist && s.current_song.artist[0]) {
             title += std::string(" — ") + s.current_song.artist;
         }
+    } else {
+        title = "Netune v2.0.0";
     }
     return theme_bg(theme_fg(text(" " + title) | bold) | center);
 }
