@@ -1,5 +1,5 @@
-name: "Default Light"
+name: "Netune Dark"
 colors:
-  bg: "#000000"
-  fg: "#aaaaaa"
-  accent: "#ffffff"
+  bg: "#1a1b26"
+  fg: "#c0caf5"
+  accent: "#7aa2f7"
