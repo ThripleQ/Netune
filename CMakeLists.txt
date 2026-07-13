@@ -77,7 +77,6 @@ set(UI_SOURCES
   src/ui/components/status_bar.cpp
   src/ui/components/player_controls.cpp
   src/ui/components/help_screen.cpp
-  src/ui/components/search_bar.cpp
   src/ui/components/login_screen.cpp
   src/ui/components/spinner.cpp
 )
