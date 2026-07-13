@@ -142,6 +142,7 @@ public:
     /* nav stack push/pop for Esc-back */
     void nav_push(void);
     bool nav_pop(void);  /* returns true if state restored */
+    void clear_nav_stack(void);
 
 private:
     StateStore() = default;

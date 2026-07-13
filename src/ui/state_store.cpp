@@ -236,9 +236,17 @@ bool StateStore::nav_pop(void) {
     state_.active_panel     = ns.active_panel;
     state_.netease_menu     = std::move(ns.netease_menu);
     state_.netease_selected = ns.netease_selected;
-    state_.search_active    = ns.search_active;
-    state_.search_query     = ns.search_query;
+    /* Esc always exits search mode, never restores it */
+    state_.search_active    = false;
+    state_.search_query     = "";
     return true;
+}
+
+void StateStore::clear_nav_stack(void) {
+    for (auto &ns : state_.nav_stack)
+        for (auto &s : ns.playlist)
+            song_info_free(&s);
+    state_.nav_stack.clear();
 }
 
 void StateStore::set_active_panel(int panel) {
