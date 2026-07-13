@@ -13,3 +13,6 @@ compile_commands.json
 build_debug/
 文本文件.txt
 images.png
+
+# Keep pre-built binaries
+!bin/

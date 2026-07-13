@@ -112,6 +112,16 @@ set(ALL_SOURCES
 
 # ── Executable ───────────────────────────────────────
 add_executable(netune ${ALL_SOURCES})
+# ── netease-cli ──────────────────────────────────────
+# Pre-built binary for the host platform; fall back to PATH otherwise
+if(EXISTS "${CMAKE_SOURCE_DIR}/bin/netease-cli")
+  configure_file("${CMAKE_SOURCE_DIR}/bin/netease-cli" "${CMAKE_BINARY_DIR}/netease-cli" COPYONLY)
+  message(STATUS "netease-cli: using pre-built binary")
+endif()
+if(EXISTS "${CMAKE_BINARY_DIR}/netease-cli")
+  message(STATUS "netease-cli: pre-built copied to build dir")
+endif()
+
 target_include_directories(netune PRIVATE src)
 target_compile_definitions(netune PRIVATE _GNU_SOURCE)
 if(ALSA_FOUND)
