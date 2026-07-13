@@ -199,7 +199,6 @@ Element render_song_list(const AppState &s) {
 
                                 /* Watermark: show netease logo when empty */
         if (!s.loading && s.playlist.empty()) {
-            els.push_back(filler());
             els.push_back(vbox({
                     text("                     .::."),
                     text("                    +####+"),
@@ -227,7 +226,6 @@ Element render_song_list(const AppState &s) {
                     text("             .-#########:"),
                     text("                :+++++")
             }) | dim | center);
-            els.push_back(filler());
         }
 
                 for (size_t i = 0; i < s.playlist.size(); i++) {
