@@ -621,6 +621,66 @@ int run_app(int argc, char **argv) {
         /* ── Search input mode: capture keys as query text ── */
         if (cur.search_active) {
             /* Navigate results */
+            /* scope=0 (filter): navigate within current playlist */
+            if (cur.search_scope == 0) {
+                if (ev_key == "up") {
+                    /* find previous matching item */
+                    std::string q = cur.search_query;
+                    if (!q.empty()) {
+                        std::transform(q.begin(), q.end(), q.begin(), ::tolower);
+                        int idx = cur.selected_index;
+                        for (int n = 0; n < (int)cur.playlist.size(); n++) {
+                            idx = (idx <= 0) ? (int)cur.playlist.size() - 1 : idx - 1;
+                            const auto &s = cur.playlist[idx];
+                            std::string h;
+                            if (s.title) h += s.title;
+                            if (s.artist) h += std::string(" ") + s.artist;
+                            std::transform(h.begin(), h.end(), h.begin(), ::tolower);
+                            if (h.find(q) != std::string::npos) {
+                                StateStore::instance().set_selected_index(idx);
+                                break;
+                            }
+                        }
+                    } else {
+                        int idx = cur.selected_index - 1;
+                        if (idx < 0) idx = (int)cur.playlist.size() - 1;
+                        StateStore::instance().set_selected_index(idx);
+                    }
+                    return true;
+                }
+                if (ev_key == "down") {
+                    std::string q = cur.search_query;
+                    if (!q.empty()) {
+                        std::transform(q.begin(), q.end(), q.begin(), ::tolower);
+                        int idx = cur.selected_index;
+                        for (int n = 0; n < (int)cur.playlist.size(); n++) {
+                            idx = (idx + 1 >= (int)cur.playlist.size()) ? 0 : idx + 1;
+                            const auto &s = cur.playlist[idx];
+                            std::string h;
+                            if (s.title) h += s.title;
+                            if (s.artist) h += std::string(" ") + s.artist;
+                            std::transform(h.begin(), h.end(), h.begin(), ::tolower);
+                            if (h.find(q) != std::string::npos) {
+                                StateStore::instance().set_selected_index(idx);
+                                break;
+                            }
+                        }
+                    } else {
+                        int idx = cur.selected_index + 1;
+                        if (idx >= (int)cur.playlist.size()) idx = 0;
+                        StateStore::instance().set_selected_index(idx);
+                    }
+                    return true;
+                }
+                if (ev_key == "enter" || ev_key == "\r") {
+                    /* exit filter, then normal Enter plays the selection */
+                    StateStore::instance().set_search_active(false);
+                    StateStore::instance().set_search_query("");
+                    StateStore::instance().set_search_scope(0);
+                    return true;
+                }
+            }
+            /* scope=1 (global search): navigate results */
             if (ev_key == "up" && !cur.search_results.empty()) {
                 int idx = cur.search_selected - 1;
                 if (idx < 0) idx = (int)cur.search_results.size() - 1;
