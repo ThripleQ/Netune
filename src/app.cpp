@@ -20,7 +20,6 @@ extern "C" {
 #include "core/playback_coordinator.h"
 #include "core/music_source_manager.h"
 #include "core/music_source.h"
-#include "core/playlist_manager.h"
 #include "core/audio_output_mgr.h"
 #include "core/search_manager.h"
 #include "core/cache_manager.h"
@@ -110,7 +109,6 @@ static void ev_search_done(const BusEvent *ev, void *data) {
 static std::map<std::string, std::vector<SongInfo>> g_ns_cache;
 
 struct LoadedSongs { SongInfo *songs; int count; };
-
 
 static void do_netease_search(const char *query) {
     if (!query || !query[0]) return;
@@ -371,7 +369,6 @@ static void ev_playlist_changed(const BusEvent *ev, void *data) {
     (void)data;
     if (ev->data_size == sizeof(int)) {
         int mode = *(int*)ev->data;
-        playlist_manager_set_loop_mode(mode);
         StateStore::instance().set_loop_mode((LoopMode)mode);
     }
 }
@@ -433,7 +430,6 @@ int run_app(int argc, char **argv) {
         if (vol >= 0 && vol <= 100) StateStore::instance().set_volume(vol);
         int loop = config_get_int(cfg, "playback.loop_mode", 0);
         if (loop >= 0 && loop <= 2) {
-            playlist_manager_set_loop_mode(loop);
             StateStore::instance().set_loop_mode((LoopMode)loop);
         }
     }
@@ -508,8 +504,6 @@ int run_app(int argc, char **argv) {
                 const auto &st = StateStore::instance().state();
                 std::vector<const char*> paths;
                 for (auto &s : st.groups[0].songs) paths.push_back(s.id);
-                playlist_manager_sync(paths.data(), (int)paths.size());
-                playlist_manager_set_index(0);
             }
             LOG_INFO("Scanned %zu groups", groups.size());
         } else {
@@ -729,8 +723,6 @@ int run_app(int argc, char **argv) {
                             std::vector<const char*> paths;
                             for (auto &s : cur.groups[target_group].songs)
                                 paths.push_back(s.id);
-                            playlist_manager_sync(paths.data(), (int)paths.size());
-                            playlist_manager_set_index(target_song);
                             StateStore::instance().set_group_index(target_group);
                             StateStore::instance().set_selected_index(target_song >= 0 ? target_song : 0);
                             StateStore::instance().set_active_panel(1);
@@ -817,8 +809,6 @@ int run_app(int argc, char **argv) {
                     if (next >= 0 && next < (int)cur.groups.size()) {
                         std::vector<const char*> paths;
                         for (auto &s : cur.groups[next].songs) paths.push_back(s.id);
-                        playlist_manager_sync(paths.data(), (int)paths.size());
-                        playlist_manager_set_index(0);
                     }
                 } else {
                     int next = cur.netease_selected + 1;
@@ -840,8 +830,6 @@ int run_app(int argc, char **argv) {
                         StateStore::instance().set_group_index(prev);
                         std::vector<const char*> paths;
                         for (auto &s : cur.groups[prev].songs) paths.push_back(s.id);
-                        playlist_manager_sync(paths.data(), (int)paths.size());
-                        playlist_manager_set_index(0);
                     } else {
                         StateStore::instance().set_group_index(-1);
                     }
@@ -865,7 +853,6 @@ int run_app(int argc, char **argv) {
                 /* resumed from stop — play selected song */
                 if (cur.playlist.empty()) return true;
                 int idx = cur.selected_index;
-                playlist_manager_set_index(idx);
                 const auto &sel = cur.playlist[idx];
                 StateStore::instance().set_current_song(sel);
                 event_bus_publish(EV_TRACK_CHANGED, NULL, 0);
@@ -992,7 +979,6 @@ int run_app(int argc, char **argv) {
             if (cur.playlist.empty()) return true;
             if (cur.active_panel == 1) {
                 int idx = cur.selected_index;
-                playlist_manager_set_index(idx);
                 const auto &sel = cur.playlist[idx];
                 const char *path = sel.id ? sel.id : "";
                 StateStore::instance().set_current_song(sel);
