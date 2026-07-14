@@ -3,7 +3,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 #include <stdarg.h>
 #include <ctype.h>
 
@@ -79,7 +81,7 @@ static void fill(SongInfo *s, const char *jsn) {
     s->duration_sec=(int)(jint(jsn,"dt")/1000);
 }
 /* ── parse songs array into SongInfo* ──────────────── */
-static int parselist(const char *json, const char *loc __attribute__((unused)), SongInfo **out, int *cnt) {
+static int parselist(const char *json, const char *loc, SongInfo **out, int *cnt) { (void)loc; 
     *out=NULL; *cnt=0; if(!json)return -1;
     const char *s=jobj(json,"songs");
     if(!s||*s!='['){const char*r=jobj(json,"result");if(r)s=jobj(r,"songs");}
@@ -104,7 +106,7 @@ void netease_shutdown(void) {}
 const char* netease_account_name(void) { return g_name[0]?g_name:NULL; }
 
 /* ── Search ────────────────────────────────────────── */
-int netease_search(const char *kw, int l, int o __attribute__((unused)), NSSearchResult *out) {
+int netease_search(const char *kw, int l, int o, NSSearchResult *out) { (void)o; 
     memset(out,0,sizeof(*out)); if(!kw)return -1;
     char *j=run("%s search \"%s\" 2>/dev/null",CLI,kw); if(!j)return -1;
     const char *s=jobj(jobj(j,"result")?jobj(j,"result"):j,"songs");
@@ -122,9 +124,10 @@ void netease_search_free(NSSearchResult *r) { if(!r)return;for(int i=0;i<r->coun
 
 /* ── Login QR ─────────────────────────────────────── */
 int netease_qr_key(char *u, size_t usz, char *url, size_t usz2) {
-    char *j=run("%s qr-key 2>/dev/null",CLI);if(!j)return -1;
+    char *j=run("%s qr-key",CLI);if(!j){LOG_ERROR("netease-cli not found");return -1;}
     char *uk=jstr(j,"unikey"),*ul=jstr(j,"url"); int r=-1;
     if(uk&&ul&&uk[0]&&ul[0]){snprintf(u,usz,"%s",uk);snprintf(url,usz2,"%s",ul);r=0;}
+    else LOG_ERROR("qr-key failed, output: %s", j);
     free(uk);free(ul);free(j);return r;
 }
 char* netease_qr_render(const char *url) { return run("%s qr-render \"%s\" 2>/dev/null",CLI,url); }
@@ -161,7 +164,7 @@ int netease_liked_songs(SongInfo **out, int *count) {
     char *j=run("%s liked 2>/dev/null",CLI);if(!j)return -1;
     int r=parselist(j,"songs",out,count);free(j);return r;
 }
-int netease_menu_songs(int type, int limit __attribute__((unused)), SongInfo **out, int *count) {
+int netease_menu_songs(int type, int limit, SongInfo **out, int *count) { (void)limit; 
     if(type==0){char*j=run("%s recommend-songs 2>/dev/null",CLI);if(!j)return -1;int r=parselist(j,"songs",out,count);free(j);return r;}
     return -1;
 }

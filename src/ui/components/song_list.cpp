@@ -1,6 +1,7 @@
 #include "ui/components/song_list.h"
 #include "ui/components/theme_util.h"
 #include "ui/state_store.h"
+#include "compat/wcwidth_compat.h"
 #include <ftxui/screen/string.hpp>
 #include <string>
 #include <cwchar>
@@ -40,7 +41,7 @@ static std::string fit_text(const std::string &text, int width) {
         wchar_t wc = 0;
         size_t rc = mbrtowc(&wc, text.data() + i, text.size() - i, &st);
         if (rc == 0 || rc == (size_t)-1 || rc == (size_t)-2) break;
-        int cw = wcwidth(wc); if (cw < 0) cw = 1;
+        int cw = compat_wcwidth(wc); if (cw < 0) cw = 1;
         if (col_run + cw > width - 1) break;
         result.append(text, i, rc); col_run += cw; i += rc;
     }
@@ -68,7 +69,7 @@ static std::string marquee_text(const std::string &text, int width) {
         wchar_t wc = 0;
         size_t rc = mbrtowc(&wc, text.data() + i, text.size() - i, &st);
         if (rc == 0 || rc == (size_t)-1 || rc == (size_t)-2) break;
-        int cw = wcwidth(wc); if (cw < 0) cw = 1;
+        int cw = compat_wcwidth(wc); if (cw < 0) cw = 1;
         if (col_run + cw > offset_cols) break;
         start_i = i + rc; col_run += cw; i += rc;
     }
@@ -78,7 +79,7 @@ static std::string marquee_text(const std::string &text, int width) {
         wchar_t wc = 0;
         size_t rc = mbrtowc(&wc, text.data() + i, text.size() - i, &st);
         if (rc == 0 || rc == (size_t)-1 || rc == (size_t)-2) break;
-        int cw = wcwidth(wc); if (cw < 0) cw = 1;
+        int cw = compat_wcwidth(wc); if (cw < 0) cw = 1;
         if (col_run + cw > width) break;
         result.append(text, i, rc); col_run += cw; i += rc;
     }
@@ -88,7 +89,7 @@ static std::string marquee_text(const std::string &text, int width) {
             wchar_t wc = 0;
             size_t rc = mbrtowc(&wc, text.data() + i, text.size() - i, &st);
             if (rc == 0 || rc == (size_t)-1 || rc == (size_t)-2) break;
-            int cw = wcwidth(wc); if (cw < 0) cw = 1;
+            int cw = compat_wcwidth(wc); if (cw < 0) cw = 1;
             if (col_run + cw > width) break;
             result.append(text, i, rc); col_run += cw; i += rc;
         }

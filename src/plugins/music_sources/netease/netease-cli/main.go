@@ -223,9 +223,22 @@ func main() {
 
 	case "qr-key":
 		s := service.LoginQRService{}
-		_, _, qrUrl, err := s.GetKey()
+		code, body, qrUrl, err := s.GetKey()
 		if err != nil {
 			die(fmt.Sprintf("get qr key failed: %v", err))
+		}
+		if code != 200 || s.UniKey == "" {
+			msg := "unknown error"
+			if len(body) > 0 {
+				var raw map[string]interface{}
+				json.Unmarshal(body, &raw)
+				if m, ok := raw["message"].(string); ok && m != "" {
+					msg = fmt.Sprintf("code=%.0f, %s", code, m)
+				} else {
+					msg = fmt.Sprintf("code=%.0f, body=%s", code, string(body))
+				}
+			}
+			die(fmt.Sprintf("get qr key failed: %s", msg))
 		}
 		// 不用 json.Marshal — URL 里的 & 会被编码成 \u0026 破坏二维码
 		fmt.Printf("{\"unikey\":\"%s\",\"url\":\"%s\"}\n", s.UniKey, qrUrl)
@@ -380,6 +393,18 @@ func saveNeteaseCookies(cookieStr string) {
 	home, _ := os.UserHomeDir()
 	cp := filepath.Join(home, ".cache", "lmusic", "cookies.txt")
 	os.MkdirAll(filepath.Dir(cp), 0755)
+
+	// Dedup: read existing cookies into a set keyed by name+value
+	seen := make(map[string]bool)
+	if old, err := os.ReadFile(cp); err == nil {
+		for _, line := range strings.Split(string(old), "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" && !strings.HasPrefix(line, "#") {
+				seen[line] = true
+			}
+		}
+	}
+
 	parts := strings.Split(cookieStr, ";")
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
@@ -394,9 +419,14 @@ func saveNeteaseCookies(cookieStr string) {
 			strings.EqualFold(n, "SameSite") {
 			continue
 		}
+		line := fmt.Sprintf("music.163.com\tFALSE\t/\tFALSE\t253402300799\t%s\t%s", n, kv[1])
+		if seen[line] {
+			continue
+		}
+		seen[line] = true
 		f, _ := os.OpenFile(cp, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 		if f != nil {
-			fmt.Fprintf(f, "music.163.com\tFALSE\t/\tFALSE\t253402300799\t%s\t%s\n", n, kv[1])
+			fmt.Fprintln(f, line)
 			f.Close()
 		}
 	}

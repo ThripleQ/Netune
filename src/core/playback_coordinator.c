@@ -13,7 +13,9 @@
 #include <string.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <signal.h>

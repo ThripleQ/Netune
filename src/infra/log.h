@@ -17,7 +17,10 @@ void log_init(const char *file);
 void log_shutdown(void);
 void log_write(LogLevel level, const char *file, int line,
                const char *fmt, ...)
-    __attribute__((format(printf, 4, 5)));
+#ifdef __GNUC__
+    __attribute__((format(printf, 4, 5)))
+#endif
+;
 
 /* ── Convenience macros ─────────────────────────────── */
 #define LOG_DEBUG(fmt, ...) log_write(LOG_DEBUG, __FILE__, __LINE__, fmt, ##__VA_ARGS__)
