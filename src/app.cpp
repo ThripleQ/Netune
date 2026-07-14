@@ -11,6 +11,7 @@
 #include <cstring>
 #include <vector>
 #include <string>
+#include <algorithm>
 #include <thread>
 #include <chrono>
 
