@@ -7,8 +7,10 @@ set(CMAKE_C_EXTENSIONS ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# ── FTXUI ─────────────────────────────────────────────
+# ── FetchContent helper ────────────────────────────────
 include(FetchContent)
+
+# ── FTXUI ─────────────────────────────────────────────
 FetchContent_Declare(
   ftxui
   GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
@@ -18,12 +20,23 @@ set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(FTXUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(ftxui)
 
-# ── System deps ──────────────────────────────────────
-# Linux: use pkg-config; Windows (vcpkg): use find_package
+# ── yyjson (official CMake) ──────────────────────────
+# Try system install first; fall back to FetchContent
+find_package(yyjson CONFIG QUIET)
+if(NOT yyjson_FOUND)
+  message(STATUS "yyjson: not found as system package, building from source")
+  FetchContent_Declare(
+    yyjson
+    GIT_REPOSITORY https://github.com/ibireme/yyjson.git
+    GIT_TAG        0.10.0
+  )
+  FetchContent_MakeAvailable(yyjson)
+endif()
+
+# ── Remaining deps (pkg-config) ──────────────────────
 find_package(PkgConfig QUIET)
 
 if(PkgConfig_FOUND)
-  pkg_check_modules(YYJSON REQUIRED IMPORTED_TARGET yyjson)
   pkg_check_modules(YAML   REQUIRED IMPORTED_TARGET yaml-0.1)
   pkg_check_modules(ALSA   QUIET IMPORTED_TARGET alsa)
   pkg_check_modules(PULSE  QUIET IMPORTED_TARGET libpulse-simple)
@@ -32,7 +45,6 @@ if(PkgConfig_FOUND)
     libavformat libavcodec libswresample libavutil)
 else()
   # Windows / vcpkg fallback
-  find_package(yyjson REQUIRED)
   find_package(yaml REQUIRED)
   find_package(ALSA QUIET)
   find_package(PulseAudio QUIET)
@@ -151,7 +163,7 @@ target_link_libraries(netune PRIVATE
   ftxui::screen
   ftxui::dom
   ftxui::component
-  PkgConfig::YYJSON
+  yyjson::yyjson
   PkgConfig::YAML
   PkgConfig::FFMPEG
   Threads::Threads
