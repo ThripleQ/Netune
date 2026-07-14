@@ -34,24 +34,15 @@ if(NOT yyjson_FOUND)
 endif()
 
 # ── Remaining deps (pkg-config) ──────────────────────
-find_package(PkgConfig QUIET)
-
-if(PkgConfig_FOUND)
-  pkg_check_modules(YAML   REQUIRED IMPORTED_TARGET yaml-0.1)
-  pkg_check_modules(ALSA   QUIET IMPORTED_TARGET alsa)
-  pkg_check_modules(PULSE  QUIET IMPORTED_TARGET libpulse-simple)
-  pkg_check_modules(SDL2   QUIET IMPORTED_TARGET sdl2)
-  pkg_check_modules(FFMPEG QUIET IMPORTED_TARGET
-    libavformat libavcodec libswresample libavutil)
-else()
-  # Windows / vcpkg fallback
-  find_package(yaml REQUIRED)
-  find_package(ALSA QUIET)
-  find_package(PulseAudio QUIET)
-  find_package(SDL2 QUIET)
-  find_package(FFMPEG QUIET
-    COMPONENTS libavformat libavcodec libswresample libavutil)
-endif()
+# libyaml only ships .pc files, no CMake config → must use pkg-config.
+# On Windows, vcpkg's pkgconf provides this.
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(YAML   REQUIRED IMPORTED_TARGET yaml-0.1)
+pkg_check_modules(ALSA   QUIET IMPORTED_TARGET alsa)
+pkg_check_modules(PULSE  QUIET IMPORTED_TARGET libpulse-simple)
+pkg_check_modules(SDL2   QUIET IMPORTED_TARGET sdl2)
+pkg_check_modules(FFMPEG QUIET IMPORTED_TARGET
+  libavformat libavcodec libswresample libavutil)
 find_package(Threads REQUIRED)
 
 # ── Sources ───────────────────────────────────────────
