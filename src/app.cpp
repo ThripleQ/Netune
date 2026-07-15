@@ -7,6 +7,8 @@
 #ifndef _WIN32
 #include <unistd.h>
 #else
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #include <io.h>
 #define access _access
 #define F_OK 0
@@ -395,6 +397,13 @@ int run_app(int argc, char **argv) {
     /* Resolve data dir relative to executable */
     char exe_dir[1024] = {0};
     {
+#ifdef _WIN32
+        DWORD r = GetModuleFileNameA(NULL, exe_dir, (DWORD)sizeof(exe_dir));
+        if (r > 0 && r < sizeof(exe_dir)) {
+            char *s = strrchr(exe_dir, '\\');
+            if (s) *s = 0;
+        }
+#else
         char link[1024];
         snprintf(link, sizeof(link), "/proc/self/exe");
         ssize_t r = readlink(link, exe_dir, sizeof(exe_dir) - 1);
@@ -403,6 +412,7 @@ int run_app(int argc, char **argv) {
             char *s = strrchr(exe_dir, '/');
             if (s) *s = 0;
         }
+#endif
     }
     /* If data/ not in exe_dir, check parent dir (e.g. build/ → project root) */
     char data_dir[1024];
