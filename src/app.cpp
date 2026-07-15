@@ -6,6 +6,10 @@
 #include <signal.h>
 #ifndef _WIN32
 #include <unistd.h>
+#else
+#include <io.h>
+#define access _access
+#define F_OK 0
 #endif
 #include <stdio.h>
 #include <stdlib.h>

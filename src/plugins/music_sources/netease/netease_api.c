@@ -5,6 +5,9 @@
 #include <string.h>
 #ifndef _WIN32
 #include <unistd.h>
+#else
+#define popen  _popen
+#define pclose _pclose
 #endif
 #include <stdarg.h>
 #include <ctype.h>

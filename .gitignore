@@ -17,3 +17,4 @@ images.png
 # Keep pre-built binaries
 !bin/
 !bin/*
+build_ci/

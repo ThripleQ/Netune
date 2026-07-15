@@ -174,6 +174,10 @@ if(NOT WIN32)
   target_link_libraries(netune PRIVATE dl m)
 endif()
 
+if(MSVC)
+  target_compile_definitions(netune PRIVATE _CRT_NONSTDC_NO_DEPRECATE)
+endif()
+
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(netune PRIVATE -Wall -Wextra)
 endif()
