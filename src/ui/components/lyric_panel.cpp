@@ -12,36 +12,34 @@ using namespace ftxui;
  * The lyrics window slides through the song as base moves.
  */
 
-static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
+static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
     if (!ly || ly->count == 0)
-        return text("  No lyrics") | dim | center;
+        return text("");
 
     int base = lyric_find_line(ly, play_time_ms);
     if (base < 0) base = 0;
 
     const int ROWS = 20;
     const int CUR_POS = 4;
+    std::string blank((size_t)col_w, ' ');  /* clear previous text */
 
-    /* Window: CUR_POS lines before current, rest after */
     Elements items;
     for (int i = 0; i < ROWS; i++) {
-        /* Map item index to lyric line index */
-        int ni = i - CUR_POS + base;  /* which lyric line to show */
-        std::string raw;
-
-        if (ni < 0 || ni >= ly->count)
-            raw = "";  /* empty/filler row */
-        else if (ly->lines[ni].text)
-            raw = ly->lines[ni].text;
-
-        if (raw.empty())
-            items.push_back(text(""));
-        else if (ni == base)
+        int ni = i - CUR_POS + base;
+        if (ni < 0 || ni >= ly->count) {
+            items.push_back(text(blank));
+            continue;
+        }
+        std::string raw = ly->lines[ni].text ? ly->lines[ni].text : "";
+        if (raw.empty()) {
+            items.push_back(text(blank));
+        } else if (ni == base) {
             items.push_back(theme_accent(text("  " + raw) | bold));
-        else if (ni == base + 1 || ni == base - 1)
+        } else if (ni == base + 1 || ni == base - 1) {
             items.push_back(theme_fg(text("  " + raw)));
-        else
+        } else {
             items.push_back(theme_fg(text("  " + raw)) | dim);
+        }
     }
     return vbox(std::move(items));
 }
@@ -83,7 +81,13 @@ Element render_cover_only(const AppState &s) {
 }
 
 Element render_lyrics_only(const AppState &s) {
-    return render_lyrics(s.lyrics, s.current_time_ms);
+    int total = s.song_panel_width + 29;
+    int cw = total / 2 - 1;
+    if (cw < 12) cw = 12;
+    if (cw > 60) cw = 60;
+    int lw = total - cw - 1;
+    if (lw < 20) lw = 20;
+    return render_lyrics(s.lyrics, s.current_time_ms, lw);
 }
 
 Element render_lyric_panel(const AppState &s) {
