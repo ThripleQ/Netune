@@ -147,7 +147,7 @@ Element render_lyrics_only(const AppState &s) {
     if (cover_w > 60) cover_w = 60;
     int lyrics_w = total - cover_w - 3;
     if (lyrics_w < 20) lyrics_w = 20;
-    return vbox({text(""), render_lyrics(s.lyrics, ms, lyrics_w)}) | center;
+    return vbox({text(""), render_lyrics(s.lyrics, ms, lyrics_w)});
 }
 
 Element render_lyric_panel(const AppState &s) {
