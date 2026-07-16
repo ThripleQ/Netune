@@ -108,18 +108,21 @@ static Element render_cover(const CoverData &cd, int panel_w) {
 }
 
 Element render_cover_only(const AppState &s) {
-    int cover_w = s.song_panel_width / 2;
+    /* Actual terminal width = song_panel_width + 29 (left column) */
+    int total = s.song_panel_width + 29;
+    int cover_w = total / 2 - 1;
     if (cover_w < 12) cover_w = 12;
-    if (cover_w > 30) cover_w = 30;
+    if (cover_w > 45) cover_w = 45;
     return theme_bg(render_cover(s.cover, cover_w) | center | flex);
 }
 
 Element render_lyrics_only(const AppState &s) {
     int ms = s.current_time_ms;
-    int cover_w = s.song_panel_width / 2;
+    int total = s.song_panel_width + 29;
+    int cover_w = total / 2 - 1;
     if (cover_w < 12) cover_w = 12;
-    if (cover_w > 30) cover_w = 30;
-    int lyrics_w = s.song_panel_width - cover_w - 2;
+    if (cover_w > 45) cover_w = 45;
+    int lyrics_w = total - cover_w - 3;
     if (lyrics_w < 20) lyrics_w = 20;
     return theme_bg(render_lyrics(s.lyrics, ms, lyrics_w));
 }
