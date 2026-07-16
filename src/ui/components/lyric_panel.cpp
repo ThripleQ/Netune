@@ -125,7 +125,7 @@ static Element render_cover(const CoverData &cd, int panel_w) {
         }
         rows.push_back(hbox(std::move(cells)));
     }
-    return vbox(std::move(rows)) | flex;
+    return vbox(std::move(rows)) | center | flex;
 }
 
 Element render_cover_only(const AppState &s) {
