@@ -5,9 +5,10 @@
 #include <string>
 using namespace ftxui;
 
-/* ── Current line: wrapped text + ━━ progress bar ─ */
+/* ── Current line: wrapped text + ━━ under text ── */
 static Element current_line(const std::string &txt, float progress) {
-    int max = 150;
+    int max = string_width(txt);  /* bar width matches text width */
+    if (max < 1) max = 1;
     int filled = (int)(progress * (float)max);
     if (filled < 0) filled = 0;
     if (filled > max) filled = max;
@@ -16,7 +17,7 @@ static Element current_line(const std::string &txt, float progress) {
 
     return vbox({
         theme_accent(paragraph("  " + txt) | bold),
-        theme_accent(hbox({text("  "), text(bar)})) | flex,
+        theme_accent(text("  " + bar)),
     });
 }
 
