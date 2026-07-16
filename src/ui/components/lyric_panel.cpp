@@ -67,7 +67,7 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int panel_w) {
         if (kprog > 1.0f) kprog = 1.0f;
     }
 
-    const int above = 4, below = 20;
+    const int above = 4, below = 14;
     int start = base - above;
     if (start < 0) start = 0;
     int end = base + below;
