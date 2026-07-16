@@ -61,15 +61,20 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
         if (kprog > 1.0f) kprog = 1.0f;
     }
 
-    /* Window around current line */
-    const int before = 6;
-    const int after  = 12;
-    int start = base - before;
+    /* Window around current line — wide enough to fill panel */
+    const int above = 4;
+    const int below = 20;
+    int start = base - above;
     if (start < 0) start = 0;
-    int end = base + after;
+    int end = base + below;
     if (end > ly->count) end = ly->count;
 
+    /* Top padding: ensure current line sits ~above+1 from top */
     Elements items;
+    int top_pad = (base - start < above) ? (above - (base - start)) : 0;
+    for (int i = 0; i < top_pad; i++)
+        items.push_back(text(""));
+
     for (int i = start; i < end; i++) {
         std::string raw = ly->lines[i].text ? ly->lines[i].text : "";
         if (i == base) {
@@ -81,6 +86,7 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
         }
     }
 
+    items.push_back(filler());
     return vbox(std::move(items));
 }
 
