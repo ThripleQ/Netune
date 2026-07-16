@@ -6,27 +6,25 @@
 #include <vector>
 using namespace ftxui;
 
-/* ── CJK-aware text wrap: splits each CJK char, keeps ASCII words ── */
+/* ── CJK-aware wrap: each CJK char wraps, ASCII stays word-level ── */
 static Element wrap(const std::string &s) {
     Elements cells;
     std::string word;
     auto flush = [&] { if (!word.empty()) { cells.push_back(text(word)); word.clear(); } };
     for (size_t i = 0; i < s.size();) {
         unsigned char c = (unsigned char)s[i];
-        if (c == ' ') { flush(); i++; continue; }
-        if ((c & 0x80) == 0) { word += s[i]; i++; continue; }  /* ASCII */
-        /* Multibyte UTF-8 → treat as CJK (each char wraps independently) */
+        if (c == ' ') { flush(); cells.push_back(text(" ")); i++; continue; }
+        if ((c & 0x80) == 0) { word += c; i++; continue; }
         int len = 1;
         if      ((c & 0xF0) == 0xF0) len = 4;
         else if ((c & 0xE0) == 0xE0) len = 3;
         else if ((c & 0xC0) == 0xC0) len = 2;
         flush();
         cells.push_back(text(s.substr(i, (size_t)len)));
-        i += len;
+        i += (size_t)len;
     }
     flush();
-    auto cfg = FlexboxConfig().SetGap(0, 0);
-    return flexbox(std::move(cells), cfg);
+    return flexbox(std::move(cells), FlexboxConfig().SetGap(0, 0));
 }
 
 /* ── Current line: wrapped text + ━━ progress bar ─ */
@@ -91,7 +89,6 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int panel_w) {
         }
     }
 
-    items.push_back(filler());
     return vbox(std::move(items));
 }
 
