@@ -464,10 +464,14 @@ static const char *xdg_dir(const char *env, const char *sub) {
     return buf;
 }
 
-static void ensure_dir(const char *path) {
-    /* mkdir -p the directory part of path */
+static void ensure_dir(const char *filepath) {
+    /* mkdir -p the parent directory of filepath */
     char tmp[1024];
-    snprintf(tmp, sizeof(tmp), "%s", path);
+    snprintf(tmp, sizeof(tmp), "%s", filepath);
+    char *last = strrchr(tmp, '/');
+    if (!last) return;
+    if (last == tmp) return;  /* root dir, nothing to do */
+    *last = 0;  /* strip file name (or trailing slash) */
     for (char *p = tmp + 1; *p; p++) {
         if (*p == '/') {
             *p = 0;
@@ -479,11 +483,13 @@ static void ensure_dir(const char *path) {
             *p = '/';
         }
     }
+    if (tmp[0]) {
 #ifndef _WIN32
-    mkdir(tmp, 0755);
+        mkdir(tmp, 0755);
 #else
-    _mkdir(tmp);
+        _mkdir(tmp);
 #endif
+    }
 }
 
 int run_app(int argc, char **argv) {
@@ -531,6 +537,11 @@ int run_app(int argc, char **argv) {
     /* ── Cache (XDG_CACHE_HOME) ─────────────────────── */
     const char *cache_dir = xdg_dir("XDG_CACHE_HOME", NULL);
     ensure_dir(cache_dir);
+#ifndef _WIN32
+    mkdir(cache_dir, 0755);  /* ensure cache dir itself exists */
+#else
+    _mkdir(cache_dir);
+#endif
     cache_init(cache_dir);
     search_manager_init();
 

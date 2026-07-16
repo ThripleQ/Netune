@@ -4,8 +4,6 @@
 #include "core/lyric.h"
 #include <string>
 #include <vector>
-#include <cstring>
-#include <cwchar>
 using namespace ftxui;
 
 /* ── UTF-8 split: string → individual characters ─── */
@@ -23,10 +21,10 @@ static std::vector<std::string> utf8_chars(const std::string &s) {
     return out;
 }
 
-/* ── Karaoke-style line: sung=bold, unsung=dim ───── */
+/* ── Karaoke line: sung chars bold, unsung dim ──── */
 static Element karaoke_line(const std::string &txt, float progress) {
     auto chars = utf8_chars(txt);
-    if (chars.empty()) return ftxui::text("") | dim;
+    if (chars.empty()) return text("") | dim;
 
     int split = (int)(progress * (float)chars.size());
     if (split < 0) split = 0;
@@ -35,9 +33,9 @@ static Element karaoke_line(const std::string &txt, float progress) {
     Elements els;
     for (int i = 0; i < (int)chars.size(); i++) {
         if (i < split)
-            els.push_back(theme_accent(text(chars[i]) | bold));
+            els.push_back(text(chars[i]) | bold);
         else
-            els.push_back(theme_accent(text(chars[i]) | dim));
+            els.push_back(text(chars[i]) | dim);
     }
     return hbox(std::move(els));
 }
@@ -63,7 +61,7 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
         }
     }
 
-    /* Window around current line (no frame/focus — simply show the slice) */
+    /* Window around current line */
     const int before = 6;
     const int after  = 12;
     int start = base - before;
@@ -75,7 +73,10 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
     for (int i = start; i < end; i++) {
         std::string raw = ly->lines[i].text ? ly->lines[i].text : "";
         if (i == base) {
-            items.push_back(karaoke_line(raw, kprog));
+            items.push_back(hbox({
+                text("  "),
+                karaoke_line(raw, kprog),
+            }));
         } else if (i == base + 1 || i == base - 1) {
             items.push_back(theme_fg(text("  " + raw)));
         } else {
