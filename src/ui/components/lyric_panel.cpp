@@ -104,9 +104,10 @@ static Element render_cover(const CoverData &cd, int panel_w) {
 
 Element render_lyric_panel(const AppState &s) {
     int ms = s.current_time_ms;
-    int cover_w = s.song_panel_width > 20 ? (s.song_panel_width - 5) / 2 : 15;
-    if (cover_w < 10) cover_w = 10;
-    if (cover_w > 35) cover_w = 35;
+    /* Cover: comfortable fixed width 20 chars (40px ▄), shrink on narrow terminals */
+    int cover_w = s.song_panel_width / 4;
+    if (cover_w < 12) cover_w = 12;
+    if (cover_w > 22) cover_w = 22;
     return theme_bg(hbox({
         render_cover(s.cover, cover_w) | size(WIDTH, EQUAL, cover_w),
         render_lyrics(s.lyrics, ms) | flex,
