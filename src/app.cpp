@@ -256,6 +256,7 @@ static void ev_playback_resume(const BusEvent *ev, void *data) {
 static void ev_playback_stop(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
     StateStore::instance().set_playback_state(PlaybackState::Stopped);
+    StateStore::instance().set_current_song(SongInfo{});
     StateStore::instance().set_progress(0, 0, 0);
     StateStore::instance().set_lyric_mode(false);
 }
