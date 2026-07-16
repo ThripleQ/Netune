@@ -87,6 +87,8 @@ static const char *jmatch(const char *o) {
 /* ── parse one song ────────────────────────────────── */
 static void fill(SongInfo *s, const char *jsn) {
     memset(s,0,sizeof(*s)); s->source=strdup("netease"); s->cover_url=strdup(""); s->aux_label=strdup("");
+    /* extract cover_url from al object before skipping */
+    { const char *al = jobj(jsn, "al"); if (al) { char *u = jstr(al, "picUrl"); if (u && u[0]) { free(s->cover_url); s->cover_url = u; } else free(u); } }
     /* skip past al, ar objects to get the song-level id */
     const char *p = jsn;
     const char *skip_keys[] = {"al", "ar"};
