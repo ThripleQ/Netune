@@ -2,9 +2,13 @@
 
 #include <ftxui/dom/elements.hpp>
 
-struct AppState;  /* forward decl from state_store.h */
+struct AppState;
 
-/* Render the full-screen lyrics view.
-   Layout: left column (album art placeholder) + right column (lyrics).
-   Falls back to "No lyrics" if none loaded. */
+/* Cover panel only (left side) */
+ftxui::Element render_cover_only(const AppState &s);
+
+/* Lyrics panel only (right side) */
+ftxui::Element render_lyrics_only(const AppState &s);
+
+/* Combined cover + lyrics (for simple layout) */
 ftxui::Element render_lyric_panel(const AppState &s);

@@ -107,16 +107,26 @@ static Element render_cover(const CoverData &cd, int panel_w) {
     return vbox(std::move(rows)) | center | flex;
 }
 
-Element render_lyric_panel(const AppState &s) {
-    int ms = s.current_time_ms;
-    /* Cover: comfortable fixed width 20 chars (40px ▄), shrink on narrow terminals */
-    int cover_w = s.song_panel_width / 4;
+Element render_cover_only(const AppState &s) {
+    int cover_w = s.song_panel_width / 2;
     if (cover_w < 12) cover_w = 12;
-    if (cover_w > 22) cover_w = 22;
-    int lyrics_w = s.song_panel_width - cover_w - 3;
+    if (cover_w > 30) cover_w = 30;
+    return theme_bg(render_cover(s.cover, cover_w) | center | flex);
+}
+
+Element render_lyrics_only(const AppState &s) {
+    int ms = s.current_time_ms;
+    int cover_w = s.song_panel_width / 2;
+    if (cover_w < 12) cover_w = 12;
+    if (cover_w > 30) cover_w = 30;
+    int lyrics_w = s.song_panel_width - cover_w - 2;
     if (lyrics_w < 20) lyrics_w = 20;
-    return theme_bg(hbox({
-        render_cover(s.cover, cover_w) | size(WIDTH, EQUAL, cover_w),
-        render_lyrics(s.lyrics, ms, lyrics_w) | flex,
-    }));
+    return theme_bg(render_lyrics(s.lyrics, ms, lyrics_w));
+}
+
+Element render_lyric_panel(const AppState &s) {
+    return hbox(Elements{
+        render_cover_only(s) | flex,
+        render_lyrics_only(s) | flex,
+    });
 }
