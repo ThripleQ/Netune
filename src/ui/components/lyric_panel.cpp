@@ -3,53 +3,22 @@
 #include "ui/state_store.h"
 #include "core/lyric.h"
 #include <string>
-#include <vector>
 using namespace ftxui;
 
-/* ── CJK-aware wrap: each CJK char wraps, ASCII stays word-level ── */
-static Element wrap(const std::string &s) {
-    Elements cells;
-    std::string word;
-    auto flush = [&] { if (!word.empty()) { cells.push_back(text(word)); word.clear(); } };
-    for (size_t i = 0; i < s.size();) {
-        unsigned char c = (unsigned char)s[i];
-        if (c == ' ') { flush(); cells.push_back(text(" ")); i++; continue; }
-        if ((c & 0x80) == 0) { word += c; i++; continue; }
-        int len = 1;
-        if      ((c & 0xF0) == 0xF0) len = 4;
-        else if ((c & 0xE0) == 0xE0) len = 3;
-        else if ((c & 0xC0) == 0xC0) len = 2;
-        flush();
-        cells.push_back(text(s.substr(i, (size_t)len)));
-        i += (size_t)len;
-    }
-    flush();
-    return flexbox(std::move(cells), FlexboxConfig().SetGap(0, 0));
-}
-
-/* ── Current line: wrapped text + ━━ progress bar ─ */
-static Element current_line(const std::string &txt, float progress, int panel_w) {
-    /* Bar capped to panel width (minus indent). If text wraps, bar won't overflow */
-    int bar_max = string_width(txt);
-    int avail = panel_w - 2;
-    if (bar_max > avail) bar_max = avail;
-    if (bar_max < 1) bar_max = 1;
-
-    int filled = (int)(progress * (float)bar_max);
-    if (filled < 0) filled = 0;
-    if (filled > bar_max) filled = bar_max;
-
+/* ── Current line: text + ━━ on same line ─────────── */
+static Element current_line(const std::string &txt, float progress, int max_w) {
+    int bar_cnt = (int)(progress * (float)(max_w - 4));
+    if (bar_cnt < 0) bar_cnt = 0;
     std::string bar;
-    for (int i = 0; i < filled; i++) bar += "\u2501";
-
-    return vbox({
-        theme_accent(wrap("  " + txt) | bold),
-        theme_accent(text("  " + bar)),
-    });
+    for (int i = 0; i < bar_cnt; i++) bar += "\u2501";
+    return theme_accent(hbox({
+        text("  " + txt),
+        text(bar) | flex,
+    }) | bold);
 }
 
-/* ── Render lyrics ────────────────────────────────── */
-static Element render_lyrics(const Lyrics *ly, int play_time_ms, int panel_w) {
+/* ── Render lyrics: 20 lines, fixed, vertically centered ──── */
+static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
     if (!ly || ly->count == 0)
         return text("  No lyrics") | dim | center | flex;
 
@@ -67,6 +36,7 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int panel_w) {
         if (kprog > 1.0f) kprog = 1.0f;
     }
 
+    /* 20-row window */
     const int window = 20;
     const int above = 4;
     int start = base - above;
@@ -76,35 +46,30 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int panel_w) {
 
     Elements items;
     for (int i = 0; i < above && i < base; i++)
-        items.push_back(text(""));  /* leading empty lines */
+        items.push_back(text(""));
 
     for (int i = start; i < end; i++) {
         std::string raw = ly->lines[i].text ? ly->lines[i].text : "";
-        if (i == base) {
-            items.push_back(current_line(raw, kprog, panel_w));
-        } else if (i == base + 1 || i == base - 1) {
-            items.push_back(theme_fg(wrap("  " + raw)));
-        } else {
-            items.push_back(theme_fg(wrap("  " + raw)) | dim);
-        }
+        if (i == base)
+            items.push_back(current_line(raw, kprog, col_w));
+        else if (i == base + 1 || i == base - 1)
+            items.push_back(theme_fg(text("  " + raw)));
+        else
+            items.push_back(theme_fg(text("  " + raw)) | dim);
     }
     for (int i = (int)items.size(); i < window; i++)
-        items.push_back(text(""));  /* trailing fill */
+        items.push_back(text(""));
 
     return vbox(std::move(items));
 }
 
-/* ── Cover: ▄ half-block rendering ───────────────── */
+/* ── Cover: ▄ half-block ──────────────────────────── */
 static Element render_cover(const CoverData &cd, int panel_w) {
     if (!cd.pixels || cd.width <= 0 || cd.height <= 0 || panel_w < 4)
-        return vbox({
-            text("") | bold,
-            text("  [ Cover ]") | dim | center,
-            text("") | bold,
-        }) | center | flex;
+        return vbox({text("")}) | center | flex;
 
     int dw = panel_w;
-    if (dw > cd.width) dw = cd.width;  /* respect stored res cap */
+    if (dw > cd.width) dw = cd.width;
     int dh = cd.height * dw / cd.width;
     if (dh % 2) dh++;
     int sw = cd.width, sh = cd.height;
@@ -130,8 +95,8 @@ static Element render_cover(const CoverData &cd, int panel_w) {
     return vbox(std::move(rows)) | center | flex;
 }
 
+/* ── Exported ─────────────────────────────────────── */
 Element render_cover_only(const AppState &s) {
-    /* Actual terminal width = song_panel_width + 29 (left column) */
     int total = s.song_panel_width + 29;
     int cover_w = total / 2 - 1;
     if (cover_w < 12) cover_w = 12;
@@ -145,9 +110,9 @@ Element render_lyrics_only(const AppState &s) {
     int cover_w = total / 2 - 1;
     if (cover_w < 12) cover_w = 12;
     if (cover_w > 60) cover_w = 60;
-    int lyrics_w = total - cover_w - 3;
+    int lyrics_w = total - cover_w - 2;
     if (lyrics_w < 20) lyrics_w = 20;
-    return vbox({text(""), render_lyrics(s.lyrics, ms, lyrics_w)});
+    return vbox({text(""), render_lyrics(s.lyrics, ms, lyrics_w)}) | center;
 }
 
 Element render_lyric_panel(const AppState &s) {
