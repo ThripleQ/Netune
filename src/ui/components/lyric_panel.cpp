@@ -5,13 +5,18 @@
 #include <string>
 using namespace ftxui;
 
-/* ── Current line: wrapped text + ━━ under text ── */
-static Element current_line(const std::string &txt, float progress) {
-    int max = string_width(txt);  /* bar width matches text width */
-    if (max < 1) max = 1;
-    int filled = (int)(progress * (float)max);
+/* ── Current line: wrapped text + ━━ progress bar ─ */
+static Element current_line(const std::string &txt, float progress, int panel_w) {
+    /* Bar capped to panel width (minus indent). If text wraps, bar won't overflow */
+    int bar_max = string_width(txt);
+    int avail = panel_w - 2;
+    if (bar_max > avail) bar_max = avail;
+    if (bar_max < 1) bar_max = 1;
+
+    int filled = (int)(progress * (float)bar_max);
     if (filled < 0) filled = 0;
-    if (filled > max) filled = max;
+    if (filled > bar_max) filled = bar_max;
+
     std::string bar;
     for (int i = 0; i < filled; i++) bar += "\u2501";
 
@@ -22,7 +27,7 @@ static Element current_line(const std::string &txt, float progress) {
 }
 
 /* ── Render lyrics ────────────────────────────────── */
-static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
+static Element render_lyrics(const Lyrics *ly, int play_time_ms, int panel_w) {
     if (!ly || ly->count == 0)
         return text("  No lyrics") | dim | center | flex;
 
@@ -54,7 +59,7 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
     for (int i = start; i < end; i++) {
         std::string raw = ly->lines[i].text ? ly->lines[i].text : "";
         if (i == base) {
-            items.push_back(current_line(raw, kprog));
+            items.push_back(current_line(raw, kprog, panel_w));
         } else if (i == base + 1 || i == base - 1) {
             items.push_back(theme_fg(paragraph("  " + raw)));
         } else {
@@ -108,8 +113,10 @@ Element render_lyric_panel(const AppState &s) {
     int cover_w = s.song_panel_width / 4;
     if (cover_w < 12) cover_w = 12;
     if (cover_w > 22) cover_w = 22;
+    int lyrics_w = s.song_panel_width - cover_w - 3;
+    if (lyrics_w < 20) lyrics_w = 20;
     return theme_bg(hbox({
         render_cover(s.cover, cover_w) | size(WIDTH, EQUAL, cover_w),
-        render_lyrics(s.lyrics, ms) | flex,
+        render_lyrics(s.lyrics, ms, lyrics_w) | flex,
     }));
 }
