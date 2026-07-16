@@ -74,8 +74,13 @@ int cover_load(const char *url, CoverData *out) {
         return -1;
     }
 
-    /* Scale to target: 60×60 pixels (fits 30-col × 30-row ▄ display) */
-    int dw = 60, dh = 60;
+    /* Store at a reasonable max. The renderer will scale on-the-fly per frame. */
+    int max_dim = 200;
+    int dw = (w > h) ? max_dim : (max_dim * w / h);
+    int dh = (h > w) ? max_dim : (max_dim * h / w);
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+
     uint8_t *scaled = (uint8_t*)malloc((size_t)dw * dh * 3);
     if (!scaled) {
         stbi_image_free(pixels);

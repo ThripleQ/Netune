@@ -102,7 +102,7 @@ static Element render_cover(const CoverData &cd, int panel_w) {
         }) | center | flex;
 
     int dw = panel_w;
-    if (dw > cd.width) dw = cd.width;
+    if (dw > cd.width) dw = cd.width;  /* respect stored res cap */
     int dh = cd.height * dw / cd.width;
     if (dh % 2) dh++;
     int sw = cd.width, sh = cd.height;
