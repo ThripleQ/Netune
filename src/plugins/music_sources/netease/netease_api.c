@@ -30,8 +30,10 @@ static char *jstr(const char *j, const char *k) {
     const char *p = strstr(j,s); if(!p)return NULL; p+=strlen(s);
     while(*p==':'||*p==' '||*p=='\t'||*p=='\n')p++;
     /* string value */
-    if(*p=='"'){p++;size_t cap=512,w=0;char*o=malloc(cap);if(!o)return NULL;
-        while(*p&&*p!='"'&&w<cap-1){
+    if(*p=='"'){p++;size_t cap=2048,w=0;char*o=malloc(cap);if(!o)return NULL;
+        while(*p&&*p!='"'){
+            /* ensure capacity (pre-check: escape path can write up to 3 bytes) */
+            if (w + 4 >= cap) { cap *= 2; char *t = realloc(o, cap); if (!t) { free(o); return NULL; } o = t; }
             if(*p=='\\') {
                 switch(*(p+1)) {
                 case 'n':  o[w++]='\n'; p+=2; break;
@@ -50,8 +52,6 @@ static char *jstr(const char *j, const char *k) {
                     o[w++]='\\'; p+=1; break;
                 }
             } else {
-                /* check capacity */
-                if (w + 1 >= cap) { cap *= 2; char *t = realloc(o, cap); if (!t) { free(o); return NULL; } o = t; }
                 o[w++] = *p++;
             }
         }o[w]=0;return o;

@@ -239,8 +239,13 @@ static void ev_progress(const BusEvent *ev, void *data) {
         StateStore::instance().set_progress(prog, cur, tot);
     }
 }
+/* forward decl — defined below */
+static void load_lyrics_for_current_song(void);
+
 static void ev_playback_start(const BusEvent *ev, void *data) {
-    (void)ev; (void)data; StateStore::instance().set_playback_state(PlaybackState::Playing);
+    (void)ev; (void)data;
+    StateStore::instance().set_playback_state(PlaybackState::Playing);
+    load_lyrics_for_current_song();
 }
 static void ev_playback_pause(const BusEvent *ev, void *data) {
     (void)ev; (void)data; StateStore::instance().set_playback_state(PlaybackState::Paused);
