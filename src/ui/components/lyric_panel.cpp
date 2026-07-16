@@ -69,9 +69,9 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
     int end = base + below;
     if (end > ly->count) end = ly->count;
 
-    /* Top padding: ensure current line sits ~above+1 from top */
+    /* Top padding: only when there are lines above to scroll past */
     Elements items;
-    int top_pad = (base - start < above) ? (above - (base - start)) : 0;
+    int top_pad = (start > 0 && base - start < above) ? (above - (base - start)) : 0;
     for (int i = 0; i < top_pad; i++)
         items.push_back(text(""));
 
