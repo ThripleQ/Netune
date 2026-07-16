@@ -36,16 +36,16 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
         if (kprog > 1.0f) kprog = 1.0f;
     }
 
-    /* 20-row window */
+    /* 20-row window: lead + window_items = 20 always */
     const int window = 20;
     const int above = 4;
-    int start = base - above;
-    if (start < 0) start = 0;
-    int end = base + (window - above - 1);
-    if (end > ly->count) { end = ly->count; start = end - window; if (start < 0) start = 0; }
+    int lead = (base < above) ? base : above;
+    int start = base - lead;
+    int end = start + (window - lead);
+    if (end > ly->count) { end = ly->count; start = end - (window - lead); if (start < 0) start = 0; lead = base - start; if (lead < 0) lead = 0; }
 
     Elements items;
-    for (int i = 0; i < above && i < base; i++)
+    for (int i = 0; i < lead; i++)
         items.push_back(text(""));
 
     for (int i = start; i < end; i++) {
