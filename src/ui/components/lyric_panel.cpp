@@ -5,49 +5,40 @@
 #include <string>
 using namespace ftxui;
 
-/* ── Current line: text + ━━ on same line ─────────── */
-static Element current_line(const std::string &txt, float progress, int max_w) {
-    int bar_cnt = (int)(progress * (float)(max_w - 4));
-    if (bar_cnt < 0) bar_cnt = 0;
-    std::string bar;
-    for (int i = 0; i < bar_cnt; i++) bar += "\u2501";
-    return theme_accent(hbox({
-        text("  " + txt),
-        text(bar) | flex,
-    }) | bold);
-}
-
-/* ── Render lyrics: 20 lines, fixed, vertically centered ──── */
+/* ── Render lyrics: 20 rows fixed, text only no wrap ─────────────── */
 static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
     if (!ly || ly->count == 0)
         return text("  No lyrics") | dim | center | flex;
 
     int base = lyric_find_line(ly, play_time_ms);
     if (base < 0) base = 0;
+    int total = ly->count;
 
+    /* Progress % for bar on current line */
     float kprog = 0.0f;
-    if (base + 1 < ly->count) {
-        int t0 = ly->lines[base].time_ms;
-        int t1 = ly->lines[base + 1].time_ms;
-        int dt = t1 - t0;
+    if (base + 1 < total) {
+        int dt = ly->lines[base + 1].time_ms - ly->lines[base].time_ms;
         if (dt > 0)
-            kprog = (float)(play_time_ms - t0) / (float)dt;
+            kprog = (float)(play_time_ms - ly->lines[base].time_ms) / (float)dt;
         if (kprog < 0.0f) kprog = 0.0f;
         if (kprog > 1.0f) kprog = 1.0f;
     }
 
-    /* 20-row window: lead + lyrics_in_window = 20 always */
-    const int window = 20;
+    /* Window: 20 rows. 4 empty rows above current, rest lyrics. */
+    const int W = 20;
     const int above = 4;
-    int lead = (base < above) ? base : above;
-    int start = base - lead;
-    int end = start + (window - lead);
-    if (end > ly->count) {
-        end = ly->count;
-        int lyrics_cnt = end - start;
-        lead = window - lyrics_cnt;
-        if (lead < 0) { lead = 0; start = end - window; if (start < 0) start = 0; }
-    }
+    const int lyric_rows = W - above;  /* 16 lyrics visible */
+
+    /* Which lyrics to show? */
+    int start = base - above;
+    if (start < 0) start = 0;
+    int end = start + W;
+    if (end > total) { end = total; start = end - W; if (start < 0) start = 0; }
+
+    /* Lead empty lines: push current line to position `above` from top */
+    int lead = base - start;
+    if (lead > above) lead = above;
+    if (lead < 0) lead = 0;
 
     Elements items;
     for (int i = 0; i < lead; i++)
@@ -55,20 +46,30 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
 
     for (int i = start; i < end; i++) {
         std::string raw = ly->lines[i].text ? ly->lines[i].text : "";
-        if (i == base)
-            items.push_back(current_line(raw, kprog, col_w));
-        else if (i == base + 1 || i == base - 1)
+        if (i == base) {
+            /* Current line: text + ━━ progress appended after text */
+            int avail = col_w - 4 - (int)raw.size();
+            if (avail < 1) avail = 1;
+            int filled = (int)(kprog * (float)avail);
+            if (filled < 0) filled = 0;
+            if (filled > avail) filled = avail;
+            std::string bar; for (int j = 0; j < filled; j++) bar += "\u2501";
+            items.push_back(theme_accent(text(std::string("  ") + raw + bar) | bold));
+        } else if (i == base + 1 || i == base - 1) {
             items.push_back(theme_fg(text("  " + raw)));
-        else
+        } else {
             items.push_back(theme_fg(text("  " + raw)) | dim);
+        }
     }
-    for (int i = (int)items.size(); i < window; i++)
+
+    /* Trail: fill to exactly W rows */
+    while ((int)items.size() < W)
         items.push_back(text(""));
 
     return vbox(std::move(items));
 }
 
-/* ── Cover: ▄ half-block ──────────────────────────── */
+/* ── Cover: ▄ half-block ──────────────────────────────────────────── */
 static Element render_cover(const CoverData &cd, int panel_w) {
     if (!cd.pixels || cd.width <= 0 || cd.height <= 0 || panel_w < 4)
         return vbox({text("")}) | center | flex;
@@ -87,11 +88,11 @@ static Element render_cover(const CoverData &cd, int panel_w) {
             int sy0 = (y    ) * sh / dh;
             int sy1 = (y + 1) * sh / dh;
             if (sy1 >= sh) sy1 = sy0;
-            int top = (sy0 * sw + sx) * 3;
-            int bot = (sy1 * sw + sx) * 3;
+            int top3 = (sy0 * sw + sx) * 3;
+            int bot3 = (sy1 * sw + sx) * 3;
             cells.push_back(bgcolor(
-                Color::RGB(cd.pixels[top], cd.pixels[top+1], cd.pixels[top+2]),
-                color(Color::RGB(cd.pixels[bot], cd.pixels[bot+1], cd.pixels[bot+2]),
+                Color::RGB(cd.pixels[top3], cd.pixels[top3+1], cd.pixels[top3+2]),
+                color(Color::RGB(cd.pixels[bot3], cd.pixels[bot3+1], cd.pixels[bot3+2]),
                     text("\u2580"))
             ));
         }
@@ -100,7 +101,7 @@ static Element render_cover(const CoverData &cd, int panel_w) {
     return vbox(std::move(rows)) | center | flex;
 }
 
-/* ── Exported ─────────────────────────────────────── */
+/* ── Exported ─────────────────────────────────────────────────────── */
 Element render_cover_only(const AppState &s) {
     int total = s.song_panel_width + 29;
     int cover_w = total / 2 - 1;
@@ -117,6 +118,7 @@ Element render_lyrics_only(const AppState &s) {
     if (cover_w > 60) cover_w = 60;
     int lyrics_w = total - cover_w - 2;
     if (lyrics_w < 20) lyrics_w = 20;
+    /* Fixed 21 rows (1 empty + 20 lyrics), centered in column */
     return vbox({text(""), render_lyrics(s.lyrics, ms, lyrics_w)}) | center;
 }
 
