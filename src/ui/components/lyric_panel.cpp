@@ -151,8 +151,14 @@ Element render_lyrics_only(const AppState &s) {
 }
 
 Element render_lyric_panel(const AppState &s) {
+    int total = s.song_panel_width + 29;
+    int cover_w = total / 2 - 1;
+    if (cover_w < 12) cover_w = 12;
+    if (cover_w > 60) cover_w = 60;
+    int lyrics_w = total - cover_w - 2;
+    if (lyrics_w < 20) lyrics_w = 20;
     return theme_bg(hbox(Elements{
-        render_cover_only(s) | flex,
-        render_lyrics_only(s) | flex,
+        render_cover_only(s) | size(WIDTH, EQUAL, cover_w),
+        render_lyrics_only(s) | size(WIDTH, EQUAL, lyrics_w),
     }));
 }
