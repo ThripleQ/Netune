@@ -254,12 +254,16 @@ static void ev_playback_resume(const BusEvent *ev, void *data) {
     (void)ev; (void)data; StateStore::instance().set_playback_state(PlaybackState::Playing);
 }
 static void ev_playback_stop(const BusEvent *ev, void *data) {
-    (void)ev; (void)data; StateStore::instance().set_playback_state(PlaybackState::Stopped); StateStore::instance().set_progress(0,0,0);
+    (void)ev; (void)data;
+    StateStore::instance().set_playback_state(PlaybackState::Stopped);
+    StateStore::instance().set_progress(0, 0, 0);
+    StateStore::instance().set_lyric_mode(false);
 }
 static void ev_playback_error(const BusEvent *ev, void *data) {
     (void)ev; (void)data; LOG_WARN("Playback error"); StateStore::instance().set_playback_state(PlaybackState::Stopped); StateStore::instance().set_progress(0,0,0);
 }
 static void ev_playback_finish(const BusEvent *ev, void *data) {
+    StateStore::instance().set_lyric_mode(false);
     (void)ev; (void)data;
     const auto &st = StateStore::instance().state();
     int total = (int)st.playlist.size();
@@ -1261,6 +1265,8 @@ int run_app(int argc, char **argv) {
             return true;
         }
         case Action::ToggleLyrics: {
+            if (cur.playback_state == PlaybackState::Stopped || !cur.current_song.title)
+                return true;  /* nothing playing, ignore */
             StateStore::instance().set_lyric_mode(!cur.lyric_mode);
             return true;
         }
