@@ -5,23 +5,16 @@
 #include <string>
 using namespace ftxui;
 
-/* ── Current line: text + thin progress underline ── */
-static Element fill_line(const std::string &txt, float progress) {
-    int w = string_width(txt);
-    if (w > 60) w = 60;
-    int filled = (int)(progress * (float)w);
-    if (filled < 0) filled = 0;
-    if (filled > w) filled = w;
-
-    std::string bar;
-    for (int i = 0; i < filled; i++)  bar += "\u258C";
-    std::string rest;
-    for (int i = filled; i < w; i++)  rest += "\u258C";
-
-    return vbox({
-        theme_accent(text("  " + txt) | bold),
-        theme_accent(text("  " + bar + rest) | dim),
-    });
+/* ── Current line: text with ▶ progress marker ─── */
+static Element current_line(const std::string &txt, float progress) {
+    std::string marker;
+    if (progress < 0.33f)
+        marker = "\u25B7";  /* ▷ */
+    else if (progress < 0.66f)
+        marker = "\u25B6";  /* ▶ */
+    else
+        marker = "\u25B6\u25B6";  /* ▶▶ (about to finish) */
+    return theme_accent(text(" " + marker + " " + txt) | bold);
 }
 
 /* ── Render lyrics ────────────────────────────────── */
@@ -60,7 +53,7 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
     for (int i = start; i < end; i++) {
         std::string raw = ly->lines[i].text ? ly->lines[i].text : "";
         if (i == base) {
-            items.push_back(fill_line(raw, kprog));
+            items.push_back(current_line(raw, kprog));
         } else if (i == base + 1 || i == base - 1) {
             items.push_back(theme_fg(text("  " + raw)));
         } else {
