@@ -279,3 +279,9 @@ void StateStore::set_lyrics(Lyrics *ly) {
 void StateStore::set_lyric_mode(bool mode) {
     state_.lyric_mode = mode;
 }
+
+void StateStore::set_cover(const CoverData &cd) {
+    /* free old cover pixels */
+    free(state_.cover.pixels);
+    state_.cover = cd;
+}

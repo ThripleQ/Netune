@@ -427,9 +427,17 @@ static void load_lyrics_for_current_song(void) {
             if (ly) {
                 store.set_lyrics(ly);
                 LOG_INFO("Lyrics loaded from Netease (%d lines)", ly->count);
-                return;
             }
         }
+        /* Cover art from Netease */
+        if (song.cover_url && song.cover_url[0]) {
+            CoverData cd;
+            if (cover_load(song.cover_url, &cd) == 0) {
+                store.set_cover(cd);
+                LOG_INFO("Cover loaded: %dx%d", cd.width, cd.height);
+            }
+        }
+        return;
     }
 }
 

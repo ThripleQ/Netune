@@ -138,10 +138,11 @@ int netease_search(const char *kw, int l, int o, NSSearchResult *out) { (void)o;
         NSSong *r=&out->songs[oi]; { const char *pp = p; const char *skipk[]={"al","ar"}; for(int si=0;si<2;si++){char k[128];snprintf(k,sizeof(k),"\"%s\"",skipk[si]);const char*f=strstr(pp,k);if(f){const char*o=f+strlen(k);while(*o&&*o!='{'&&*o!='[')o++;if(*o=='{'||*o=='[')pp=jmatch(o);}} r->id=jstr(pp,"id"); } r->title=jstr(p,"name");r->artist=jstr(p,"artist");
         if(!r->artist){const char*a=jobj(p,"ar");if(a){const char*ap=a+1;while(*ap&&*ap!='{')ap++;if(*ap=='{')r->artist=jstr(ap,"name");}}if(!r->artist)r->artist=strdup("");
         r->album=jstr(p,"album");if(!r->album){const char*a=jobj(p,"al");if(a)r->album=jstr(a,"name");}if(!r->album)r->album=strdup("");
+        { const char*a=jobj(p,"al"); r->cover_url=a?jstr(a,"picUrl"):NULL; if(!r->cover_url)r->cover_url=strdup(""); }
         r->dur_ms=(int)jint(p,"dt");oi++;p=e;}
     out->count=oi; free(j); return 0;
 }
-void netease_search_free(NSSearchResult *r) { if(!r)return;for(int i=0;i<r->count;i++){free(r->songs[i].id);free(r->songs[i].title);free(r->songs[i].artist);free(r->songs[i].album);}free(r->songs);r->songs=NULL;r->count=0;}
+void netease_search_free(NSSearchResult *r) { if(!r)return;for(int i=0;i<r->count;i++){free(r->songs[i].id);free(r->songs[i].title);free(r->songs[i].artist);free(r->songs[i].album);free(r->songs[i].cover_url);}free(r->songs);r->songs=NULL;r->count=0;}
 
 /* ── Login QR ─────────────────────────────────────── */
 int netease_qr_key(char *u, size_t usz, char *url, size_t usz2) {

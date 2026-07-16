@@ -47,6 +47,7 @@ find_package(Threads REQUIRED)
 
 # ── Sources ───────────────────────────────────────────
 set(CORE_SOURCES
+  src/core/cover.c
   src/core/event_bus.c
   src/core/music_source.c
   src/core/music_source_manager.c

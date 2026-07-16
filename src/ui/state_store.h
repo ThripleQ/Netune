@@ -6,6 +6,7 @@
 extern "C" {
 #include "core/music_source.h"
 #include "core/lyric.h"
+#include "core/cover.h"
 }
 
 /* ── Playback state ────────────────────────────────── */
@@ -85,9 +86,10 @@ struct AppState {
     /* help screen */
     bool show_help = false;
 
-    /* lyrics */
-    Lyrics  *lyrics    = nullptr;  /* loaded & parsed lyrics */
-    bool     lyric_mode = false;    /* full-screen lyrics view */
+    /* lyrics & cover */
+    Lyrics    *lyrics      = nullptr;
+    bool       lyric_mode  = false;     /* full-screen lyrics view */
+    CoverData  cover       = {};        /* current song cover art */
 
     /* loading state (for async operations like playlist load) */
     bool loading = false;
@@ -136,9 +138,10 @@ public:
     void set_netease_selected(int idx);
     void set_login_state(int state, const std::string &status, const std::string &qr);
 
-    /* lyrics */
+    /* lyrics & cover */
     void set_lyrics(Lyrics *ly);
     void set_lyric_mode(bool mode);
+    void set_cover(const CoverData &cd);
 
     /* help screen */
     void set_show_help(bool show);

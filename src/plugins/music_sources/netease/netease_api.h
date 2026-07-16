@@ -13,7 +13,7 @@ void netease_shutdown(void);
 const char* netease_account_name(void);
 
 /* ── Search ────────────────────────────────────────── */
-typedef struct { char *id, *title, *artist, *album; int dur_ms; } NSSong;
+typedef struct { char *id, *title, *artist, *album, *cover_url; int dur_ms; } NSSong;
 typedef struct { NSSong *songs; int count; } NSSearchResult;
 
 int  netease_search(const char *kw, int limit, int offset, NSSearchResult *out);

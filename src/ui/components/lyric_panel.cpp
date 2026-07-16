@@ -69,19 +69,40 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
     return vbox(std::move(items));
 }
 
-/* ── Cover placeholder ────────────────────────────── */
-static Element render_cover() {
-    return vbox({
-        text("") | bold,
-        text("  [ Cover ]") | dim | center,
-        text("") | bold,
-    }) | center | flex;
+/* ── Cover: ▄ half-block pixel rendering ───────── */
+static Element render_cover(const CoverData &cd) {
+    if (!cd.pixels || cd.width <= 0 || cd.height <= 0) {
+        return vbox({
+            text("") | bold,
+            text("  [ Cover ]") | dim | center,
+            text("") | bold,
+        }) | center | flex;
+    }
+
+    /* Each ▄ renders 2 pixels: top=bg, bottom=fg */
+    int hh = cd.height / 2;  /* half the rows (2 pixels per row) */
+    Elements rows;
+    for (int y = 0; y < hh; y++) {
+        Elements cells;
+        for (int x = 0; x < cd.width; x++) {
+            int top = ((y * 2    ) * cd.width + x) * 3;
+            int bot = ((y * 2 + 1) * cd.width + x) * 3;
+            if (bot >= cd.width * cd.height * 3) bot = top;
+            Color top_c = Color::RGB(cd.pixels[top], cd.pixels[top+1], cd.pixels[top+2]);
+            Color bot_c = Color::RGB(cd.pixels[bot], cd.pixels[bot+1], cd.pixels[bot+2]);
+            cells.push_back(
+                bgcolor(top_c, color(bot_c, text("\u2580")))
+            );
+        }
+        rows.push_back(hbox(std::move(cells)));
+    }
+    return vbox(std::move(rows)) | center | flex;
 }
 
 Element render_lyric_panel(const AppState &s) {
     int ms = s.current_time_ms;
     return theme_bg(hbox({
-        render_cover(),
+        render_cover(s.cover),
         render_lyrics(s.lyrics, ms),
     }));
 }

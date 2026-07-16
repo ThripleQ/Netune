@@ -14,7 +14,7 @@ static int ns_search(const char *kw, int p, int ps, SearchResult *out) {
     memset(out,0,sizeof(*out));if(!kw)return-1;int l=ps>0?ps:20,o=p>0?p*l:0;
     NSSearchResult nr;if(netease_search(kw,l,o,&nr)!=0||nr.count<=0)return-1;
     out->songs=calloc((size_t)nr.count,sizeof(SongInfo));out->count=nr.count;out->total=nr.count;
-    for(int i=0;i<nr.count;i++){SongInfo*s=&out->songs[i];s->id=strdup(nr.songs[i].id);s->source=strdup("netease");s->title=strdup(nr.songs[i].title?nr.songs[i].title:"");s->artist=strdup(nr.songs[i].artist?nr.songs[i].artist:"");s->album=strdup(nr.songs[i].album?nr.songs[i].album:"");s->duration_sec=nr.songs[i].dur_ms/1000;s->cover_url=strdup("");s->aux_label=strdup("");}
+    for(int i=0;i<nr.count;i++){SongInfo*s=&out->songs[i];s->id=strdup(nr.songs[i].id);s->source=strdup("netease");s->title=strdup(nr.songs[i].title?nr.songs[i].title:"");s->artist=strdup(nr.songs[i].artist?nr.songs[i].artist:"");s->album=strdup(nr.songs[i].album?nr.songs[i].album:"");s->duration_sec=nr.songs[i].dur_ms/1000;s->cover_url=strdup(nr.songs[i].cover_url?nr.songs[i].cover_url:"");s->aux_label=strdup("");}
     netease_search_free(&nr);return 0;
 }
 static int ns_detail(const char *id, SongInfo *out) {memset(out,0,sizeof(*out));out->id=strdup(id);out->source=strdup("netease");out->title=strdup("");out->artist=strdup("");out->album=strdup("");out->cover_url=strdup("");out->aux_label=strdup("");return 0;}
