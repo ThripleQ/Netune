@@ -6,6 +6,41 @@
 #include <vector>
 using namespace ftxui;
 
+/* ── UTF-8 split ──────────────────────────────────── */
+static std::vector<std::string> utf8_chars(const std::string &s) {
+    std::vector<std::string> out;
+    for (size_t i = 0; i < s.size();) {
+        unsigned char c = (unsigned char)s[i];
+        int len = 1;
+        if      ((c & 0xF0) == 0xF0) len = 4;
+        else if ((c & 0xE0) == 0xE0) len = 3;
+        else if ((c & 0xC0) == 0xC0) len = 2;
+        out.push_back(s.substr(i, (size_t)len));
+        i += (size_t)len;
+    }
+    return out;
+}
+
+/* ── Gradual fill line (visual effect, not frame-precise) ── */
+static Element fill_line(const std::string &txt, float progress) {
+    auto chars = utf8_chars(txt);
+    if (chars.empty()) return text("");
+
+    int split = (int)(progress * (float)chars.size());
+    if (split < 0) split = 0;
+    if (split > (int)chars.size()) split = (int)chars.size();
+
+    Elements els;
+    els.push_back(text("  "));  /* alignment prefix */
+    for (int i = 0; i < (int)chars.size(); i++) {
+        if (i < split)
+            els.push_back(text(chars[i]) | bold);
+        else
+            els.push_back(text(chars[i]) | dim);
+    }
+    return hbox(std::move(els));
+}
+
 /* ── Render lyrics ────────────────────────────────── */
 static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
     if (!ly || ly->count == 0)
@@ -13,6 +48,18 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
 
     int base = lyric_find_line(ly, play_time_ms);
     if (base < 0) base = 0;
+
+    /* Progress within the current line (for visual fill effect) */
+    float kprog = 0.0f;
+    if (base + 1 < ly->count) {
+        int t0 = ly->lines[base].time_ms;
+        int t1 = ly->lines[base + 1].time_ms;
+        int dt = t1 - t0;
+        if (dt > 0)
+            kprog = (float)(play_time_ms - t0) / (float)dt;
+        if (kprog < 0.0f) kprog = 0.0f;
+        if (kprog > 1.0f) kprog = 1.0f;
+    }
 
     /* Window around current line */
     const int before = 6;
@@ -26,7 +73,7 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
     for (int i = start; i < end; i++) {
         std::string raw = ly->lines[i].text ? ly->lines[i].text : "";
         if (i == base) {
-            items.push_back(theme_accent(text("  " + raw) | bold));
+            items.push_back(fill_line(raw, kprog));
         } else if (i == base + 1 || i == base - 1) {
             items.push_back(theme_fg(text("  " + raw)));
         } else {
