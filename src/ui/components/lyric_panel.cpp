@@ -24,15 +24,16 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
     std::string blank((size_t)col_w, ' ');  /* clear previous text */
 
     Elements items;
+    auto clear = theme_bg(text(blank));
     for (int i = 0; i < ROWS; i++) {
         int ni = i - CUR_POS + base;
         if (ni < 0 || ni >= ly->count) {
-            items.push_back(text(blank));
+            items.push_back(clear);
             continue;
         }
         std::string raw = ly->lines[ni].text ? ly->lines[ni].text : "";
         if (raw.empty()) {
-            items.push_back(text(blank));
+            items.push_back(clear);
         } else if (ni == base) {
             items.push_back(theme_accent(text("  " + raw) | bold));
         } else if (ni == base + 1 || ni == base - 1) {
@@ -41,7 +42,7 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
             items.push_back(theme_fg(text("  " + raw)) | dim);
         }
     }
-    return vbox(std::move(items));
+    return vbox(std::move(items)) | clear_under;
 }
 
 /* ── Cover ───────────────────────────────────────────────── */

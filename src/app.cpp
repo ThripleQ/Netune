@@ -730,10 +730,10 @@ int run_app(int argc, char **argv) {
         if (s.lyric_mode) {
             main = vbox(Elements{
                 render_top_bar(s),
-                render_lyric_panel(s),
+                render_lyric_panel(s) | clear_under,
                 filler(),
                 render_status_bar(s),
-            });
+            }) | clear_under;
         } else {
             /* normal layout */
             main = vbox(Elements{
