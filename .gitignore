@@ -1,20 +1,31 @@
 build/
-*.o
-*.a
-*.so
+build_debug/
+build_ci/
+.cache/
+compile_commands.json
+
+# OS metadata
 .DS_Store
+.directory
+Thumbs.db
+
+# Editor temp files
 *.swp
 *.swo
 *~
 .vscode/
 .idea/
-compile_commands.json
-.cache/
-build_debug/
+
+# Compiled objects
+*.o
+*.a
+*.so
+
+# Misc trash
+2_windows.txt
 文本文件.txt
 images.png
 
 # Keep pre-built binaries
 !bin/
 !bin/*
-build_ci/
