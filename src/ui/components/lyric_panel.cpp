@@ -14,18 +14,23 @@ static Element render_lyrics(const Lyrics *ly, int current_line) {
     Elements items;
     for (int i = 0; i < ly->count; i++) {
         std::string line_text = ly->lines[i].text ? ly->lines[i].text : "";
-        if (i == current_line)
-            items.push_back(theme_accent(text("  " + line_text) | bold));
-        else if (i == current_line + 1 || i == current_line - 1)
+        if (i == current_line) {
+            items.push_back(
+                theme_accent(text("  " + line_text) | bold) | focus
+            );
+        } else if (i == current_line + 1 || i == current_line - 1) {
             items.push_back(theme_fg(text("  " + line_text)));
-        else
+        } else {
             items.push_back(theme_fg(text("  " + line_text)) | dim);
+        }
     }
 
-    /* Pad so current line is roughly centered */
+    /* Pad: start at top, only center once past the middle */
     Elements padded;
-    int pad_top = 8 - current_line;
-    for (int i = 0; i < pad_top && i < 8; i++)
+    int pad_count = current_line > ly->count / 2
+        ? (ly->count - current_line) / 2
+        : 0;
+    for (int i = 0; i < pad_count; i++)
         padded.push_back(text(""));
     for (auto &item : items)
         padded.push_back(std::move(item));
