@@ -5,11 +5,17 @@
 #include <string>
 using namespace ftxui;
 
-/* ── Current line: wrapped text + full-width gauge ── */
+/* ── Current line: wrapped text + ━━ progress bar ─ */
 static Element current_line(const std::string &txt, float progress) {
+    int max = 150;
+    int filled = (int)(progress * (float)max);
+    if (filled < 0) filled = 0;
+    if (filled > max) filled = max;
+    std::string bar((size_t)filled, '\u2501');
+
     return vbox({
         theme_accent(paragraph("  " + txt) | bold),
-        theme_accent(gauge(progress)),
+        theme_accent(hbox({text("  "), text(bar)})) | flex,
     });
 }
 
