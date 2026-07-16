@@ -749,6 +749,12 @@ int run_app(int argc, char **argv) {
 
         const AppState &cur = state.state();
 
+        /* ── Lyrics mode: Esc to close ── */
+        if (cur.lyric_mode && ev_key == "escape") {
+            StateStore::instance().set_lyric_mode(false);
+            return true;
+        }
+
         /* ── Login overlay: Esc to close ── */
         if (cur.login_state != 0 && (ev_key == "escape")) {
             StateStore::instance().set_login_state(0, "", "");
