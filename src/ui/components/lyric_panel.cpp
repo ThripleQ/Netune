@@ -11,7 +11,8 @@ static Element current_line(const std::string &txt, float progress) {
     int filled = (int)(progress * (float)max);
     if (filled < 0) filled = 0;
     if (filled > max) filled = max;
-    std::string bar((size_t)filled, '\u2501');
+    std::string bar;
+    for (int i = 0; i < filled; i++) bar += "\u2501";
 
     return vbox({
         theme_accent(paragraph("  " + txt) | bold),
