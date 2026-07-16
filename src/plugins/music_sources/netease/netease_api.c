@@ -203,7 +203,7 @@ int netease_lyric(const char *song_id, char **buf) {
         return 0;
     }
     /* check code */
-    const char *code_str = jstr(j, "code");
+    char *code_str = jstr(j, "code");
     if (code_str) {
         long long code = atoll(code_str);
         if (code != 200) {
