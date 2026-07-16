@@ -134,7 +134,7 @@ Element render_cover_only(const AppState &s) {
     int cover_w = total / 2 - 1;
     if (cover_w < 12) cover_w = 12;
     if (cover_w > 60) cover_w = 60;
-    return theme_bg(render_cover(s.cover, cover_w) | center | flex);
+    return render_cover(s.cover, cover_w) | center | flex;
 }
 
 Element render_lyrics_only(const AppState &s) {
@@ -145,12 +145,12 @@ Element render_lyrics_only(const AppState &s) {
     if (cover_w > 60) cover_w = 60;
     int lyrics_w = total - cover_w - 3;
     if (lyrics_w < 20) lyrics_w = 20;
-    return theme_bg(render_lyrics(s.lyrics, ms, lyrics_w));
+    return vbox({text(""), render_lyrics(s.lyrics, ms, lyrics_w)});  /* top pad */
 }
 
 Element render_lyric_panel(const AppState &s) {
-    return hbox(Elements{
+    return theme_bg(hbox(Elements{
         render_cover_only(s) | flex,
         render_lyrics_only(s) | flex,
-    });
+    }));
 }
