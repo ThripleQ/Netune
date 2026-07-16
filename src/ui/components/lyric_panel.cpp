@@ -22,7 +22,7 @@ static Element current_line(const std::string &txt, float progress) {
 }
 
 /* ── Render lyrics ────────────────────────────────── */
-static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
+static Element render_lyrics(const Lyrics *ly, int play_time_ms, int max_width) {
     if (!ly || ly->count == 0)
         return text("  No lyrics") | dim | center | flex;
 
@@ -54,14 +54,38 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
     for (int i = 0; i < top_pad; i++)
         items.push_back(text(""));
 
+    /* Truncate long lines to fit panel (rough estimate: available width - margins) */
+    auto trunc = [](const std::string &s, int max_w) -> std::string {
+        int w = string_width(s);
+        if (w <= max_w) return s;
+        /* find truncation point */
+        int col = 0;
+        size_t cut = 0;
+        for (size_t i = 0; i < s.size() && col + 1 < max_w - 1; ) {
+            unsigned char c = (unsigned char)s[i];
+            int len = 1;
+            int cw = 1;
+            if ((c & 0xF0) == 0xF0) { len = 4; cw = 2; }
+            else if ((c & 0xE0) == 0xE0) { len = 3; cw = 2; }
+            else if ((c & 0xC0) == 0xC0) { len = 2; cw = 2; }
+            col += cw;
+            cut = i + len;
+            i += len;
+        }
+        return s.substr(0, cut) + "\u2026";
+    };
+
+    if (max_width < 20) max_width = 20;
+
     for (int i = start; i < end; i++) {
         std::string raw = ly->lines[i].text ? ly->lines[i].text : "";
+        std::string display = trunc(raw, lyrics_w);
         if (i == base) {
-            items.push_back(current_line(raw, kprog));
+            items.push_back(current_line(display, kprog));
         } else if (i == base + 1 || i == base - 1) {
-            items.push_back(theme_fg(text("  " + raw)));
+            items.push_back(theme_fg(text("  " + display)));
         } else {
-            items.push_back(theme_fg(text("  " + raw)) | dim);
+            items.push_back(theme_fg(text("  " + display)) | dim);
         }
     }
 
@@ -114,8 +138,12 @@ Element render_lyric_panel(const AppState &s) {
     int cover_w = s.song_panel_width > 20 ? (s.song_panel_width - 5) / 2 : 15;
     if (cover_w < 10) cover_w = 10;
     if (cover_w > 35) cover_w = 35;
+    /* Lyrics panel gets the rest, minus margins */
+    int lyrics_w = s.song_panel_width - cover_w - 4;
+    if (lyrics_w < 20) lyrics_w = 20;
+    if (lyrics_w > 80) lyrics_w = 80;
     return theme_bg(hbox({
         render_cover(s.cover, cover_w) | size(WIDTH, EQUAL, cover_w),
-        render_lyrics(s.lyrics, ms) | flex,
+        render_lyrics(s.lyrics, ms, lyrics_w) | flex,
     }));
 }
