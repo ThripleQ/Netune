@@ -67,7 +67,7 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int panel_w) {
         if (kprog > 1.0f) kprog = 1.0f;
     }
 
-    const int above = 4, below = 14;
+    const int above = 4, below = 15;  /* total 20 rows = cover height */
     int start = base - above;
     if (start < 0) start = 0;
     int end = base + below;
@@ -125,7 +125,7 @@ static Element render_cover(const CoverData &cd, int panel_w) {
         }
         rows.push_back(hbox(std::move(cells)));
     }
-    return vbox(std::move(rows)) | center | flex;
+    return vbox(std::move(rows)) | flex;
 }
 
 Element render_cover_only(const AppState &s) {

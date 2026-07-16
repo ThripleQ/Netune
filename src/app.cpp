@@ -735,6 +735,7 @@ int run_app(int argc, char **argv) {
                     render_cover_only(s) | flex,
                     vbox(Elements{
                         render_lyrics_only(s) | flex,
+                        text(""),  /* gap before status bar */
                         render_status_bar(s),
                     }) | flex,
                 }) | flex,
