@@ -176,6 +176,7 @@ endif()
 
 if(MSVC)
   target_compile_definitions(netune PRIVATE _CRT_NONSTDC_NO_DEPRECATE)
+  target_include_directories(netune BEFORE PRIVATE src/compat)
 endif()
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
