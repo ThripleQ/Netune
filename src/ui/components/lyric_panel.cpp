@@ -69,9 +69,9 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
     return vbox(std::move(items));
 }
 
-/* ── Cover: ▄ half-block pixel rendering ───────── */
-static Element render_cover(const CoverData &cd) {
-    if (!cd.pixels || cd.width <= 0 || cd.height <= 0) {
+/* ── Cover: ▄ half-block rendering, dynamic resize ─ */
+static Element render_cover(const CoverData &cd, int panel_width_chars) {
+    if (!cd.pixels || cd.width <= 0 || cd.height <= 0 || panel_width_chars < 4) {
         return vbox({
             text("") | bold,
             text("  [ Cover ]") | dim | center,
@@ -79,20 +79,29 @@ static Element render_cover(const CoverData &cd) {
         }) | center | flex;
     }
 
-    /* Each ▄ renders 2 pixels: top=bg, bottom=fg */
-    int hh = cd.height / 2;  /* half the rows (2 pixels per row) */
+    /* Target: fit panel_width_chars columns, keep aspect ratio */
+    int dw = panel_width_chars;
+    if (dw > cd.width) dw = cd.width;
+    int dh = cd.height * dw / cd.width;
+    if (dh % 2) dh++;  /* even rows for ▄ pairs */
+
+    /* NN-scale + render in one pass */
+    int src_w = cd.width, src_h = cd.height;
     Elements rows;
-    for (int y = 0; y < hh; y++) {
+    for (int y = 0; y < dh; y += 2) {
         Elements cells;
-        for (int x = 0; x < cd.width; x++) {
-            int top = ((y * 2    ) * cd.width + x) * 3;
-            int bot = ((y * 2 + 1) * cd.width + x) * 3;
-            if (bot >= cd.width * cd.height * 3) bot = top;
-            Color top_c = Color::RGB(cd.pixels[top], cd.pixels[top+1], cd.pixels[top+2]);
-            Color bot_c = Color::RGB(cd.pixels[bot], cd.pixels[bot+1], cd.pixels[bot+2]);
-            cells.push_back(
-                bgcolor(top_c, color(bot_c, text("\u2580")))
-            );
+        for (int x = 0; x < dw; x++) {
+            int sx = x * src_w / dw;
+            int sy0 = (y    ) * src_h / dh;
+            int sy1 = (y + 1) * src_h / dh;
+            if (sy1 >= src_h) sy1 = sy0;
+            int top = (sy0 * src_w + sx) * 3;
+            int bot = (sy1 * src_w + sx) * 3;
+            cells.push_back(bgcolor(
+                Color::RGB(cd.pixels[top], cd.pixels[top+1], cd.pixels[top+2]),
+                color(Color::RGB(cd.pixels[bot], cd.pixels[bot+1], cd.pixels[bot+2]),
+                    text("\u2580"))
+            ));
         }
         rows.push_back(hbox(std::move(cells)));
     }
@@ -101,8 +110,12 @@ static Element render_cover(const CoverData &cd) {
 
 Element render_lyric_panel(const AppState &s) {
     int ms = s.current_time_ms;
+    /* Cover panel width: roughly half the screen minus lyrics side */
+    int cover_w = s.song_panel_width > 20 ? (s.song_panel_width - 5) / 2 : 15;
+    if (cover_w < 10) cover_w = 10;
+    if (cover_w > 35) cover_w = 35;
     return theme_bg(hbox({
-        render_cover(s.cover),
+        render_cover(s.cover, cover_w),
         render_lyrics(s.lyrics, ms),
     }));
 }
