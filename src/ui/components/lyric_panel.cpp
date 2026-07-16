@@ -79,7 +79,7 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int max_width) 
 
     for (int i = start; i < end; i++) {
         std::string raw = ly->lines[i].text ? ly->lines[i].text : "";
-        std::string display = trunc(raw, lyrics_w);
+        std::string display = trunc(raw, max_width);
         if (i == base) {
             items.push_back(current_line(display, kprog));
         } else if (i == base + 1 || i == base - 1) {
