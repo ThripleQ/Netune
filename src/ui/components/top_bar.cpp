@@ -2,13 +2,7 @@
 #include "ui/components/theme_util.h"
 using namespace ftxui;
 
-Element render_top_bar(const AppState &s) {
-    std::string title;
-    if (s.current_song.title && s.current_song.title[0]) {
-        title = s.current_song.title;
-        if (s.current_song.artist && s.current_song.artist[0]) {
-            title += std::string(" — ") + s.current_song.artist;
-        }
-    }
-    return theme_bg(theme_fg(text(" " + title) | bold) | center);
+Element render_top_bar(const AppState &) {
+    /* Show app name and mode, no song title — moved to status bar */
+    return theme_bg(theme_fg(text(" Netune v2.0 ") | bold) | center);
 }
