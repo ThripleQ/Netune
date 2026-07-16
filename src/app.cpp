@@ -728,10 +728,10 @@ int run_app(int argc, char **argv) {
 
         Element main;
         if (s.lyric_mode) {
-            /* lyrics view: top_bar + [cover | lyrics] (single bg) + status_bar */
             main = vbox(Elements{
                 render_top_bar(s),
-                render_lyric_panel(s) | flex,
+                render_lyric_panel(s),
+                filler(),
                 render_status_bar(s),
             });
         } else {
