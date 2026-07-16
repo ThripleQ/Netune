@@ -6,12 +6,15 @@
 #include <signal.h>
 #ifndef _WIN32
 #include <unistd.h>
+#include <sys/stat.h>   /* mkdir */
 #else
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <io.h>
+#include <direct.h>      /* _mkdir */
 #define access _access
 #define F_OK 0
+#define mkdir(p,m) _mkdir(p)
 #endif
 #include <stdio.h>
 #include <stdlib.h>
@@ -384,66 +387,89 @@ static void ev_playlist_changed(const BusEvent *ev, void *data) {
 }
 /* ───────────────────────────────────────────────────── */
 
-int run_app(int argc, char **argv) {
-    log_init("/tmp/netune.log");
-    LOG_INFO("Netune v2.0.0 starting");
+/* ── XDG path helpers ────────────────────────────── */
+static const char *xdg_dir(const char *env, const char *sub) {
+    const char *d = getenv(env);
+    static char buf[1024];
+    if (d && d[0]) {
+        snprintf(buf, sizeof(buf), "%s/netune/%s", d, sub ? sub : "");
+    } else {
+        const char *home = getenv("HOME");
+        if (!home) home = "/tmp";
+        const char *prefix = strstr(env, "CONFIG") ? ".config" : ".cache";
+        snprintf(buf, sizeof(buf), "%s/%s/netune/%s", home, prefix, sub ? sub : "");
+    }
+    return buf;
+}
 
+static void ensure_dir(const char *path) {
+    /* mkdir -p the directory part of path */
+    char tmp[1024];
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = 0;
+#ifndef _WIN32
+            mkdir(tmp, 0755);
+#else
+            _mkdir(tmp);
+#endif
+            *p = '/';
+        }
+    }
+#ifndef _WIN32
+    mkdir(tmp, 0755);
+#else
+    _mkdir(tmp);
+#endif
+}
+
+int run_app(int argc, char **argv) {
     if (argc > 1 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
         printf("Netune v2.0.0 — Terminal music player\nUsage: %s [config.json]\n", argv[0]);
         return 0;
     }
 
-    Config *cfg = NULL;
-    /* Resolve data dir relative to executable */
+    /* ── Log ────────────────────────────────────────── */
+    const char *log_path = xdg_dir("XDG_CACHE_HOME", "netune.log");
+    ensure_dir(log_path);
+    log_init(log_path);
+    LOG_INFO("Netune v2.0.0 starting");
+
+    /* ── Config (XDG_CONFIG_HOME, fallback exe-relative) ── */
     char exe_dir[1024] = {0};
-    {
 #ifdef _WIN32
-        DWORD r = GetModuleFileNameA(NULL, exe_dir, (DWORD)sizeof(exe_dir));
-        if (r > 0 && r < sizeof(exe_dir)) {
-            char *s = strrchr(exe_dir, '\\');
-            if (s) *s = 0;
-        }
+    { DWORD r = GetModuleFileNameA(NULL, exe_dir, (DWORD)sizeof(exe_dir));
+      if (r > 0 && r < sizeof(exe_dir)) { char *s = strrchr(exe_dir, '\\'); if (s) *s = 0; } }
 #else
-        char link[1024];
-        snprintf(link, sizeof(link), "/proc/self/exe");
-        ssize_t r = readlink(link, exe_dir, sizeof(exe_dir) - 1);
-        if (r > 0) {
-            exe_dir[r] = 0;
-            char *s = strrchr(exe_dir, '/');
-            if (s) *s = 0;
-        }
+    { char link[1024]; snprintf(link, sizeof(link), "/proc/self/exe");
+      ssize_t r = readlink(link, exe_dir, sizeof(exe_dir) - 1);
+      if (r > 0) { exe_dir[r] = 0; char *s = strrchr(exe_dir, '/'); if (s) *s = 0; } }
 #endif
-    }
-    /* If data/ not in exe_dir, check parent dir (e.g. build/ → project root) */
-    char data_dir[1024];
-    snprintf(data_dir, sizeof(data_dir), "%s/data/config.json", exe_dir);
-    if (access(data_dir, F_OK) != 0) {
-        char *s = strrchr(exe_dir, '/');
-        if (s) {
-            *s = 0;  /* go up one more level */
-        }
-    }
+
     char cfg_buf[1024];
     if (argc > 1) {
         snprintf(cfg_buf, sizeof(cfg_buf), "%s", argv[1]);
     } else {
-        snprintf(cfg_buf, sizeof(cfg_buf), "%s/data/config.json", exe_dir);
+        const char *xdg_cfg = xdg_dir("XDG_CONFIG_HOME", "config.json");
+        if (access(xdg_cfg, F_OK) == 0) {
+            snprintf(cfg_buf, sizeof(cfg_buf), "%s", xdg_cfg);
+        } else {
+            /* fallback: exe-relative (dev builds) */
+            { char d[1024]; snprintf(d, sizeof(d), "%s/data/config.json", exe_dir);
+              if (access(d, F_OK) != 0) { char *s = strrchr(exe_dir, '/'); if (s) *s = 0; } }
+            snprintf(cfg_buf, sizeof(cfg_buf), "%s/data/config.json", exe_dir);
+        }
     }
-    cfg = config_load(cfg_buf);
+    ensure_dir(cfg_buf);
+    Config *cfg = config_load(cfg_buf);
     if (!cfg) LOG_WARN("No config loaded, using defaults");
     config_set_global(cfg);
 
-    /* init search infrastructure */
-    {
-        const char *home = getenv("HOME");
-        char cache_dir[512];
-        if (home) {
-            snprintf(cache_dir, sizeof(cache_dir), "%s/.cache/netune", home);
-        } else {
-            snprintf(cache_dir, sizeof(cache_dir), "/tmp/netune-cache");
-        }
-        cache_init(cache_dir);
-    }
+    /* ── Cache (XDG_CACHE_HOME) ─────────────────────── */
+    const char *cache_dir = xdg_dir("XDG_CACHE_HOME", NULL);
+    ensure_dir(cache_dir);
+    cache_init(cache_dir);
     search_manager_init();
 
     event_bus_init();

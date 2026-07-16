@@ -21,7 +21,7 @@ func main() {
 
 	// Init cookie jar
 	home, _ := os.UserHomeDir()
-	cacheDir := filepath.Join(home, ".cache", "lmusic")
+	cacheDir := filepath.Join(home, ".cache", "netune")
 	os.MkdirAll(cacheDir, 0755)
 	cookiePath := filepath.Join(cacheDir, "cookies.txt")
 	jar, _ := cookiejar.NewFileJar(cookiePath, nil)
@@ -391,7 +391,7 @@ func die(msg string) {
 
 func saveNeteaseCookies(cookieStr string) {
 	home, _ := os.UserHomeDir()
-	cp := filepath.Join(home, ".cache", "lmusic", "cookies.txt")
+	cp := filepath.Join(home, ".cache", "netune", "cookies.txt")
 	os.MkdirAll(filepath.Dir(cp), 0755)
 
 	// Dedup: read existing cookies into a set keyed by name+value
