@@ -728,14 +728,16 @@ int run_app(int argc, char **argv) {
 
         Element main;
         if (s.lyric_mode) {
-            /* lyrics view: top_bar + [cover | lyrics] + status_bar (fixed) */
+            /* lyrics view: top_bar + [cover | lyrics+status] */
             main = vbox(Elements{
                 render_top_bar(s),
                 hbox(Elements{
                     render_cover_only(s) | flex,
-                    render_lyrics_only(s) | flex,
+                    vbox(Elements{
+                        render_lyrics_only(s) | flex,
+                        render_status_bar(s),
+                    }) | flex,
                 }) | flex,
-                render_status_bar(s),
             });
         } else {
             /* normal layout */
