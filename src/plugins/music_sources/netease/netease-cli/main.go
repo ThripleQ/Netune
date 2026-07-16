@@ -329,26 +329,32 @@ case "playlists": {
 			fmt.Println(string(body))
 			return
 		}
-		/* extract the lrc lyric text — prefer translated, fallback to original */
-		lyricText := ""
-		if tlyric, ok := raw["tlyric"].(map[string]interface{}); ok {
-			if txt, ok := tlyric["lyric"].(string); ok && txt != "" {
-				lyricText = txt
-			}
-		}
-		if lyricText == "" {
-			if lrc, ok := raw["lrc"].(map[string]interface{}); ok {
-				if txt, ok := lrc["lyric"].(string); ok {
-					lyricText = txt
+
+		extractLyric := func(key string) string {
+			if obj, ok := raw[key].(map[string]interface{}); ok {
+				if txt, ok := obj["lyric"].(string); ok {
+					return txt
 				}
 			}
+			return ""
 		}
+
+		/* prefer tlyric (translated), fallback to lrc */
+		lyricText := extractLyric("tlyric")
+		if lyricText == "" {
+			lyricText = extractLyric("lrc")
+		}
+		klyricText := extractLyric("klyric")
+
 		out := map[string]interface{}{}
 		if code, ok := raw["code"].(float64); ok {
 			out["code"] = code
 		}
 		if lyricText != "" {
 			out["lyric"] = lyricText
+		}
+		if klyricText != "" {
+			out["klyric"] = klyricText
 		}
 		b, _ := json.Marshal(out)
 		fmt.Println(string(b))
