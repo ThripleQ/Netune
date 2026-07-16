@@ -3,7 +3,31 @@
 #include "ui/state_store.h"
 #include "core/lyric.h"
 #include <string>
+#include <vector>
 using namespace ftxui;
+
+/* ── CJK-aware text wrap: splits each CJK char, keeps ASCII words ── */
+static Element wrap(const std::string &s) {
+    Elements cells;
+    std::string word;
+    auto flush = [&] { if (!word.empty()) { cells.push_back(text(word)); word.clear(); } };
+    for (size_t i = 0; i < s.size();) {
+        unsigned char c = (unsigned char)s[i];
+        if (c == ' ') { flush(); i++; continue; }
+        if ((c & 0x80) == 0) { word += s[i]; i++; continue; }  /* ASCII */
+        /* Multibyte UTF-8 → treat as CJK (each char wraps independently) */
+        int len = 1;
+        if      ((c & 0xF0) == 0xF0) len = 4;
+        else if ((c & 0xE0) == 0xE0) len = 3;
+        else if ((c & 0xC0) == 0xC0) len = 2;
+        flush();
+        cells.push_back(text(s.substr(i, (size_t)len)));
+        i += len;
+    }
+    flush();
+    auto cfg = FlexboxConfig().SetGap(0, 0);
+    return flexbox(std::move(cells), cfg);
+}
 
 /* ── Current line: wrapped text + ━━ progress bar ─ */
 static Element current_line(const std::string &txt, float progress, int panel_w) {
@@ -21,7 +45,7 @@ static Element current_line(const std::string &txt, float progress, int panel_w)
     for (int i = 0; i < filled; i++) bar += "\u2501";
 
     return vbox({
-        theme_accent(paragraph("  " + txt) | bold),
+        theme_accent(wrap("  " + txt) | bold),
         theme_accent(text("  " + bar)),
     });
 }
@@ -61,9 +85,9 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int panel_w) {
         if (i == base) {
             items.push_back(current_line(raw, kprog, panel_w));
         } else if (i == base + 1 || i == base - 1) {
-            items.push_back(theme_fg(paragraph("  " + raw)));
+            items.push_back(theme_fg(wrap("  " + raw)));
         } else {
-            items.push_back(theme_fg(paragraph("  " + raw)) | dim);
+            items.push_back(theme_fg(wrap("  " + raw)) | dim);
         }
     }
 
