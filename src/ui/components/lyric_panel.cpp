@@ -5,44 +5,41 @@
 #include <string>
 using namespace ftxui;
 
-/*
- * Simplest possible lyrics panel: 20 fixed rows.
- * Lines 0-3 are empty (padding), line 4 is the current lyric position.
- * The current line is highlighted. No progress bar, no wrap, no centering tricks.
- * The lyrics window slides through the song as base moves.
- */
-
 static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
-    if (!ly || ly->count == 0)
-        return text("");
+    if (!ly || ly->count == 0) {
+        std::string fill((size_t)col_w, ' ');
+        return vbox(Elements(20, text(fill)));
+    }
 
     int base = lyric_find_line(ly, play_time_ms);
     if (base < 0) base = 0;
 
     const int ROWS = 20;
     const int CUR_POS = 4;
-    std::string blank((size_t)col_w, ' ');  /* clear previous text */
 
     Elements items;
-    auto clear = theme_bg(text(blank));
     for (int i = 0; i < ROWS; i++) {
         int ni = i - CUR_POS + base;
-        if (ni < 0 || ni >= ly->count) {
-            items.push_back(clear);
-            continue;
-        }
-        std::string raw = ly->lines[ni].text ? ly->lines[ni].text : "";
-        if (raw.empty()) {
-            items.push_back(clear);
-        } else if (ni == base) {
-            items.push_back(theme_accent(text("  " + raw) | bold));
-        } else if (ni == base + 1 || ni == base - 1) {
-            items.push_back(theme_fg(text("  " + raw)));
-        } else {
-            items.push_back(theme_fg(text("  " + raw)) | dim);
-        }
+        std::string line;
+        if (ni >= 0 && ni < ly->count && ly->lines[ni].text)
+            line = ly->lines[ni].text;
+
+        std::string s = "  " + line;
+        s.resize((size_t)col_w, ' '); /* pad/spaces to exact column width */
+
+        auto el = text(s);
+        if (ni == base)
+            el = theme_accent(el | bold);
+        else if (ni == base + 1 || ni == base - 1)
+            el = theme_fg(el);
+        else if (ni < 0 || ni >= ly->count)
+            el = text(s); /* plain spaces — clears previous content */
+        else
+            el = theme_fg(el) | dim;
+
+        items.push_back(el);
     }
-    return vbox(std::move(items)) | clear_under;
+    return vbox(std::move(items));
 }
 
 /* ── Cover ───────────────────────────────────────────────── */
