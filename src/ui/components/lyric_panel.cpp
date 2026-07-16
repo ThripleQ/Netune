@@ -91,8 +91,10 @@ Element render_lyric_panel(const AppState &s) {
     int cw = total / 2 - 1;
     if (cw < 12) cw = 12;
     if (cw > 60) cw = 60;
+    int lw = total - cw - 1;
+    if (lw < 20) lw = 20;
     return theme_bg(hbox(Elements{
         render_cover_only(s) | size(WIDTH, EQUAL, cw),
-        render_lyrics_only(s) | flex,
+        render_lyrics_only(s) | size(WIDTH, EQUAL, lw),
     }));
 }
