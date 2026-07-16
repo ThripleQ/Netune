@@ -74,8 +74,8 @@ int cover_load(const char *url, CoverData *out) {
         return -1;
     }
 
-    /* Scale to target: 40×40 pixels (fits 20-col × 10-row ▄ display) */
-    int dw = 40, dh = 40;
+    /* Scale to target: 60×60 pixels (fits 30-col × 30-row ▄ display) */
+    int dw = 60, dh = 60;
     uint8_t *scaled = (uint8_t*)malloc((size_t)dw * dh * 3);
     if (!scaled) {
         stbi_image_free(pixels);
