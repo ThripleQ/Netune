@@ -5,16 +5,23 @@
 #include <string>
 using namespace ftxui;
 
-/* ── Current line: text with ▶ progress marker ─── */
+/* ── Current line: text + thin line progress ───── */
 static Element current_line(const std::string &txt, float progress) {
-    std::string marker;
-    if (progress < 0.33f)
-        marker = "\u25B7";  /* ▷ */
-    else if (progress < 0.66f)
-        marker = "\u25B6";  /* ▶ */
-    else
-        marker = "\u25B6\u25B6";  /* ▶▶ (about to finish) */
-    return theme_accent(text(" " + marker + " " + txt) | bold);
+    int w = string_width(txt);
+    if (w > 50) w = 50;
+    int filled = (int)(progress * (float)w);
+    if (filled < 0) filled = 0;
+    if (filled > w) filled = w;
+
+    std::string bar;
+    for (int i = 0; i < filled; i++)  bar += "\u2501";  /* ━ */
+    std::string rest;
+    for (int i = filled; i < w; i++)  rest += "\u2501";
+
+    return vbox({
+        theme_accent(text("  " + txt) | bold),
+        theme_accent(text("  " + bar) | dim),
+    });
 }
 
 /* ── Render lyrics ────────────────────────────────── */
