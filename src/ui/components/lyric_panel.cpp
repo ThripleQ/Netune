@@ -14,7 +14,7 @@ static Element current_line(const std::string &txt, float progress) {
     if (filled > w) filled = w;
 
     std::string bar;
-    for (int i = 0; i < filled; i++)  bar += "\u2504";  /* ┄ */
+    for (int i = 0; i < filled; i++)  bar += ".";
 
     return vbox({
         theme_accent(text("  " + txt) | bold),
