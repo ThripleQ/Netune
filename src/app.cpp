@@ -49,6 +49,12 @@ extern "C" {
 #include "ui/components/song_list.h"
 #include "ui/components/help_screen.h"
 #include "ui/components/login_screen.h"
+#include "ui/components/lyric_panel.h"
+
+extern "C" {
+#include "core/lyric.h"
+#include "plugins/lyrics/lrc/lrc_parser.h"
+}
 #include "ui/theme.h"
 #include "ui/layout_engine.h"
 
@@ -372,10 +378,52 @@ static void ev_mute_changed(const BusEvent *ev, void *data) {
     }
 }
 
+static void load_lyrics_for_current_song(void) {
+    auto &store = StateStore::instance();
+    const SongInfo &song = store.state().current_song;
+
+    /* free old lyrics */
+    Lyrics *old = store.state().lyrics;
+    if (old) { lyric_free(old); store.set_lyrics(NULL); }
+
+    if (!song.id) return;
+
+    char *lyric_buf = NULL;
+    if (song.source && strcmp(song.source, "local") == 0) {
+        /* local song: look for .lrc sidecar file */
+        size_t len = strlen(song.id);
+        char *lrc_path = (char*)malloc(len + 5);
+        if (!lrc_path) return;
+        memcpy(lrc_path, song.id, len);
+        lrc_path[len] = '\0';
+        char *dot = strrchr(lrc_path, '.');
+        if (dot) *dot = '\0';
+        strcat(lrc_path, ".lrc");
+
+        Lyrics *ly = lrc_load_file(lrc_path);
+        free(lrc_path);
+        if (ly) {
+            store.set_lyrics(ly);
+            LOG_INFO("Lyrics loaded from .lrc (%d lines)", ly->count);
+            return;
+        }
+    } else if (song.source && strcmp(song.source, "netease") == 0) {
+        /* Netease: fetch via netease-cli */
+        if (netease_lyric(song.id, &lyric_buf) == 0 && lyric_buf) {
+            Lyrics *ly = lyric_parse(lyric_buf);
+            free(lyric_buf);
+            if (ly) {
+                store.set_lyrics(ly);
+                LOG_INFO("Lyrics loaded from Netease (%d lines)", ly->count);
+                return;
+            }
+        }
+    }
+}
+
 static void ev_track_changed(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
-    /* Track changed — placeholder for future listeners (lyrics, cover).
-       StateStore already has the correct song from direct writes. */
+    load_lyrics_for_current_song();
 }
 
 static void ev_playlist_changed(const BusEvent *ev, void *data) {
@@ -647,9 +695,16 @@ int run_app(int argc, char **argv) {
             }
         }
 
-        Element main = vbox(Elements{
-            layout_engine.build(s) | flex,
-        });
+        Element main;
+        if (s.lyric_mode) {
+            /* full-screen lyrics view */
+            main = render_lyric_panel(s) | flex;
+        } else {
+            /* normal layout */
+            main = vbox(Elements{
+                layout_engine.build(s) | flex,
+            });
+        }
 
         if (s.login_state != 0) {
             /* Full-page login screen */
@@ -1188,6 +1243,10 @@ int run_app(int argc, char **argv) {
         case Action::CycleLoop: {
             int next = ((int)cur.loop_mode + 1) % 3;
             event_bus_publish(EV_PLAYLIST_CHANGED, &next, sizeof(next));
+            return true;
+        }
+        case Action::ToggleLyrics: {
+            StateStore::instance().set_lyric_mode(!cur.lyric_mode);
             return true;
         }
 

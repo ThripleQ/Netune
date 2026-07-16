@@ -19,6 +19,7 @@ enum class Action {
     ToggleMute,
     OpenSearch,
     CycleLoop,
+    ToggleLyrics,
     ShowHelp,
     Quit,
 };

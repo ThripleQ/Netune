@@ -263,3 +263,11 @@ void StateStore::set_song_panel_width(int cols) {
     if (cols < 20) cols = 20;
     state_.song_panel_width = cols;
 }
+
+void StateStore::set_lyrics(Lyrics *ly) {
+    state_.lyrics = ly;
+}
+
+void StateStore::set_lyric_mode(bool mode) {
+    state_.lyric_mode = mode;
+}

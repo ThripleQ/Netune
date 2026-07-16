@@ -318,7 +318,42 @@ case "playlists": {
 	fmt.Println(string(b))
 }
 
-	case "playlist-tracks": {
+	case "lyric":
+		if len(os.Args) < 3 {
+			die("usage: netease-cli lyric <song_id>")
+		}
+		s := service.LyricService{ID: os.Args[2]}
+		_, body := s.Lyric()
+		var raw map[string]interface{}
+		if json.Unmarshal(body, &raw) != nil {
+			fmt.Println(string(body))
+			return
+		}
+		/* extract the lrc lyric text — prefer translated, fallback to original */
+		lyricText := ""
+		if tlyric, ok := raw["tlyric"].(map[string]interface{}); ok {
+			if txt, ok := tlyric["lyric"].(string); ok && txt != "" {
+				lyricText = txt
+			}
+		}
+		if lyricText == "" {
+			if lrc, ok := raw["lrc"].(map[string]interface{}); ok {
+				if txt, ok := lrc["lyric"].(string); ok {
+					lyricText = txt
+				}
+			}
+		}
+		out := map[string]interface{}{}
+		if code, ok := raw["code"].(float64); ok {
+			out["code"] = code
+		}
+		if lyricText != "" {
+			out["lyric"] = lyricText
+		}
+		b, _ := json.Marshal(out)
+		fmt.Println(string(b))
+
+case "playlist-tracks": {
 	if len(os.Args) < 3 {
 		die("usage: netease-cli playlist-tracks <id>")
 	}

@@ -25,11 +25,7 @@ Element render_status_bar(const AppState &s) {
     case LoopMode::Playlist: loop_str = "All";  break;
     }
 
-    char info[96];
-    snprintf(info, sizeof(info), " %s  %s  %s  V:%d",
-             state_str.c_str(), loop_str, time_str.c_str(), s.volume);
-
-    /* ── Song title row (empty if nothing playing) ──── */
+    /* ── Song title row ─────────────────────────────╴ */
     std::string song_row;
     if (s.current_song.title && s.current_song.title[0]) {
         song_row = s.current_song.title;
@@ -38,11 +34,21 @@ Element render_status_bar(const AppState &s) {
         }
     }
 
+    /* info + title on one line; gauge on the next */
+    std::string top_line;
+    if (song_row.empty()) {
+        snprintf(buf, sizeof(buf), " %s  %s  %s  V:%d",
+                 state_str.c_str(), loop_str, time_str.c_str(), s.volume);
+        top_line = buf;
+    } else {
+        snprintf(buf, sizeof(buf), " %s  %s  %s  V:%d  %s",
+                 state_str.c_str(), loop_str, time_str.c_str(),
+                 s.volume, song_row.c_str());
+        top_line = buf;
+    }
+
     return theme_bg(vbox(Elements{
-        theme_fg(text(info)) | dim,
-        song_row.empty()
-            ? text("")
-            : theme_fg(text(" " + song_row) | bold),
+        theme_fg(text(top_line)) | dim,
         gauge(s.progress) | theme_accent,
     }));
 }

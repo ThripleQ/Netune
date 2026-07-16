@@ -32,10 +32,28 @@ static char *jstr(const char *j, const char *k) {
     /* string value */
     if(*p=='"'){p++;size_t cap=512,w=0;char*o=malloc(cap);if(!o)return NULL;
         while(*p&&*p!='"'&&w<cap-1){
-            if(*p=='\\'&&*(p+1)=='u'&&isxdigit((unsigned char)*(p+2))&&isxdigit((unsigned char)*(p+3))&&isxdigit((unsigned char)*(p+4))&&isxdigit((unsigned char)*(p+5))){
-                char h[5]={*(p+2),*(p+3),*(p+4),*(p+5),0};unsigned long cp=strtoul(h,NULL,16);
-                if(cp<0x80)o[w++]=(char)cp;else if(cp<0x800){o[w++]=(char)(0xC0|(cp>>6));o[w++]=(char)(0x80|(cp&0x3F));}else{o[w++]=(char)(0xE0|(cp>>12));o[w++]=(char)(0x80|((cp>>6)&0x3F));o[w++]=(char)(0x80|(cp&0x3F));}p+=6;
-            }else o[w++]=*p++;
+            if(*p=='\\') {
+                switch(*(p+1)) {
+                case 'n':  o[w++]='\n'; p+=2; break;
+                case 't':  o[w++]='\t'; p+=2; break;
+                case 'r':  o[w++]='\r'; p+=2; break;
+                case '"': o[w++]='"'; p+=2; break;
+                case '\\': o[w++]='\\'; p+=2; break;
+                case 'u':
+                    if(isxdigit((unsigned char)*(p+2))&&isxdigit((unsigned char)*(p+3))&&isxdigit((unsigned char)*(p+4))&&isxdigit((unsigned char)*(p+5))){
+                        char h[5]={*(p+2),*(p+3),*(p+4),*(p+5),0};unsigned long cp=strtoul(h,NULL,16);
+                        if(cp<0x80)o[w++]=(char)cp;else if(cp<0x800){o[w++]=(char)(0xC0|(cp>>6));o[w++]=(char)(0x80|(cp&0x3F));}else{o[w++]=(char)(0xE0|(cp>>12));o[w++]=(char)(0x80|((cp>>6)&0x3F));o[w++]=(char)(0x80|(cp&0x3F));}
+                        p+=6;
+                    } else { o[w++]='\\'; o[w++]='u'; p+=2; }
+                    break;
+                default:
+                    o[w++]='\\'; p+=1; break;
+                }
+            } else {
+                /* check capacity */
+                if (w + 1 >= cap) { cap *= 2; char *t = realloc(o, cap); if (!t) { free(o); return NULL; } o = t; }
+                o[w++] = *p++;
+            }
         }o[w]=0;return o;
     }
     /* number value — return as string */
@@ -173,6 +191,31 @@ int netease_menu_songs(int type, int limit, SongInfo **out, int *count) { (void)
 }
 
 /* ── Play URL ──────────────────────────────────────── */
+/* ── Lyrics ──────────────────────────────────────────── */
+int netease_lyric(const char *song_id, char **buf) {
+    if (!song_id || !buf) return -1;
+    char *j = run("%s lyric \"%s\"", CLI, song_id);
+    if (!j) return -1;
+    char *lyric = jstr(j, "lyric");
+    if (lyric && lyric[0]) {
+        *buf = lyric;
+        free(j);
+        return 0;
+    }
+    /* check code */
+    const char *code_str = jstr(j, "code");
+    if (code_str) {
+        long long code = atoll(code_str);
+        if (code != 200) {
+            LOG_WARN("netease lyric api returned code=%lld", code);
+        }
+        free(code_str);
+    }
+    free(lyric);
+    free(j);
+    return -1;
+}
+
 int netease_play_url(const char *id, char *url, size_t sz) {
     const char *lvl="standard";
     char *j=run("%s song-url \"%s\" %s 2>/dev/null",CLI,id,lvl);if(!j)return -1;

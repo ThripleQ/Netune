@@ -94,6 +94,10 @@ else()
   message(STATUS "SDL2 not found: skipping SDL (needed on Windows)")
 endif()
 
+set(PLUGIN_LYRIC_SOURCES
+  src/plugins/lyrics/lrc/lrc_parser.c
+)
+
 set(PLUGIN_MUSIC_SOURCES
   src/plugins/music_sources/local/local_source.c
   src/plugins/music_sources/netease/netease_source.c
@@ -113,6 +117,7 @@ set(UI_SOURCES
   src/ui/components/help_screen.cpp
   src/ui/components/login_screen.cpp
   src/ui/components/spinner.cpp
+  src/ui/components/lyric_panel.cpp
 )
 
 set(ALL_SOURCES
@@ -123,6 +128,7 @@ set(ALL_SOURCES
   ${PLUGIN_DECODER_SOURCES}
   ${PLUGIN_AUDIO_SOURCES}
   ${PLUGIN_MUSIC_SOURCES}
+  ${PLUGIN_LYRIC_SOURCES}
   ${UI_SOURCES}
 )
 

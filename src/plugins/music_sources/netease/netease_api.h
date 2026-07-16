@@ -37,6 +37,11 @@ int  netease_menu_songs(int type, int limit,            /* daily etc */
 /* Get streaming URL.                                      */
 int  netease_play_url(const char *song_id, char *url, size_t url_sz);
 
+/* ── Lyrics ────────────────────────────────────────── */
+/* Fetch lyrics from Netease. buf is allocated/filled with parsed LRC text.
+   Returns 0 on success, -1 on error. Caller must free *buf. */
+int  netease_lyric(const char *song_id, char **buf);
+
 
 #ifdef __cplusplus
 }

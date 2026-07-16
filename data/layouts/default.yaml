@@ -11,4 +11,4 @@ layout:
         - component: "song_list"
           flex: 1
     - component: "status_bar"
-      height: 3
+      height: 2
