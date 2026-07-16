@@ -3,42 +3,25 @@
 #include "ui/state_store.h"
 #include "core/lyric.h"
 #include <string>
-#include <vector>
 using namespace ftxui;
 
-/* ── UTF-8 split ──────────────────────────────────── */
-static std::vector<std::string> utf8_chars(const std::string &s) {
-    std::vector<std::string> out;
-    for (size_t i = 0; i < s.size();) {
-        unsigned char c = (unsigned char)s[i];
-        int len = 1;
-        if      ((c & 0xF0) == 0xF0) len = 4;
-        else if ((c & 0xE0) == 0xE0) len = 3;
-        else if ((c & 0xC0) == 0xC0) len = 2;
-        out.push_back(s.substr(i, (size_t)len));
-        i += (size_t)len;
-    }
-    return out;
-}
-
-/* ── Gradual fill line (visual effect, not frame-precise) ── */
+/* ── Current line: text + thin progress underline ── */
 static Element fill_line(const std::string &txt, float progress) {
-    auto chars = utf8_chars(txt);
-    if (chars.empty()) return text("");
+    int w = string_width(txt);
+    if (w > 60) w = 60;
+    int filled = (int)(progress * (float)w);
+    if (filled < 0) filled = 0;
+    if (filled > w) filled = w;
 
-    int split = (int)(progress * (float)chars.size());
-    if (split < 0) split = 0;
-    if (split > (int)chars.size()) split = (int)chars.size();
+    std::string bar;
+    for (int i = 0; i < filled; i++)  bar += "\u258C";
+    std::string rest;
+    for (int i = filled; i < w; i++)  rest += "\u258C";
 
-    Elements els;
-    els.push_back(text("  "));  /* alignment prefix */
-    for (int i = 0; i < (int)chars.size(); i++) {
-        if (i < split)
-            els.push_back(text(chars[i]) | bold);
-        else
-            els.push_back(text(chars[i]) | dim);
-    }
-    return hbox(std::move(els));
+    return vbox({
+        theme_accent(text("  " + txt) | bold),
+        theme_accent(text("  " + bar + rest) | dim),
+    });
 }
 
 /* ── Render lyrics ────────────────────────────────── */
@@ -49,7 +32,7 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
     int base = lyric_find_line(ly, play_time_ms);
     if (base < 0) base = 0;
 
-    /* Progress within the current line (for visual fill effect) */
+    /* Progress within the current line */
     float kprog = 0.0f;
     if (base + 1 < ly->count) {
         int t0 = ly->lines[base].time_ms;
@@ -61,7 +44,7 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
         if (kprog > 1.0f) kprog = 1.0f;
     }
 
-    /* Window around current line — wide enough to fill panel */
+    /* Window around current line */
     const int above = 4;
     const int below = 20;
     int start = base - above;
@@ -69,7 +52,6 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
     int end = base + below;
     if (end > ly->count) end = ly->count;
 
-    /* Top padding: only after scrolled past ~above lines */
     Elements items;
     int top_pad = (start > 0 && base - start < above) ? (above - (base - start)) : 0;
     for (int i = 0; i < top_pad; i++)
