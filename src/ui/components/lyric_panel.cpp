@@ -115,7 +115,7 @@ Element render_lyric_panel(const AppState &s) {
     if (cover_w < 10) cover_w = 10;
     if (cover_w > 35) cover_w = 35;
     return theme_bg(hbox({
-        render_cover(s.cover, cover_w),
-        render_lyrics(s.lyrics, ms),
+        render_cover(s.cover, cover_w) | size(WIDTH, EQUAL, cover_w),
+        render_lyrics(s.lyrics, ms) | flex,
     }));
 }
