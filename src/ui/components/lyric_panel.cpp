@@ -2,43 +2,30 @@
 #include "ui/components/theme_util.h"
 #include "ui/state_store.h"
 #include "core/lyric.h"
-#include <ftxui/screen/string.hpp>
 #include <string>
-#include <cstdio>
 using namespace ftxui;
 
-/* ── Render lyrics (right column) ──────────────────── */
+/* ── Render lyrics column ─────────────────────────── */
 static Element render_lyrics(const Lyrics *ly, int current_line) {
     if (!ly || ly->count == 0) {
-        return text("  No lyrics") | dim | center;
+        return text("  No lyrics") | dim | center | flex;
     }
 
     Elements items;
     for (int i = 0; i < ly->count; i++) {
         std::string line_text = ly->lines[i].text ? ly->lines[i].text : "";
-
-        if (i == current_line) {
-            /* highlight current line */
+        if (i == current_line)
             items.push_back(theme_accent(text("  " + line_text) | bold));
-        } else if (i == current_line + 1 || i == current_line - 1) {
-            /* adjacent lines slightly dim */
+        else if (i == current_line + 1 || i == current_line - 1)
             items.push_back(theme_fg(text("  " + line_text)));
-        } else {
+        else
             items.push_back(theme_fg(text("  " + line_text)) | dim);
-        }
     }
 
-    /* centering logic: try to put current line in the visual center */
-    int pad_before = 0;
-    /* Reserve enough space so current line is roughly centered */
-    const int vis_lines = 20;  /* approximately half the terminal */
-    if (current_line >= 0) {
-        pad_before = vis_lines / 2 - current_line;
-        if (pad_before < 0) pad_before = 0;
-    }
-
+    /* Pad so current line is roughly centered */
     Elements padded;
-    for (int i = 0; i < pad_before; i++)
+    int pad_top = 8 - current_line;
+    for (int i = 0; i < pad_top && i < 8; i++)
         padded.push_back(text(""));
     for (auto &item : items)
         padded.push_back(std::move(item));
@@ -47,38 +34,25 @@ static Element render_lyrics(const Lyrics *ly, int current_line) {
     return vbox(std::move(padded)) | frame | vscroll_indicator | flex;
 }
 
-/* ── Album art placeholder (left column) ──────────── */
-static Element render_cover_placeholder() {
-    Elements lines;
-    lines.push_back(text(""));
-    lines.push_back(text("  ") | bold);
-    lines.push_back(text("  [ Cover ]") | dim | center);
-    lines.push_back(text("  ") | bold);
-    lines.push_back(text(""));
-
-    /* Simple decorative box */
-    auto box = vbox(std::move(lines));
-    /* Surround with a border-like empty space */
-    return box | center | border | flex;
+/* ── Cover placeholder (left, quiet) ──────────────── */
+static Element render_cover() {
+    return vbox({
+        text("") | bold,
+        text("  [ Cover ]") | dim | center,
+        text("") | bold,
+    }) | center | flex;
 }
 
 /* ══════════════════════════════════════════════════
-   Main render
+   Full lyrics view — no borders, no separator
    ══════════════════════════════════════════════════ */
 Element render_lyric_panel(const AppState &s) {
     int current_line = -1;
-    if (s.lyrics && s.lyrics->count > 0) {
+    if (s.lyrics && s.lyrics->count > 0)
         current_line = lyric_find_line(s.lyrics, s.current_time_sec * 1000);
-    }
 
-    auto left_col = render_cover_placeholder();
-    auto right_col = render_lyrics(s.lyrics, current_line);
-
-    return theme_bg(
-        hbox({
-            left_col | border,
-            separator(),
-            right_col | border,
-        })
-    );
+    return theme_bg(hbox({
+        render_cover(),
+        render_lyrics(s.lyrics, current_line),
+    }));
 }

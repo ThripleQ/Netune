@@ -702,8 +702,12 @@ int run_app(int argc, char **argv) {
 
         Element main;
         if (s.lyric_mode) {
-            /* full-screen lyrics view */
-            main = render_lyric_panel(s) | flex;
+            /* lyrics view: top_bar + lyrics + status_bar */
+            main = vbox(Elements{
+                render_top_bar(s),
+                render_lyric_panel(s) | flex,
+                render_status_bar(s),
+            });
         } else {
             /* normal layout */
             main = vbox(Elements{
