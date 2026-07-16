@@ -7,8 +7,7 @@ using namespace ftxui;
 
 /* ── Current line: text + thin line progress ───── */
 static Element current_line(const std::string &txt, float progress) {
-    int w = string_width(txt);
-    if (w > 50) w = 50;
+    int w = 20;  /* fixed dot count for smooth animation */
     int filled = (int)(progress * (float)w);
     if (filled < 0) filled = 0;
     if (filled > w) filled = w;
@@ -80,7 +79,7 @@ static Element render_cover() {
 }
 
 Element render_lyric_panel(const AppState &s) {
-    int ms = s.current_time_sec * 1000;
+    int ms = s.current_time_ms;
     return theme_bg(hbox({
         render_cover(),
         render_lyrics(s.lyrics, ms),

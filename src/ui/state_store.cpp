@@ -46,9 +46,17 @@ void StateStore::set_current_song(const SongInfo &song) {
 }
 
 void StateStore::set_progress(double pos, int cur_sec, int total_sec) {
-    state_.progress        = pos;
+    state_.progress         = pos;
     state_.current_time_sec = cur_sec;
-    state_.total_time_sec   = total_sec;
+    state_.current_time_ms  = cur_sec * 1000;
+    state_.total_time_sec  = total_sec;
+}
+
+void StateStore::set_progress_ms(double pos, int cur_ms, int total_sec) {
+    state_.progress         = pos;
+    state_.current_time_sec = cur_ms / 1000;
+    state_.current_time_ms  = cur_ms;
+    state_.total_time_sec  = total_sec;
 }
 
 void StateStore::set_volume(int vol) {

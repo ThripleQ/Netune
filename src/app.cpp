@@ -231,16 +231,14 @@ static void ev_search_error(const BusEvent *ev, void *data) {
 /* ── Event bus → StateStore bridge ────────────────── */
 static void ev_progress(const BusEvent *ev, void *data) {
     (void)data;
-    /* ignore progress when stopped — the stop handler already reset to 0,
-       but late-arriving progress from the playback thread would override it */
     if (StateStore::instance().state().playback_state == PlaybackState::Stopped)
         return;
     if (ev->data_size == sizeof(int[3])) {
         int *p = (int*)ev->data;
         double prog = (p[1] > 0) ? (double)p[0] / p[1] : 0.0;
-        int cur = (p[2] > 0) ? p[0] / p[2] : 0;
         int tot = (p[2] > 0 && p[1] > 0) ? p[1] / p[2] : 0;
-        StateStore::instance().set_progress(prog, cur, tot);
+        int cur_ms = (p[2] > 0) ? (int)((long long)p[0] * 1000LL / p[2]) : 0;
+        StateStore::instance().set_progress_ms(prog, cur_ms, tot);
     }
 }
 /* forward decl — defined below */

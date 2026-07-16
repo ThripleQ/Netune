@@ -49,6 +49,7 @@ struct AppState {
     SongInfo      current_song = {};
     double        progress = 0.0;
     int           current_time_sec = 0;
+    int           current_time_ms  = 0;  /* ms precision for lyrics/karaoke */
     int           total_time_sec = 0;
 
     /* volume */
@@ -116,6 +117,7 @@ public:
     void set_playback_state(PlaybackState s);
     void set_current_song(const SongInfo &song);
     void set_progress(double pos, int cur_sec, int total_sec);
+    void set_progress_ms(double pos, int cur_ms, int total_sec);
 
     /* volume */
     void set_volume(int vol);
