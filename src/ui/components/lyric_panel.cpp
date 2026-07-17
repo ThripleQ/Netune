@@ -5,14 +5,13 @@
 #include <string>
 using namespace ftxui;
 
-static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
+static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
     if (!ly || ly->count == 0)
         return text("  No lyrics") | dim | center;
 
     int base = lyric_find_line(ly, play_time_ms);
     if (base < 0) base = 0;
 
-    /* Progress % for current line */
     float kprog = 0.0f;
     if (base + 1 < ly->count) {
         int dt = ly->lines[base + 1].time_ms - ly->lines[base].time_ms;
@@ -22,23 +21,26 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
         if (kprog > 1.0f) kprog = 1.0f;
     }
 
+    const int max_text = col_w - 4;  /* 2 indent + 2 margin for gauge */
+    if (max_text < 4) return text("") | size(HEIGHT, EQUAL, 20);
+
     Elements lines;
     for (int i = 0; i < ly->count; i++) {
         std::string raw = ly->lines[i].text ? ly->lines[i].text : "";
         if (raw.empty()) raw = " ";
 
-        Element el = text("  " + raw);
+        /* Truncate if too long */
+        if ((int)raw.size() > max_text)
+            raw = raw.substr(0, (size_t)max_text - 3) + "...";
 
+        Element el;
         if (i == base) {
-            /* Current line: text + gauge on same row */
             el = theme_accent(hbox({
                 text("  " + raw),
                 gauge(kprog) | flex,
             }) | bold) | focus;
-        } else if (i == base + 1 || i == base - 1) {
-            el = theme_fg(el);
         } else {
-            el = theme_fg(el) | dim;
+            el = theme_fg(text("  " + raw)) | dim;
         }
 
         lines.push_back(el);
@@ -90,7 +92,7 @@ Element render_lyrics_only(const AppState &s) {
     if (cw > 60) cw = 60;
     int lw = total - cw - 1;
     if (lw < 20) lw = 20;
-    return render_lyrics(s.lyrics, s.current_time_ms) |
+    return render_lyrics(s.lyrics, s.current_time_ms, lw) |
            size(WIDTH, EQUAL, lw) | size(HEIGHT, EQUAL, 20);
 }
 
