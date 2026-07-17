@@ -467,6 +467,15 @@ static void ev_track_changed(const BusEvent *ev, void *data) {
     StateStore::instance().set_cover_state(0);
     StateStore::instance().set_cover_song_id("");
     load_lyrics_for_current_song();
+
+    /* If already in lyric mode, auto-start cover download */
+    const auto &st = StateStore::instance().state();
+    if (st.lyric_mode && st.current_song.cover_url && st.current_song.cover_url[0]) {
+        StateStore::instance().set_cover_state(1);
+        StateStore::instance().set_cover_song_id(st.current_song.id);
+        char *url = strdup(st.current_song.cover_url);
+        if (url) threadpool_submit(g_thread_pool, cover_download_worker, url);
+    }
 }
 
 static void ev_playlist_changed(const BusEvent *ev, void *data) {
