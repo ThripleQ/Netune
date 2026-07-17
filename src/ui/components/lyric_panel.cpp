@@ -38,13 +38,13 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
             int bar_len = (int)(kprog * (float)(col_w - 2));
             if (bar_len < 0) bar_len = 0;
             if (bar_len > col_w - 2) bar_len = col_w - 2;
-            std::string bar;
-            for (int j = 0; j < bar_len; j++) bar += "\u2501";
+            std::string bar_str = std::string(2, ' ');
+            for (int j = 0; j < bar_len; j++) bar_str += "\u2501";
 
             lines.push_back(
                 vbox({
                     text("  " + raw) | bold,
-                    theme_accent(text(bar)),
+                    theme_accent(text(bar_str)),
                 }) | focus
             );
         } else {
