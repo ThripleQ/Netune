@@ -2,38 +2,53 @@
 #include "ui/components/theme_util.h"
 #include "ui/state_store.h"
 #include "core/lyric.h"
+#include <ftxui/dom/canvas.hpp>
 #include <string>
 using namespace ftxui;
 
+/* 20-row canvas-based lyrics: every cell explicitly written, no ghosting */
 static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
     if (!ly || ly->count == 0) {
-        std::string fill((size_t)col_w, ' ');
-        return vbox(Elements(20, text(fill)));
+        /* 20 lines of blank canvas */
+        Elements rows(20);
+        for (int i = 0; i < 20; i++) {
+            auto c = Canvas(col_w, 1);
+            c.DrawText(0, 0, std::string(col_w, ' '));
+            rows[i] = canvas(std::move(c));
+        }
+        return vbox(std::move(rows));
     }
 
     int base = lyric_find_line(ly, play_time_ms);
     if (base < 0) base = 0;
 
     const int ROWS = 20;
-    const int CUR_POS = 4;
+    const int CUR = 4;
 
     Elements items;
     for (int i = 0; i < ROWS; i++) {
-        int ni = i - CUR_POS + base;
-        std::string line;
+        int ni = i - CUR + base;
+        std::string raw;
         if (ni >= 0 && ni < ly->count && ly->lines[ni].text)
-            line = ly->lines[ni].text;
+            raw = ly->lines[ni].text;
 
-        std::string s = "  " + line;
-        s.resize((size_t)col_w, ' '); /* pad/spaces to exact column width */
+        /* explicitly draw EVERY cell: spaces to clear, then text */
+        auto c = Canvas(col_w, 1);
+        // fill background — every cell written
+        for (int x = 0; x < col_w; x++)
+            c.DrawText(x, 0, " ");
+        // draw text at indent=2
+        if (!raw.empty())
+            c.DrawText(2, 0, raw);
 
-        auto el = text(s);
-        if (ni == base)
+        Element el = canvas(std::move(c));
+
+        if (ni < 0 || ni >= ly->count)
+            el = text(std::string(col_w, ' '));  // plain blank
+        else if (ni == base)
             el = theme_accent(el | bold);
         else if (ni == base + 1 || ni == base - 1)
             el = theme_fg(el);
-        else if (ni < 0 || ni >= ly->count)
-            el = text(s); /* plain spaces — clears previous content */
         else
             el = theme_fg(el) | dim;
 
@@ -42,7 +57,7 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
     return vbox(std::move(items));
 }
 
-/* ── Cover ───────────────────────────────────────────────── */
+/* ── Cover ──────────────────────────────────────────────────── */
 static Element render_cover(const CoverData &cd, int panel_w) {
     if (!cd.pixels || cd.width <= 0 || cd.height <= 0 || panel_w < 4)
         return vbox({text("")}) | center | flex;
