@@ -231,15 +231,6 @@ static void ev_search_error(const BusEvent *ev, void *data) {
 }
 
 /* ── Start cover download (shows spinner, clears old cover) ──── */
-static void start_cover_download(const char *url) {
-    if (!url || !url[0]) return;
-    CoverData empty = {NULL, 0, 0, 0};
-    StateStore::instance().set_cover(empty);
-    StateStore::instance().set_cover_loading(true);
-    char *u = strdup(url);
-    if (u) threadpool_submit(g_thread_pool, cover_download_worker, u);
-}
-
 /* ── Cover downloaded in background thread ─────────── */
 static void cover_download_worker(void *arg) {
     char *url = (char*)arg;
@@ -247,6 +238,16 @@ static void cover_download_worker(void *arg) {
     if (url && cover_load(url, &cd) == 0)
         event_bus_publish(EV_COVER_LOADED, &cd, sizeof(CoverData));
     free(url);
+}
+
+/* ── Start cover download (shows spinner, clears old cover) ──── */
+static void start_cover_download(const char *url) {
+    if (!url || !url[0]) return;
+    CoverData empty = {NULL, 0, 0, 0};
+    StateStore::instance().set_cover(empty);
+    StateStore::instance().set_cover_loading(true);
+    char *u = strdup(url);
+    if (u) threadpool_submit(g_thread_pool, cover_download_worker, u);
 }
 
 /* ── Cover loaded event (from background thread) ───── */
