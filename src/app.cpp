@@ -581,6 +581,37 @@ int run_app(int argc, char **argv) {
     g_thread_pool = threadpool_create(2);
     if (!g_thread_pool) LOG_WARN("Failed to create thread pool, cover art will not load");
 
+    /* ── Ensure config/template files exist ────────── */
+    auto ensure_template = [](const char *path, const char *content) {
+        if (access(path, F_OK) != 0) {
+            char dir[1024];
+            size_t n = strlen(path);
+            if (n >= sizeof(dir)) n = sizeof(dir) - 1;
+            memcpy(dir, path, n); dir[n] = 0;
+            char *s = strrchr(dir, '/'); if (s) { *s = 0; ensure_dir(dir); }
+            FILE *f = fopen(path, "w");
+            if (f) { fputs(content, f); fclose(f); LOG_INFO("Created template: %s", path); }
+        }
+    };
+    {
+        char cfg_tpl[1024];
+        snprintf(cfg_tpl, sizeof(cfg_tpl), "%s", xdg_dir("XDG_CONFIG_HOME", "config.json"));
+        ensure_template(cfg_tpl,
+            "{\n  \"version\": \"1.0\",\n  \"audio\": {\"volume\": 80},\n  \"playback\": {\"loop_mode\": 0},\n  \"ui\": {\"theme\": \"default\",\"keybindings\": \"default\"},\n  \"music_sources\": {\"local\": {\"enabled\": true,\"dirs\": []},\"netease\": {\"enabled\": true}}\n}");
+    }
+    {
+        char tpl[1024];
+        snprintf(tpl, sizeof(tpl), "%s", xdg_dir("XDG_CONFIG_HOME", "themes/default.yaml"));
+        ensure_template(tpl,
+            "name: \"Netune Dark\"\ncolors:\n  bg: \"#1a1b26\"\n  fg: \"#c0caf5\"\n  accent: \"#7aa2f7\"\n");
+    }
+    {
+        char tpl[1024];
+        snprintf(tpl, sizeof(tpl), "%s", xdg_dir("XDG_CONFIG_HOME", "keybindings/default.yaml"));
+        ensure_template(tpl,
+            "keybindings:\n  move_down:     [\"j\", \"down\"]\n  move_up:       [\"k\", \"up\"]\n  panel_switch:  [\"tab\"]\n");
+    }
+
     event_bus_subscribe(EV_PROGRESS_UPDATE,   ev_progress, NULL);
     event_bus_subscribe(EV_PLAYBACK_START,    ev_playback_start, NULL);
     event_bus_subscribe(EV_PLAYBACK_PAUSE,    ev_playback_pause, NULL);
