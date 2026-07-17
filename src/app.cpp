@@ -457,6 +457,10 @@ static void load_lyrics_for_current_song(void) {
 
 static void ev_track_changed(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
+    /* Reset cover state for new song */
+    CoverData empty = {0};
+    StateStore::instance().set_cover(empty);
+    StateStore::instance().set_cover_state(0);
     load_lyrics_for_current_song();
 }
 
