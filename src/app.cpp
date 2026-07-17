@@ -233,7 +233,7 @@ static void ev_search_error(const BusEvent *ev, void *data) {
 /* ── Cover downloaded in background thread ─────────── */
 static void cover_download_worker(void *arg) {
     char *url = (char*)arg;
-    CoverData cd = {0};
+    CoverData cd = {NULL, 0, 0, 0};
     if (url && cover_load(url, &cd) == 0)
         event_bus_publish(EV_COVER_LOADED, &cd, sizeof(CoverData));
     free(url);
@@ -463,7 +463,7 @@ static void load_lyrics_for_current_song(void) {
 static void ev_track_changed(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
     /* Reset cover state for new song */
-    CoverData empty = {0};
+    CoverData empty = {NULL, 0, 0, 0};
     StateStore::instance().set_cover(empty);
     StateStore::instance().set_cover_state(0);
     StateStore::instance().set_cover_song_id("");
