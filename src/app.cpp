@@ -463,7 +463,7 @@ static void ev_track_changed(const BusEvent *ev, void *data) {
 
     /* If in lyric mode, auto-download cover for new track */
     const auto &st2 = StateStore::instance().state();
-    if (st2.lyric_mode && st2.current_song.cover_url && st2.current_song.cover_url[0]) {
+    if (st2.current_song.cover_url && st2.current_song.cover_url[0]) {
         StateStore::instance().set_cover_loading(true);
         char *url = strdup(st2.current_song.cover_url);
         if (url) threadpool_submit(g_thread_pool, cover_download_worker, url);
