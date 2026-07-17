@@ -30,9 +30,20 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
         std::string raw = ly->lines[i].text ? ly->lines[i].text : "";
         if (raw.empty()) raw = " ";
 
-        /* Truncate if too long (by display width) */
-        if (string_width(raw) > max_text)
-            raw = raw.substr(0, (size_t)max_text - 3) + "...";
+        /* Truncate if too long (by display width, UTF-8 safe) */
+        if (string_width(raw) > max_text) {
+            std::string out;
+            int w = 0;
+            int limit = max_text - 3;
+            if (limit < 1) limit = 1;
+            for (const auto &g : Utf8ToGlyphs(raw)) {
+                int gw = string_width(g);
+                if (w + gw > limit) break;
+                out += g;
+                w += gw;
+            }
+            raw = out + "...";
+        }
 
         if (i == base) {
             /* Current line: text row + progress bar row */
