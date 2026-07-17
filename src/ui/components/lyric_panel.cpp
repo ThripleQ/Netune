@@ -1,78 +1,35 @@
 #include "ui/components/lyric_panel.h"
 #include "ui/components/theme_util.h"
-#include "ui/theme.h"
 #include "ui/state_store.h"
 #include "core/lyric.h"
-#include <ftxui/dom/canvas.hpp>
 #include <string>
 using namespace ftxui;
 
-/* ── Theme color helpers for Canvas ─────────────────────── */
-static Color accent_col() {
-    auto &t = ThemeManager::instance().current();
-    return Color::RGB(t.accent.r, t.accent.g, t.accent.b);
-}
-static Color fg_col() {
-    auto &t = ThemeManager::instance().current();
-    return Color::RGB(t.fg.r, t.fg.g, t.fg.b);
-}
-
-/* ── Lyrics: one Canvas, pixel-level smooth scrolling ──── */
-static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
-    const int ROWS = 20;
-    const int CUR = 4;  /* current line visual row index */
-
-    if (!ly || ly->count == 0) {
-        /* blank canvas — background color from theming fills it */
-        return canvas(col_w, ROWS, [](Canvas &) {});
-    }
+static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
+    if (!ly || ly->count == 0)
+        return text("  No lyrics") | dim | center;
 
     int base = lyric_find_line(ly, play_time_ms);
     if (base < 0) base = 0;
 
-    /* Smooth scroll: 0..4 y-units */
-    float kprog = 0.0f;
-    if (base + 1 < ly->count) {
-        int dt = ly->lines[base + 1].time_ms - ly->lines[base].time_ms;
-        if (dt > 0)
-            kprog = (float)(play_time_ms - ly->lines[base].time_ms) / (float)dt;
-        if (kprog < 0.0f) kprog = 0.0f;
-        if (kprog > 1.0f) kprog = 1.0f;
+    Elements lines;
+    for (int i = 0; i < ly->count; i++) {
+        std::string raw = ly->lines[i].text ? ly->lines[i].text : "";
+        if (raw.empty()) raw = " ";
+
+        Element el = text("  " + raw);
+
+        if (i == base)
+            el = theme_accent(el | bold) | focus;
+        else if (i == base + 1 || i == base - 1)
+            el = theme_fg(el);
+        else
+            el = theme_fg(el) | dim;
+
+        lines.push_back(el);
     }
-    int scroll_off = (int)(kprog * 4.0f);  /* 0..4 */
 
-    return canvas(col_w, ROWS, [=](Canvas &c) {
-        auto accent = accent_col();
-        auto fg = fg_col();
-
-        /* fill entire canvas with spaces to erase old content */
-        std::string fill((size_t)col_w, ' ');
-        for (int r = 0; r < ROWS; r++)
-            c.DrawText(0, r * 4, fill);
-
-        for (int i = 0; i < ROWS; i++) {
-            int ni = i - CUR + base;
-            int y = i * 4 - scroll_off;
-
-            std::string raw;
-            if (ni >= 0 && ni < ly->count && ly->lines[ni].text)
-                raw = ly->lines[ni].text;
-            if (raw.empty()) continue;
-
-            if (ni == base)
-                c.DrawText(4, y, raw, [&accent](Pixel &p) {
-                    p.foreground_color = accent;
-                    p.bold = true;
-                });
-            else if (ni == base + 1 || ni == base - 1)
-                c.DrawText(4, y, raw, fg);
-            else
-                c.DrawText(4, y, raw, [&fg](Pixel &p) {
-                    p.foreground_color = fg;
-                    p.dim = true;
-                });
-        }
-    });
+    return vbox(std::move(lines)) | yframe;
 }
 
 /* ── Cover ───────────────────────────────────────────────── */
@@ -103,7 +60,6 @@ static Element render_cover(const CoverData &cd, int panel_w) {
     return vbox(std::move(rows)) | center | flex;
 }
 
-/* ── Exported ─────────────────────────────────────────────── */
 Element render_cover_only(const AppState &s) {
     int total = s.song_panel_width + 29;
     int cw = total / 2 - 1;
@@ -119,7 +75,8 @@ Element render_lyrics_only(const AppState &s) {
     if (cw > 60) cw = 60;
     int lw = total - cw - 1;
     if (lw < 20) lw = 20;
-    return render_lyrics(s.lyrics, s.current_time_ms, lw);
+    return render_lyrics(s.lyrics, s.current_time_ms) |
+           size(WIDTH, EQUAL, lw) | size(HEIGHT, EQUAL, 20);
 }
 
 Element render_lyric_panel(const AppState &s) {
