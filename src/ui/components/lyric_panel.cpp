@@ -1,6 +1,5 @@
 #include "ui/components/lyric_panel.h"
 #include "ui/components/theme_util.h"
-#include "ui/components/spinner.h"
 #include "ui/state_store.h"
 #include "core/lyric.h"
 #include <ftxui/screen/string.hpp>
@@ -103,12 +102,10 @@ Element render_cover_only(const AppState &s) {
     if (cw < 12) cw = 12;
     if (cw > 60) cw = 60;
 
-    if (s.cover_state == 1)
-        return render_spinner(s) | center | flex;
-    if (s.cover_state == 0 || !s.cover.pixels || s.cover.width <= 0 || s.cover.height <= 0)
-        return vbox({text("")}) | center | flex;
+    if (s.cover.pixels && s.cover.width > 0 && s.cover.height > 0)
+        return render_cover(s.cover, cw) | center | flex;
 
-    return render_cover(s.cover, cw) | center | flex;
+    return vbox({text("")}) | center | flex;
 }
 
 Element render_lyrics_only(const AppState &s) {
