@@ -12,6 +12,16 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
     int base = lyric_find_line(ly, play_time_ms);
     if (base < 0) base = 0;
 
+    /* Progress % for current line */
+    float kprog = 0.0f;
+    if (base + 1 < ly->count) {
+        int dt = ly->lines[base + 1].time_ms - ly->lines[base].time_ms;
+        if (dt > 0)
+            kprog = (float)(play_time_ms - ly->lines[base].time_ms) / (float)dt;
+        if (kprog < 0.0f) kprog = 0.0f;
+        if (kprog > 1.0f) kprog = 1.0f;
+    }
+
     Elements lines;
     for (int i = 0; i < ly->count; i++) {
         std::string raw = ly->lines[i].text ? ly->lines[i].text : "";
@@ -19,12 +29,17 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms) {
 
         Element el = text("  " + raw);
 
-        if (i == base)
-            el = theme_accent(el | bold) | focus;
-        else if (i == base + 1 || i == base - 1)
+        if (i == base) {
+            /* Current line: text + gauge on same row */
+            el = theme_accent(hbox({
+                text("  " + raw),
+                gauge(kprog) | flex,
+            }) | bold) | focus;
+        } else if (i == base + 1 || i == base - 1) {
             el = theme_fg(el);
-        else
+        } else {
             el = theme_fg(el) | dim;
+        }
 
         lines.push_back(el);
     }
