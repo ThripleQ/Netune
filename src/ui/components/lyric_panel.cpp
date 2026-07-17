@@ -3,12 +3,27 @@
 #include "ui/state_store.h"
 #include "core/lyric.h"
 #include <string>
+#include <ftxui/dom/canvas.hpp>
 using namespace ftxui;
 
-/* 20-row canvas-based lyrics: every cell explicitly written, no ghosting */
+/* One canvas row: draw fill to clear all cells, then draw text */
+static Element canvas_row(int w, const std::string &text) {
+    return canvas(w, 1, [w, text](Canvas &c) {
+        std::string fill((size_t)w, ' ');
+        c.DrawText(0, 0, fill);
+        if (!text.empty())
+            c.DrawText(2, 0, text);
+    });
+}
+
+/* 20 rows of canvas, every cell explicitly written */
 static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
-    if (!ly || ly->count == 0)
-        return text("  No lyrics") | dim | center;
+    if (!ly || ly->count == 0) {
+        Elements rows(20);
+        for (int i = 0; i < 20; i++)
+            rows[i] = canvas_row(col_w, "");
+        return vbox(std::move(rows));
+    }
 
     int base = lyric_find_line(ly, play_time_ms);
     if (base < 0) base = 0;
@@ -23,19 +38,14 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
         if (ni >= 0 && ni < ly->count && ly->lines[ni].text)
             raw = ly->lines[ni].text;
 
-        Canvas c(col_w, 1);
-        for (int x = 0; x < col_w; x++)
-            c.DrawText(x, 0, " ");
-        if (!raw.empty())
-            c.DrawText(2, 0, raw);
-        Element el = canvas(c);
+        Element el = canvas_row(col_w, raw);
 
-        if (ni < 0 || ni >= ly->count)
-            el = text(std::string(col_w, ' '));  // plain blank
-        else if (ni == base)
+        if (ni == base)
             el = theme_accent(el | bold);
         else if (ni == base + 1 || ni == base - 1)
             el = theme_fg(el);
+        else if (ni < 0 || ni >= ly->count)
+            el = canvas_row(col_w, "");  /* plain blank for out-of-range */
         else
             el = theme_fg(el) | dim;
 
@@ -44,7 +54,7 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
     return vbox(std::move(items));
 }
 
-/* ── Cover ──────────────────────────────────────────────────── */
+/* ── Cover ───────────────────────────────────────────────── */
 static Element render_cover(const CoverData &cd, int panel_w) {
     if (!cd.pixels || cd.width <= 0 || cd.height <= 0 || panel_w < 4)
         return vbox({text("")}) | center | flex;
