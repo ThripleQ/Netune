@@ -888,6 +888,7 @@ int run_app(int argc, char **argv) {
                             const auto &sel = cur.playlist[idx];
                             const char *path = sel.id ? sel.id : "";
                             StateStore::instance().set_current_song(sel);
+                            event_bus_publish(EV_TRACK_CHANGED, NULL, 0);
                             event_bus_publish(EV_PLAYBACK_START, (void*)path, strlen(path) + 1);
                         }
                     }
