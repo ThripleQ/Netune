@@ -9,13 +9,9 @@ using namespace ftxui;
 /* 20-row canvas-based lyrics: every cell explicitly written, no ghosting */
 static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
     if (!ly || ly->count == 0) {
-        /* 20 lines of blank canvas */
         Elements rows(20);
-        for (int i = 0; i < 20; i++) {
-            auto c = Canvas(col_w, 1);
-            c.DrawText(0, 0, std::string(col_w, ' '));
-            rows[i] = canvas(std::move(c));
-        }
+        for (int i = 0; i < 20; i++)
+            rows[i] = canvas([&](Canvas &c) { c.DrawText(0, 0, std::string(col_w, ' ')); }, col_w, 1);
         return vbox(std::move(rows));
     }
 
@@ -32,16 +28,12 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
         if (ni >= 0 && ni < ly->count && ly->lines[ni].text)
             raw = ly->lines[ni].text;
 
-        /* explicitly draw EVERY cell: spaces to clear, then text */
-        auto c = Canvas(col_w, 1);
-        // fill background — every cell written
-        for (int x = 0; x < col_w; x++)
-            c.DrawText(x, 0, " ");
-        // draw text at indent=2
-        if (!raw.empty())
-            c.DrawText(2, 0, raw);
-
-        Element el = canvas(std::move(c));
+        auto el = canvas([&](Canvas &c) {
+            for (int x = 0; x < col_w; x++)
+                c.DrawText(x, 0, " ");  // clear every cell
+            if (!raw.empty())
+                c.DrawText(2, 0, raw);
+        }, col_w, 1);
 
         if (ni < 0 || ni >= ly->count)
             el = text(std::string(col_w, ' '));  // plain blank
