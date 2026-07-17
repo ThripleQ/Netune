@@ -1,5 +1,6 @@
 #include "ui/components/song_list.h"
 #include "ui/components/theme_util.h"
+#include "ui/components/spinner.h"
 #include "ui/state_store.h"
 #include "compat/wcwidth_compat.h"
 #include <ftxui/screen/string.hpp>
@@ -8,22 +9,6 @@
 #include <cstdio>
 #include <algorithm>
 using namespace ftxui;
-
-/* ── Inline spinner (Braille animation) ────────────── */
-static Element inline_spinner(bool active) {
-    static int frame = 0;
-    static bool was_active = false;
-    if (!active) { was_active = false; return text(""); }
-    if (!was_active) { frame = 0; was_active = true; }
-    frame++;
-    const char *frames[] = {"\u281B", "\u2819", "\u2819", "\u280B",
-                           "\u2803", "\u2807", "\u2807", "\u2812"};
-    auto &f = frames[(frame % 8)];
-    return hbox({
-        text(" " + std::string(f) + " "),
-        text("Loading...") | dim,
-    });
-}
 
 #define MARQUEE_SPEED  8
 #define MARQUEE_PAUSE 45
@@ -135,7 +120,7 @@ Element render_song_list(const AppState &s) {
 
         /* Inline loading spinner during netease search */
         if (s.loading)
-            els.push_back(inline_spinner(true));
+            els.push_back(render_spinner(s));
 
         /* ── scope=0 (filter): show filtered playlist ─── */
         if (s.search_scope == 0 && !s.search_query.empty()) {
@@ -192,10 +177,10 @@ Element render_song_list(const AppState &s) {
         /* Spinner during async load */
         if (s.loading && s.playlist.empty()) {
             els.push_back(filler());
-            els.push_back(inline_spinner(true) | center);
+            els.push_back(render_spinner(s) | center);
             els.push_back(filler());
         } else if (s.loading) {
-            els.push_back(inline_spinner(true));
+            els.push_back(render_spinner(s));
         }
 
                                 /* Watermark: show netease logo when empty */
