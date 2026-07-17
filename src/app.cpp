@@ -252,7 +252,6 @@ static void ev_cover_loaded(const BusEvent *ev, void *data) {
         store.set_cover_state(2);
     }
 }
-}
 
 /* ── Event bus → StateStore bridge ────────────────── */
 static void ev_progress(const BusEvent *ev, void *data) {
