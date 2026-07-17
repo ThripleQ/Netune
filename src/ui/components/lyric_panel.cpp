@@ -7,8 +7,7 @@
 using namespace ftxui;
 
 /* One canvas row: every cell explicitly filled + text drawn */
-static Element canvas_row(int w, const std::string &text, bool is_current) {
-    (void)is_current;
+static Element canvas_row(int w, const std::string &text) {
     return canvas(w, 1, [w, text](Canvas &c) {
         /* clear every cell */
         c.DrawText(0, 0, std::string((size_t)w, ' '));
@@ -34,7 +33,7 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
         if (ni >= 0 && ni < ly->count && ly->lines[ni].text)
             raw = ly->lines[ni].text;
 
-        Element el = canvas_row(col_w, raw, false);
+        Element el = canvas_row(col_w, raw);
 
         if (ni < 0 || ni >= ly->count)
             el = text(std::string((size_t)col_w, ' '));
