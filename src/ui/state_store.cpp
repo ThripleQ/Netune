@@ -284,6 +284,13 @@ void StateStore::set_cover_state(int s) {
     state_.cover_state = s;
 }
 
+void StateStore::set_cover_song_id(const char *id) {
+    if (id)
+        strncpy(state_.cover_song_id, id, sizeof(state_.cover_song_id) - 1);
+    else
+        state_.cover_song_id[0] = '\0';
+}
+
 void StateStore::set_cover(const CoverData &cd) {
     /* free old cover pixels */
     free(state_.cover.pixels);

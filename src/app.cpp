@@ -242,11 +242,16 @@ static void cover_download_worker(void *arg) {
 /* ── Cover loaded event (from background thread) ───── */
 static void ev_cover_loaded(const BusEvent *ev, void *data) {
     (void)data;
+    auto &store = StateStore::instance();
+    /* Discard stale results — cover_state was reset by ev_track_changed */
+    if (store.state().cover_state != 1) return;
+    if (!store.state().cover_song_id[0]) return;
     if (ev->data && ev->data_size == sizeof(CoverData)) {
         CoverData *cd = (CoverData*)ev->data;
-        StateStore::instance().set_cover(*cd);
-        StateStore::instance().set_cover_state(2);
+        store.set_cover(*cd);
+        store.set_cover_state(2);
     }
+}
 }
 
 /* ── Event bus → StateStore bridge ────────────────── */
@@ -461,6 +466,7 @@ static void ev_track_changed(const BusEvent *ev, void *data) {
     CoverData empty = {0};
     StateStore::instance().set_cover(empty);
     StateStore::instance().set_cover_state(0);
+    StateStore::instance().set_cover_song_id("");
     load_lyrics_for_current_song();
 }
 
@@ -1314,6 +1320,7 @@ int run_app(int argc, char **argv) {
             StateStore::instance().set_lyric_mode(entering);
             if (entering && cur.cover_state == 0 && cur.current_song.cover_url && cur.current_song.cover_url[0]) {
                 StateStore::instance().set_cover_state(1);
+                StateStore::instance().set_cover_song_id(cur.current_song.id);
                 char *url = strdup(cur.current_song.cover_url);
                 if (url) threadpool_submit(g_thread_pool, cover_download_worker, url);
             }

@@ -91,6 +91,7 @@ struct AppState {
     bool       lyric_mode  = false;     /* full-screen lyrics view */
     CoverData  cover       = {};        /* current song cover art */
     int        cover_state = 0;         /* 0=none, 1=loading, 2=loaded */
+    char       cover_song_id[256] = {}; /* which song this cover belongs to */
 
     /* loading state (for async operations like playlist load) */
     bool loading = false;
@@ -143,6 +144,7 @@ public:
     void set_lyrics(Lyrics *ly);
     void set_lyric_mode(bool mode);
     void set_cover_state(int s);
+    void set_cover_song_id(const char *id);
     void set_cover(const CoverData &cd);
 
     /* help screen */
