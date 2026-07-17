@@ -9,7 +9,7 @@ Element render_spinner(const AppState &s) {
     static int frame = 0;
     static bool was_loading = false;
 
-    if (!s.loading) {
+    if (!s.loading && !s.cover_loading) {
         was_loading = false;
         return text("");
     }
