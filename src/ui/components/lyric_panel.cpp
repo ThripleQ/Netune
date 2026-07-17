@@ -1,64 +1,73 @@
 #include "ui/components/lyric_panel.h"
 #include "ui/components/theme_util.h"
+#include "ui/theme.h"
 #include "ui/state_store.h"
 #include "core/lyric.h"
 #include <ftxui/dom/canvas.hpp>
 #include <string>
 using namespace ftxui;
 
-/* One canvas row: fixed col_w, clear every cell, draw text at indent 2 */
-static Element canvas_row(int w, const std::string &text) {
-    return canvas(w, 1, [w, text](Canvas &c) {
-        c.DrawText(0, 0, std::string((size_t)w, ' '));
-        if (!text.empty())
-            c.DrawText(2, 0, text);
-    });
+/* ── Theme color helpers for Canvas ─────────────────────── */
+static Color accent_col() {
+    auto &t = ThemeManager::instance().current();
+    return Color::RGB(t.accent.r, t.accent.g, t.accent.b);
+}
+static Color fg_col() {
+    auto &t = ThemeManager::instance().current();
+    return Color::RGB(t.fg.r, t.fg.g, t.fg.b);
 }
 
-/* Blank row: canvas same size, no text */
-static Element blank_row(int w) {
-    return canvas(w, 1, [w](Canvas &c) {
-        c.DrawText(0, 0, std::string((size_t)w, ' '));
-    });
-}
-
+/* ── Lyrics: one Canvas, pixel-level smooth scrolling ──── */
 static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
+    const int ROWS = 20;
+    const int CUR = 4;  /* current line visual row index */
+
     if (!ly || ly->count == 0) {
-        Elements rows(20);
-        for (int i = 0; i < 20; i++)
-            rows[i] = blank_row(col_w);
-        return vbox(std::move(rows));
+        /* blank canvas — background color from theming fills it */
+        return canvas(col_w, ROWS, [](Canvas &) {});
     }
 
     int base = lyric_find_line(ly, play_time_ms);
     if (base < 0) base = 0;
 
-    const int ROWS = 20;
-    const int CUR = 4;
-
-    Elements items;
-    for (int i = 0; i < ROWS; i++) {
-        int ni = i - CUR + base;
-
-        if (ni < 0 || ni >= ly->count) {
-            /* Canvas blank — same element type as every other row */
-            items.push_back(blank_row(col_w));
-            continue;
-        }
-
-        std::string raw = ly->lines[ni].text ? ly->lines[ni].text : "";
-        Element el = canvas_row(col_w, raw);
-
-        if (ni == base)
-            el = theme_accent(el | bold);
-        else if (ni == base + 1 || ni == base - 1)
-            el = theme_fg(el);
-        else
-            el = theme_fg(el) | dim;
-
-        items.push_back(el);
+    /* Smooth scroll: 0..4 y-units */
+    float kprog = 0.0f;
+    if (base + 1 < ly->count) {
+        int dt = ly->lines[base + 1].time_ms - ly->lines[base].time_ms;
+        if (dt > 0)
+            kprog = (float)(play_time_ms - ly->lines[base].time_ms) / (float)dt;
+        if (kprog < 0.0f) kprog = 0.0f;
+        if (kprog > 1.0f) kprog = 1.0f;
     }
-    return vbox(std::move(items));
+    int scroll_off = (int)(kprog * 4.0f);  /* 0..4 */
+
+    return canvas(col_w, ROWS, [=](Canvas &c) {
+        auto accent = accent_col();
+        auto fg = fg_col();
+
+        for (int i = 0; i < ROWS; i++) {
+            int ni = i - CUR + base;
+            int y = i * 4 - scroll_off;
+
+            std::string raw;
+            if (ni >= 0 && ni < ly->count && ly->lines[ni].text)
+                raw = ly->lines[ni].text;
+            if (raw.empty()) continue;
+
+            if (ni == base)
+                c.DrawText(4, y, raw, [&accent](Pixel &p) {
+                    p.foreground_color = accent;
+                    p.bold = true;
+                });
+            else if (ni == base + 1 || ni == base - 1)
+                c.DrawText(4, y, raw, fg);
+            else
+                c.DrawText(4, y, raw, [&fg](Pixel &p) {
+                    p.foreground_color = fg;
+                    p.dim = true;
+                });
+        }
+    });
 }
 
 /* ── Cover ───────────────────────────────────────────────── */
@@ -89,6 +98,7 @@ static Element render_cover(const CoverData &cd, int panel_w) {
     return vbox(std::move(rows)) | center | flex;
 }
 
+/* ── Exported ─────────────────────────────────────────────── */
 Element render_cover_only(const AppState &s) {
     int total = s.song_panel_width + 29;
     int cw = total / 2 - 1;
