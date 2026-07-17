@@ -2,18 +2,13 @@
 #include "ui/components/theme_util.h"
 #include "ui/state_store.h"
 #include "core/lyric.h"
-#include <ftxui/dom/canvas.hpp>
 #include <string>
 using namespace ftxui;
 
 /* 20-row canvas-based lyrics: every cell explicitly written, no ghosting */
 static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
-    if (!ly || ly->count == 0) {
-        Elements rows(20);
-        for (int i = 0; i < 20; i++)
-            rows[i] = canvas([&](Canvas &c) { c.DrawText(0, 0, std::string(col_w, ' ')); }, col_w, 1);
-        return vbox(std::move(rows));
-    }
+    if (!ly || ly->count == 0)
+        return text("  No lyrics") | dim | center;
 
     int base = lyric_find_line(ly, play_time_ms);
     if (base < 0) base = 0;
@@ -28,12 +23,12 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
         if (ni >= 0 && ni < ly->count && ly->lines[ni].text)
             raw = ly->lines[ni].text;
 
-        auto el = canvas([&](Canvas &c) {
-            for (int x = 0; x < col_w; x++)
-                c.DrawText(x, 0, " ");  // clear every cell
-            if (!raw.empty())
-                c.DrawText(2, 0, raw);
-        }, col_w, 1);
+        Canvas c(col_w, 1);
+        for (int x = 0; x < col_w; x++)
+            c.DrawText(x, 0, " ");
+        if (!raw.empty())
+            c.DrawText(2, 0, raw);
+        Element el = canvas(c);
 
         if (ni < 0 || ni >= ly->count)
             el = text(std::string(col_w, ' '));  // plain blank
