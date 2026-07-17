@@ -284,7 +284,6 @@ void StateStore::set_cover(const CoverData &cd) {
     /* free old cover pixels */
     free(state_.cover.pixels);
     state_.cover = cd;
-    state_.cover_loading = false;
 }
 
 void StateStore::set_cover_loading(bool v) {
