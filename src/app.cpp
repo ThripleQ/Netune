@@ -230,6 +230,16 @@ static void ev_search_error(const BusEvent *ev, void *data) {
     StateStore::instance().set_search_query("");
 }
 
+/* ── Start cover download (shows spinner, clears old cover) ──── */
+static void start_cover_download(const char *url) {
+    if (!url || !url[0]) return;
+    CoverData empty = {NULL, 0, 0, 0};
+    StateStore::instance().set_cover(empty);
+    StateStore::instance().set_cover_loading(true);
+    char *u = strdup(url);
+    if (u) threadpool_submit(g_thread_pool, cover_download_worker, u);
+}
+
 /* ── Cover downloaded in background thread ─────────── */
 static void cover_download_worker(void *arg) {
     char *url = (char*)arg;
@@ -286,7 +296,6 @@ static void ev_playback_error(const BusEvent *ev, void *data) {
     (void)ev; (void)data; LOG_WARN("Playback error"); StateStore::instance().set_playback_state(PlaybackState::Stopped); StateStore::instance().set_progress(0,0,0);
 }
 static void ev_playback_finish(const BusEvent *ev, void *data) {
-    StateStore::instance().set_lyric_mode(false);
     (void)ev; (void)data;
     const auto &st = StateStore::instance().state();
     int total = (int)st.playlist.size();
@@ -456,10 +465,9 @@ static void load_lyrics_for_current_song(void) {
 
 static void ev_track_changed(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
-    /* Clear old cover, show spinner while loading new one */
-    CoverData empty = {NULL, 0, 0, 0};
-    StateStore::instance().set_cover(empty);
     load_lyrics_for_current_song();
+    if (StateStore::instance().state().lyric_mode)
+        start_cover_download(StateStore::instance().state().current_song.cover_url);
 }
 
 static void ev_playlist_changed(const BusEvent *ev, void *data) {
@@ -1311,14 +1319,8 @@ int run_app(int argc, char **argv) {
                 return true;  /* nothing playing, ignore */
             bool entering = !cur.lyric_mode;
             StateStore::instance().set_lyric_mode(entering);
-            if (entering && cur.current_song.cover_url && cur.current_song.cover_url[0]) {
-                /* Clear old cover → spinner → download new one */
-                CoverData empty = {NULL, 0, 0, 0};
-                StateStore::instance().set_cover(empty);
-                StateStore::instance().set_cover_loading(true);
-                char *url = strdup(cur.current_song.cover_url);
-                if (url) threadpool_submit(g_thread_pool, cover_download_worker, url);
-            }
+            if (entering && cur.current_song.cover_url && cur.current_song.cover_url[0])
+                start_cover_download(cur.current_song.cover_url);
             return true;
         }
 
