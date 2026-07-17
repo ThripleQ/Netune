@@ -2,28 +2,24 @@
 #include "ui/components/theme_util.h"
 #include "ui/state_store.h"
 #include "core/lyric.h"
-#include <string>
 #include <ftxui/dom/canvas.hpp>
+#include <string>
 using namespace ftxui;
 
-/* One canvas row: draw fill to clear all cells, then draw text */
-static Element canvas_row(int w, const std::string &text) {
+/* One canvas row: every cell explicitly filled + text drawn */
+static Element canvas_row(int w, const std::string &text, bool is_current) {
+    (void)is_current;
     return canvas(w, 1, [w, text](Canvas &c) {
-        std::string fill((size_t)w, ' ');
-        c.DrawText(0, 0, fill);
+        /* clear every cell */
+        c.DrawText(0, 0, std::string((size_t)w, ' '));
         if (!text.empty())
             c.DrawText(2, 0, text);
     });
 }
 
-/* 20 rows of canvas, every cell explicitly written */
 static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
-    if (!ly || ly->count == 0) {
-        Elements rows(20);
-        for (int i = 0; i < 20; i++)
-            rows[i] = canvas_row(col_w, "");
-        return vbox(std::move(rows));
-    }
+    if (!ly || ly->count == 0)
+        return text("  No lyrics") | dim | center;
 
     int base = lyric_find_line(ly, play_time_ms);
     if (base < 0) base = 0;
@@ -38,14 +34,14 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
         if (ni >= 0 && ni < ly->count && ly->lines[ni].text)
             raw = ly->lines[ni].text;
 
-        Element el = canvas_row(col_w, raw);
+        Element el = canvas_row(col_w, raw, false);
 
-        if (ni == base)
+        if (ni < 0 || ni >= ly->count)
+            el = text(std::string((size_t)col_w, ' '));
+        else if (ni == base)
             el = theme_accent(el | bold);
         else if (ni == base + 1 || ni == base - 1)
             el = theme_fg(el);
-        else if (ni < 0 || ni >= ly->count)
-            el = canvas_row(col_w, "");  /* plain blank for out-of-range */
         else
             el = theme_fg(el) | dim;
 
