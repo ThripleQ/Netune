@@ -459,6 +459,7 @@ static void ev_track_changed(const BusEvent *ev, void *data) {
     /* Clear old cover, will be re-downloaded on next lyrics panel open */
     CoverData empty = {NULL, 0, 0, 0};
     StateStore::instance().set_cover(empty);
+    StateStore::instance().set_cover_loading(false);
     load_lyrics_for_current_song();
 }
 
@@ -1312,6 +1313,7 @@ int run_app(int argc, char **argv) {
             bool entering = !cur.lyric_mode;
             StateStore::instance().set_lyric_mode(entering);
             if (entering && cur.current_song.cover_url && cur.current_song.cover_url[0]) {
+                StateStore::instance().set_cover_loading(true);
                 char *url = strdup(cur.current_song.cover_url);
                 if (url) threadpool_submit(g_thread_pool, cover_download_worker, url);
             }

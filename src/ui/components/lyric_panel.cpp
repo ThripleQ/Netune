@@ -1,5 +1,6 @@
 #include "ui/components/lyric_panel.h"
 #include "ui/components/theme_util.h"
+#include "ui/components/spinner.h"
 #include "ui/state_store.h"
 #include "core/lyric.h"
 #include <ftxui/screen/string.hpp>
@@ -104,7 +105,8 @@ Element render_cover_only(const AppState &s) {
 
     if (s.cover.pixels && s.cover.width > 0 && s.cover.height > 0)
         return render_cover(s.cover, cw) | center | flex;
-
+    if (s.cover_loading)
+        return render_spinner(s) | center | flex;
     return vbox({text("")}) | center | flex;
 }
 

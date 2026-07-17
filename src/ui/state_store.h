@@ -90,6 +90,7 @@ struct AppState {
     Lyrics    *lyrics      = nullptr;
     bool       lyric_mode  = false;     /* full-screen lyrics view */
     CoverData  cover       = {};        /* current song cover art */
+    bool       cover_loading = false;   /* async download in progress */
 
     /* loading state (for async operations like playlist load) */
     bool loading = false;
@@ -142,6 +143,7 @@ public:
     void set_lyrics(Lyrics *ly);
     void set_lyric_mode(bool mode);
     void set_cover(const CoverData &cd);
+    void set_cover_loading(bool v);
 
     /* help screen */
     void set_show_help(bool show);
