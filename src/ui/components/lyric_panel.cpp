@@ -45,6 +45,11 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
         auto accent = accent_col();
         auto fg = fg_col();
 
+        /* fill entire canvas with spaces to erase old content */
+        std::string fill((size_t)col_w, ' ');
+        for (int r = 0; r < ROWS; r++)
+            c.DrawText(0, r * 4, fill);
+
         for (int i = 0; i < ROWS; i++) {
             int ni = i - CUR + base;
             int y = i * 4 - scroll_off;
