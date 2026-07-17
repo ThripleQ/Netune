@@ -22,7 +22,7 @@ Element render_spinner(const AppState &s) {
 
     frame++;
     const char *frames[] = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"};
-    auto &f = frames[(frame / 12) % 10];
+    auto &f = frames[(frame / 5) % 10];
     return hbox({
         text(" " + std::string(f) + " "),
         text("Loading...") | dim,
