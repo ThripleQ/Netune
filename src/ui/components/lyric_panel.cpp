@@ -2,6 +2,7 @@
 #include "ui/components/theme_util.h"
 #include "ui/state_store.h"
 #include "core/lyric.h"
+#include <ftxui/screen/string.hpp>
 #include <string>
 using namespace ftxui;
 
@@ -29,13 +30,13 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
         std::string raw = ly->lines[i].text ? ly->lines[i].text : "";
         if (raw.empty()) raw = " ";
 
-        /* Truncate if too long */
-        if ((int)raw.size() > max_text)
+        /* Truncate if too long (by display width) */
+        if (string_width(raw) > max_text)
             raw = raw.substr(0, (size_t)max_text - 3) + "...";
 
         if (i == base) {
             /* Current line: text row + progress bar row */
-            int text_chars = 2 + (int)raw.size();
+            int text_chars = 2 + string_width(raw);
             int bar_len = (int)(kprog * (float)(text_chars - 2));
             if (bar_len < 0) bar_len = 0;
             if (bar_len > text_chars - 2) bar_len = text_chars - 2;
