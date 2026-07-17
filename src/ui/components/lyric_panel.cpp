@@ -1,9 +1,9 @@
 #include "ui/components/lyric_panel.h"
 #include "ui/components/theme_util.h"
+#include "ui/components/spinner.h"
 #include "ui/state_store.h"
 #include "core/lyric.h"
 #include <ftxui/screen/string.hpp>
-#include <chrono>
 #include <string>
 using namespace ftxui;
 
@@ -103,16 +103,8 @@ Element render_cover_only(const AppState &s) {
     if (cw < 12) cw = 12;
     if (cw > 60) cw = 60;
 
-    if (s.cover_state == 1) {
-        const char spinner[] = {'|', '/', '-', '\\', '|', '/', '-', '\\'};
-        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-        int idx = (int)(ms / 80) % 4;
-        std::string txt = "  ";
-        txt += spinner[idx];
-        txt += " Loading...";
-        return text(txt) | dim | center | flex;
-    }
+    if (s.cover_state == 1)
+        return render_spinner(s) | center | flex;
     if (s.cover_state == 0 || !s.cover.pixels || s.cover.width <= 0 || s.cover.height <= 0)
         return vbox({text("")}) | center | flex;
 
