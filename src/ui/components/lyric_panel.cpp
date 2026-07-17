@@ -116,6 +116,6 @@ Element render_lyric_panel(const AppState &s) {
     if (lw < 20) lw = 20;
     return theme_bg(hbox(Elements{
         render_cover_only(s) | size(WIDTH, EQUAL, cw),
-        render_lyrics_only(s) | size(WIDTH, EQUAL, lw),
+        render_lyrics_only(s) | size(WIDTH, EQUAL, lw) | center,
     }));
 }
