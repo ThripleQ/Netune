@@ -280,6 +280,10 @@ void StateStore::set_lyric_mode(bool mode) {
     state_.lyric_mode = mode;
 }
 
+void StateStore::set_cover_state(int s) {
+    state_.cover_state = s;
+}
+
 void StateStore::set_cover(const CoverData &cd) {
     /* free old cover pixels */
     free(state_.cover.pixels);

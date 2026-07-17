@@ -29,6 +29,7 @@
 extern "C" {
 #include "infra/log.h"
 #include "infra/config.h"
+#include "infra/thread_pool.h"
 #include "core/event_bus.h"
 #include "core/playback_coordinator.h"
 #include "core/music_source_manager.h"
@@ -62,6 +63,7 @@ using namespace ftxui;
 
 /* ── Global keybinding manager ──────────────────────── */
 static KeybindingManager g_keybindings;
+static threadpool_t *g_thread_pool = NULL;
 
 static volatile bool g_running = true;
 
@@ -226,6 +228,25 @@ static void ev_search_error(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
     StateStore::instance().set_search_active(false);
     StateStore::instance().set_search_query("");
+}
+
+/* ── Cover downloaded in background thread ─────────── */
+static void cover_download_worker(void *arg) {
+    char *url = (char*)arg;
+    CoverData cd = {0};
+    if (url && cover_load(url, &cd) == 0)
+        event_bus_publish(EV_COVER_LOADED, &cd, sizeof(CoverData));
+    free(url);
+}
+
+/* ── Cover loaded event (from background thread) ───── */
+static void ev_cover_loaded(const BusEvent *ev, void *data) {
+    (void)data;
+    if (ev->data && ev->data_size == sizeof(CoverData)) {
+        CoverData *cd = (CoverData*)ev->data;
+        StateStore::instance().set_cover(*cd);
+        StateStore::instance().set_cover_state(2);
+    }
 }
 
 /* ── Event bus → StateStore bridge ────────────────── */
@@ -429,14 +450,7 @@ static void load_lyrics_for_current_song(void) {
                 LOG_INFO("Lyrics loaded from Netease (%d lines)", ly->count);
             }
         }
-        /* Cover art from Netease */
-        if (song.cover_url && song.cover_url[0]) {
-            CoverData cd;
-            if (cover_load(song.cover_url, &cd) == 0) {
-                store.set_cover(cd);
-                LOG_INFO("Cover loaded: %dx%d", cd.width, cd.height);
-            }
-        }
+        /* Cover is now loaded lazily when entering lyric mode */
         return;
     }
 }
@@ -553,6 +567,9 @@ int run_app(int argc, char **argv) {
 
     event_bus_init();
 
+    g_thread_pool = threadpool_create(2);
+    if (!g_thread_pool) LOG_WARN("Failed to create thread pool, cover art will not load");
+
     event_bus_subscribe(EV_PROGRESS_UPDATE,   ev_progress, NULL);
     event_bus_subscribe(EV_PLAYBACK_START,    ev_playback_start, NULL);
     event_bus_subscribe(EV_PLAYBACK_PAUSE,    ev_playback_pause, NULL);
@@ -572,6 +589,7 @@ int run_app(int argc, char **argv) {
     event_bus_subscribe(EV_SEARCH_RESULT, ev_search_result, NULL);
     event_bus_subscribe(EV_SEARCH_ERROR, ev_search_error, NULL);
     event_bus_subscribe(EV_SEARCH_DONE, ev_search_done, NULL);
+    event_bus_subscribe(EV_COVER_LOADED, ev_cover_loaded, NULL);
 
     if (cfg) {
         int vol = config_get_int(cfg, "audio.volume", -1);
@@ -1288,7 +1306,13 @@ int run_app(int argc, char **argv) {
         case Action::ToggleLyrics: {
             if (cur.playback_state == PlaybackState::Stopped || !cur.current_song.title)
                 return true;  /* nothing playing, ignore */
-            StateStore::instance().set_lyric_mode(!cur.lyric_mode);
+            bool entering = !cur.lyric_mode;
+            StateStore::instance().set_lyric_mode(entering);
+            if (entering && cur.cover_state == 0 && cur.current_song.cover_url && cur.current_song.cover_url[0]) {
+                StateStore::instance().set_cover_state(1);
+                char *url = strdup(cur.current_song.cover_url);
+                if (url) threadpool_submit(g_thread_pool, cover_download_worker, url);
+            }
             return true;
         }
 
@@ -1305,6 +1329,7 @@ int run_app(int argc, char **argv) {
     event_bus_publish(EV_APP_SHUTDOWN, NULL, 0);
     playback_coordinator_shutdown();
     music_source_manager_shutdown();
+    if (g_thread_pool) threadpool_destroy(g_thread_pool);
     event_bus_shutdown();
     config_free(cfg);
     log_shutdown();

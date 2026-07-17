@@ -43,6 +43,9 @@ typedef enum {
     EV_CONFIG_CHANGED,
     EV_THEME_CHANGED,
 
+    /* cover art */
+    EV_COVER_LOADED,
+
     /* system */
     EV_APP_STARTUP,
     EV_APP_SHUTDOWN,

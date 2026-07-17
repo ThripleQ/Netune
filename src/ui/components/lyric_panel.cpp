@@ -101,6 +101,12 @@ Element render_cover_only(const AppState &s) {
     int cw = total / 2 - 1;
     if (cw < 12) cw = 12;
     if (cw > 60) cw = 60;
+
+    if (s.cover_state == 1)
+        return text("  Loading...") | dim | center | flex;
+    if (s.cover_state == 0 || !s.cover.pixels || s.cover.width <= 0 || s.cover.height <= 0)
+        return vbox({text("")}) | center | flex;
+
     return render_cover(s.cover, cw) | center | flex;
 }
 
