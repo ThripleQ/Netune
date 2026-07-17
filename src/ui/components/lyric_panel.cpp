@@ -1,6 +1,5 @@
 #include "ui/components/lyric_panel.h"
 #include "ui/components/theme_util.h"
-#include "ui/components/spinner.h"
 #include "ui/state_store.h"
 #include "core/lyric.h"
 #include <ftxui/screen/string.hpp>
@@ -105,8 +104,18 @@ Element render_cover_only(const AppState &s) {
 
     if (s.cover.pixels && s.cover.width > 0 && s.cover.height > 0)
         return render_cover(s.cover, cw) | center | flex;
-    if (s.cover_loading)
-        return render_spinner(s) | center | flex;
+    if (s.cover_loading) {
+        /* simple spinner, doesn't depend on s.loading */
+        static int frame = 0;
+        frame++;
+        const char *frames[] = {"\u281B", "\u2819", "\u2819", "\u2809",
+                                "\u280B", "\u281B"};
+        auto idx = (frame / 6) % 6;
+        std::string txt = "  ";
+        txt += frames[idx];
+        txt += " Loading...";
+        return text(txt) | dim | center | flex;
+    }
     return vbox({text("")}) | center | flex;
 }
 
