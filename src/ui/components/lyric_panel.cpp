@@ -21,7 +21,7 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
         if (kprog > 1.0f) kprog = 1.0f;
     }
 
-    const int max_text = col_w - 4;  /* 2 indent + 2 margin for gauge */
+    const int max_text = col_w - 2;  /* indent */
     if (max_text < 4) return text("") | size(HEIGHT, EQUAL, 20);
 
     Elements lines;
@@ -33,17 +33,23 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
         if ((int)raw.size() > max_text)
             raw = raw.substr(0, (size_t)max_text - 3) + "...";
 
-        Element el;
         if (i == base) {
-            el = theme_accent(hbox({
-                text("  " + raw),
-                gauge(kprog) | flex,
-            }) | bold) | focus;
-        } else {
-            el = theme_fg(text("  " + raw)) | dim;
-        }
+            /* Current line: text row + progress bar row */
+            int bar_len = (int)(kprog * (float)(col_w - 2));
+            if (bar_len < 0) bar_len = 0;
+            if (bar_len > col_w - 2) bar_len = col_w - 2;
+            std::string bar;
+            for (int j = 0; j < bar_len; j++) bar += "\u2501";
 
-        lines.push_back(el);
+            lines.push_back(
+                vbox({
+                    text("  " + raw) | bold,
+                    theme_accent(text(bar)),
+                }) | focus
+            );
+        } else {
+            lines.push_back(theme_fg(text("  " + raw)) | dim);
+        }
     }
 
     return vbox(std::move(lines)) | yframe;
