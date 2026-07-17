@@ -35,9 +35,10 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
 
         if (i == base) {
             /* Current line: text row + progress bar row */
-            int bar_len = (int)(kprog * (float)(col_w - 2));
+            int text_chars = 2 + (int)raw.size();
+            int bar_len = (int)(kprog * (float)(text_chars - 2));
             if (bar_len < 0) bar_len = 0;
-            if (bar_len > col_w - 2) bar_len = col_w - 2;
+            if (bar_len > text_chars - 2) bar_len = text_chars - 2;
             std::string bar_str = std::string(2, ' ');
             for (int j = 0; j < bar_len; j++) bar_str += "\u2501";
 
