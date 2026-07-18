@@ -98,7 +98,7 @@ static void fill(SongInfo *s, const char *jsn) {
         if (f) { const char *o = f + strlen(skey); while (*o && *o != '{' && *o != '[') o++; if (*o == '{' || *o == '[') p = jmatch(o); }
     }
     char *id=jstr(p,"id"); s->id=id?id:strdup("");
-    char *t=jstr(jsn,"name"); s->title=t?t:strdup("");
+    char *t=jstr(p,"name"); s->title=t?t:strdup("");
     const char *ar=jobj(jsn,"ar");if(ar){const char*ap=ar+1;while(*ap&&*ap!='{')ap++;if(*ap=='{'){char*an=jstr(ap,"name");s->artist=an?an:strdup("");}else s->artist=strdup("");}else s->artist=strdup("");
     const char *al=jobj(jsn,"al");if(al){char*an=jstr(al,"name");s->album=an?an:strdup("");}else s->album=strdup("");
     s->duration_sec=(int)(jint(jsn,"dt")/1000);
@@ -137,7 +137,7 @@ int netease_search(const char *kw, int l, int o, NSSearchResult *out) { (void)o;
     int n=0,max=l>0?l:30;const char*p=s+1;while(*p){while(*p&&*p!='{'&&*p!=']')p++;if(*p==']')break;p=jmatch(p);n++;if(n>=max)break;}
     if(n==0){free(j);return 0;} out->songs=calloc((size_t)n,sizeof(NSSong)); out->count=n;
     int oi=0;p=s+1;while(*p&&oi<n){while(*p&&*p!='{'&&*p!=']')p++;if(*p==']')break;const char*e=jmatch(p);
-        NSSong *r=&out->songs[oi]; { const char *pp = p; const char *skipk[]={"al","ar"}; for(int si=0;si<2;si++){char k[128];snprintf(k,sizeof(k),"\"%s\"",skipk[si]);const char*f=strstr(pp,k);if(f){const char*o=f+strlen(k);while(*o&&*o!='{'&&*o!='[')o++;if(*o=='{'||*o=='[')pp=jmatch(o);}} r->id=jstr(pp,"id"); } r->title=jstr(p,"name");r->artist=jstr(p,"artist");
+        NSSong *r=&out->songs[oi]; { const char *pp = p; const char *skipk[]={"al","ar"}; for(int si=0;si<2;si++){char k[128];snprintf(k,sizeof(k),"\"%s\"",skipk[si]);const char*f=strstr(pp,k);if(f){const char*o=f+strlen(k);while(*o&&*o!='{'&&*o!='[')o++;if(*o=='{'||*o=='[')pp=jmatch(o);}} r->id=jstr(pp,"id"); r->title=jstr(pp,"name"); } r->artist=jstr(p,"artist");
         if(!r->artist){const char*a=jobj(p,"ar");if(a){const char*ap=a+1;while(*ap&&*ap!='{')ap++;if(*ap=='{')r->artist=jstr(ap,"name");}}if(!r->artist)r->artist=strdup("");
         r->album=jstr(p,"album");if(!r->album){const char*a=jobj(p,"al");if(a)r->album=jstr(a,"name");}if(!r->album)r->album=strdup("");
         { const char*a=jobj(p,"al"); r->cover_url=a?jstr(a,"picUrl"):NULL; if(!r->cover_url)r->cover_url=strdup(""); }
