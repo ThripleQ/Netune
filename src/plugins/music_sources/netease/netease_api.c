@@ -76,7 +76,9 @@ static void fill(SongInfo *s, yyjson_val *song) {
     s->source            = strdup("netease");
     s->aux_label         = strdup("");
 
-    const char *id   = jget_str(song, "id");   s->id   = id   ? strdup(id)   : strdup("");
+    int64_t sid = jget_sint64(song, "id");
+    char idbuf[32]; snprintf(idbuf, sizeof(idbuf), "%lld", (long long)sid);
+    s->id = strdup(idbuf);
     const char *name = jget_str(song, "name"); s->title = name ? strdup(name) : strdup("");
 
     /* artist from ar[0].name */
@@ -173,7 +175,7 @@ int netease_search(const char *kw, int l, int o, NSSearchResult *out) {
         if (!yyjson_is_obj(v)) continue;
         NSSong *r = &out->songs[oi]; oi++;
 
-        const char *sid = jget_str(v, "id"); r->id = sid ? strdup(sid) : strdup("");
+        int64_t sid = jget_sint64(v, "id"); char bid[32]; snprintf(bid, sizeof(bid), "%lld", (long long)sid); r->id = strdup(bid);
         const char *nm  = jget_str(v, "name"); r->title = nm ? strdup(nm) : strdup("");
 
         /* artist from ar[0].name */

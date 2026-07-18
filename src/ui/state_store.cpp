@@ -28,6 +28,7 @@ static void copy_song_info(SongInfo &dst, const SongInfo &src) {
     dst.artist       = dup(src.artist);
     dst.album        = dup(src.album);
     dst.duration_sec = src.duration_sec;
+    dst.fee          = src.fee;
     dst.cover_url    = dup(src.cover_url);
     dst.aux_label    = dup(src.aux_label);
 }

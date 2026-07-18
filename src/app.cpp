@@ -167,6 +167,7 @@ static void do_netease_search(const char *query) {
             si.artist   = strdup(nr.songs[i].artist ? nr.songs[i].artist : "");
             si.album    = strdup(nr.songs[i].album ? nr.songs[i].album : "");
             si.duration_sec = nr.songs[i].dur_ms / 1000;
+            si.fee          = nr.songs[i].fee;
             vec.push_back(si);
         }
         netease_search_free(&nr);
