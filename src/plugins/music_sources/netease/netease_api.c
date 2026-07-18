@@ -99,6 +99,7 @@ static void fill(SongInfo *s, yyjson_val *song) {
     } else s->album = strdup("");
 
     s->duration_sec = (int)(jget_int(song, "dt") / 1000);
+    s->fee = (int)jget_int(song, "fee");
     if (!s->cover_url || !s->cover_url[0]) s->cover_url = strdup("");
 }
 
@@ -193,6 +194,7 @@ int netease_search(const char *kw, int l, int o, NSSearchResult *out) {
         } else { r->album = strdup(""); r->cover_url = strdup(""); }
 
         r->dur_ms = (int)jget_int(v, "dt");
+        r->fee = (int)jget_int(v, "fee");
     }
     out->count = oi;
     yyjson_doc_free(doc);

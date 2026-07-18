@@ -15,6 +15,7 @@ typedef struct {
     char *artist;
     char *album;
     int   duration_sec;
+    int   fee;          /* netease: 0=free 1=vip 4=paid 8=vip */
     char *cover_url;
     char *aux_label;    /* e.g. bitrate / format hint  */
 } SongInfo;
