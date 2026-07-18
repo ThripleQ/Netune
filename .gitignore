@@ -21,6 +21,10 @@ Thumbs.db
 *.a
 *.so
 
+# netease-cli Go binary (built externally, tracked separately)
+netease-cli
+netease-cli-*
+
 # Misc trash
 2_windows.txt
 文本文件.txt

@@ -46,6 +46,11 @@ static bool jget_bool(yyjson_val *obj, const char *key) {
     yyjson_val *v = yyjson_obj_get(obj, key);
     return v ? yyjson_get_bool(v) : false;
 }
+static int64_t jget_sint64(yyjson_val *obj, const char *key) {
+    if (!obj) return 0;
+    yyjson_val *v = yyjson_obj_get(obj, key);
+    return v ? yyjson_get_sint(v) : 0;
+}
 /* Get a sub-object from an object; returns NULL if missing or not an object. */
 static yyjson_val *jget_obj(yyjson_val *obj, const char *key) {
     if (!obj) return NULL;
@@ -259,7 +264,10 @@ int netease_playlists(bool favorited, SongInfo **out, int *count) {
         s->source    = strdup("netease");
         s->cover_url = strdup("");
         s->aux_label = strdup("歌单");
-        const char *sid = jget_str(v, "id");   s->id    = sid ? strdup(sid) : strdup("");
+        int64_t sid = jget_sint64(v, "id");
+        char id_str[32];
+        snprintf(id_str, sizeof(id_str), "%lld", sid);
+        s->id = strdup(id_str);
         const char *nm  = jget_str(v, "name"); s->title = nm  ? strdup(nm)  : strdup("");
         oi++;
     }

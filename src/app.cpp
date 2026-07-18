@@ -535,32 +535,31 @@ int run_app(int argc, char **argv) {
     log_init(log_path);
     LOG_INFO("Netune v2.0.0 starting");
 
-    /* ── Config (XDG_CONFIG_HOME, fallback exe-relative) ── */
-    char exe_dir[1024] = {0};
-#ifdef _WIN32
-    { DWORD r = GetModuleFileNameA(NULL, exe_dir, (DWORD)sizeof(exe_dir));
-      if (r > 0 && r < sizeof(exe_dir)) { char *s = strrchr(exe_dir, '\\'); if (s) *s = 0; } }
-#else
-    { char link[1024]; snprintf(link, sizeof(link), "/proc/self/exe");
-      ssize_t r = readlink(link, exe_dir, sizeof(exe_dir) - 1);
-      if (r > 0) { exe_dir[r] = 0; char *s = strrchr(exe_dir, '/'); if (s) *s = 0; } }
-#endif
-
+    /* ── Config (only XDG_CONFIG_HOME) ── */
+    const char *cfg_path = xdg_dir("XDG_CONFIG_HOME", "config.json");
     char cfg_buf[1024];
-    if (argc > 1) {
-        snprintf(cfg_buf, sizeof(cfg_buf), "%s", argv[1]);
-    } else {
-        const char *xdg_cfg = xdg_dir("XDG_CONFIG_HOME", "config.json");
-        if (access(xdg_cfg, F_OK) == 0) {
-            snprintf(cfg_buf, sizeof(cfg_buf), "%s", xdg_cfg);
+    snprintf(cfg_buf, sizeof(cfg_buf), "%s", cfg_path);
+    /* If config doesn't exist: create from shipped default, else embedded fallback */
+    if (access(cfg_buf, F_OK) != 0) {
+        ensure_dir(cfg_buf);
+        char exe_dir[1024];
+        { char link[1024]; snprintf(link, sizeof(link), "/proc/self/exe");
+          ssize_t r = readlink(link, exe_dir, sizeof(exe_dir) - 1);
+          if (r > 0) { exe_dir[r] = 0; char *s = strrchr(exe_dir, '/'); if (s) *s = 0; } }
+        char shipped[1024];
+        snprintf(shipped, sizeof(shipped), "%s/data/config.json", exe_dir);
+        FILE *src = fopen(shipped, "rb");
+        if (src) {
+            FILE *dst = fopen(cfg_buf, "w");
+            if (dst) { char buf[4096]; size_t n; while ((n = fread(buf, 1, sizeof(buf), src)) > 0) fwrite(buf, 1, n, dst); fclose(dst); }
+            fclose(src);
+            LOG_INFO("Created config from shipped default: %s", shipped);
         } else {
-            /* fallback: exe-relative (dev builds) */
-            { char d[1024]; snprintf(d, sizeof(d), "%s/data/config.json", exe_dir);
-              if (access(d, F_OK) != 0) { char *s = strrchr(exe_dir, '/'); if (s) *s = 0; } }
-            snprintf(cfg_buf, sizeof(cfg_buf), "%s/data/config.json", exe_dir);
+            FILE *f = fopen(cfg_buf, "w");
+            if (f) { fputs("{\"version\":\"1.0\",\"audio\":{\"volume\":80},\"playback\":{\"loop_mode\":0},\"ui\":{\"theme\":\"default\",\"keybindings\":\"default\"},\"music_sources\":{\"local\":{\"enabled\":true,\"dirs\":[]},\"netease\":{\"enabled\":true}}}\n", f); fclose(f); }
         }
     }
-    ensure_dir(cfg_buf);
+
     Config *cfg = config_load(cfg_buf);
     if (!cfg) LOG_WARN("No config loaded, using defaults");
     config_set_global(cfg);
@@ -568,37 +567,23 @@ int run_app(int argc, char **argv) {
     /* ── Cache (XDG_CACHE_HOME) ─────────────────────── */
     const char *cache_dir = xdg_dir("XDG_CACHE_HOME", NULL);
     ensure_dir(cache_dir);
-#ifndef _WIN32
-    mkdir(cache_dir, 0755);  /* ensure cache dir itself exists */
-#else
-    _mkdir(cache_dir);
-#endif
+    mkdir(cache_dir, 0755);
     cache_init(cache_dir);
     search_manager_init();
 
     event_bus_init();
 
-    g_thread_pool = threadpool_create(2);
+    g_thread_pool = threadpool_create(8);
     if (!g_thread_pool) LOG_WARN("Failed to create thread pool, cover art will not load");
 
-    /* ── Ensure config/template files exist ────────── */
+    /* ── Ensure template files exist (themes/keybindings/layouts) ── */
     auto ensure_template = [](const char *path, const char *content) {
         if (access(path, F_OK) != 0) {
-            char dir[1024];
-            size_t n = strlen(path);
-            if (n >= sizeof(dir)) n = sizeof(dir) - 1;
-            memcpy(dir, path, n); dir[n] = 0;
-            char *s = strrchr(dir, '/'); if (s) { *s = 0; ensure_dir(dir); }
+            ensure_dir(path);
             FILE *f = fopen(path, "w");
             if (f) { fputs(content, f); fclose(f); LOG_INFO("Created template: %s", path); }
         }
     };
-    {
-        char cfg_tpl[1024];
-        snprintf(cfg_tpl, sizeof(cfg_tpl), "%s", xdg_dir("XDG_CONFIG_HOME", "config.json"));
-        ensure_template(cfg_tpl,
-            "{\n  \"version\": \"1.0\",\n  \"audio\": {\"volume\": 80},\n  \"playback\": {\"loop_mode\": 0},\n  \"ui\": {\"theme\": \"default\",\"keybindings\": \"default\"},\n  \"music_sources\": {\"local\": {\"enabled\": true,\"dirs\": []},\"netease\": {\"enabled\": true}}\n}");
-    }
     {
         char tpl[1024];
         snprintf(tpl, sizeof(tpl), "%s", xdg_dir("XDG_CONFIG_HOME", "themes/default.yaml"));
@@ -612,7 +597,7 @@ int run_app(int argc, char **argv) {
             "keybindings:\n  move_down:     [\"j\", \"down\"]\n  move_up:       [\"k\", \"up\"]\n  panel_switch:  [\"tab\"]\n");
     }
 
-    event_bus_subscribe(EV_PROGRESS_UPDATE,   ev_progress, NULL);
+        event_bus_subscribe(EV_PROGRESS_UPDATE,   ev_progress, NULL);
     event_bus_subscribe(EV_PLAYBACK_START,    ev_playback_start, NULL);
     event_bus_subscribe(EV_PLAYBACK_PAUSE,    ev_playback_pause, NULL);
     event_bus_subscribe(EV_PLAYBACK_RESUME,   ev_playback_resume, NULL);
@@ -644,8 +629,14 @@ int run_app(int argc, char **argv) {
 
     /* load keybindings */
     const char *kb_name = config_get_str(cfg, "ui.keybindings", NULL);
-    const char *kb_path = "data/keybindings/default.yaml";
-    if (kb_name && strcmp(kb_name, "default") != 0) kb_path = kb_name;
+    const char *kb_path;
+    static char kb_buf[1024];
+    if (kb_name && strcmp(kb_name, "default") != 0) {
+        kb_path = kb_name;
+    } else {
+        snprintf(kb_buf, sizeof(kb_buf), "%s", xdg_dir("XDG_CONFIG_HOME", "keybindings/default.yaml"));
+        kb_path = kb_buf;
+    }
     g_keybindings.load(kb_path);
 
     /* load theme */
@@ -655,7 +646,7 @@ int run_app(int argc, char **argv) {
     if (t_name && strcmp(t_name, "default") != 0) {
         t_path = t_name;
     } else {
-        snprintf(t_buf, sizeof(t_buf), "%s/data/themes/default.yaml", exe_dir);
+        snprintf(t_buf, sizeof(t_buf), "%s", xdg_dir("XDG_CONFIG_HOME", "themes/default.yaml"));
         t_path = t_buf;
     }
     ThemeManager::instance().load(t_path);
@@ -671,10 +662,24 @@ int run_app(int argc, char **argv) {
     const char *l_path;
     if (l_name && strcmp(l_name, "default") != 0
         && access(l_name, F_OK) == 0) {
-        l_path = l_name;  /* absolute or valid relative path */
+        l_path = l_name;  /* absolute path */
     } else {
-        snprintf(l_buf, sizeof(l_buf), "%s/data/layouts/default.yaml", exe_dir);
+        snprintf(l_buf, sizeof(l_buf), "%s", xdg_dir("XDG_CONFIG_HOME", "layouts/default.yaml"));
         l_path = l_buf;
+        if (access(l_path, F_OK) != 0) {
+            /* Create default layout template */
+            ensure_dir(l_path);
+            const char *layout_content =
+                "layout:\n  type: \"vertical\"\n  children:\n"
+                "    - component: \"top_bar\"\n      height: 1\n"
+                "    - type: \"horizontal\"\n      flex: 1\n      children:\n"
+                "        - component: \"group_list\"\n          width: 20\n"
+                "        - component: \"song_list\"\n          flex: 1\n"
+                "    - component: \"status_bar\"\n      height: 2\n";
+            FILE *f = fopen(l_path, "w");
+            if (f) { fputs(layout_content, f); fclose(f);
+                LOG_INFO("Created default layout: %s", l_path); }
+        }
     }
     layout_engine.load(l_path);
 
@@ -694,10 +699,8 @@ int run_app(int argc, char **argv) {
                 if (d) scan_dirs.push_back(d);
             }
         }
-        if (scan_dirs.empty()) {
-            const char *home = getenv("HOME");
-            if (home) scan_dirs.push_back(home);
-        }
+        /* No dirs configured — no fallback scan */
+        (void)0;
         std::vector<SongGroup> groups;
         for (auto &dir : scan_dirs) {
             SearchResult result;
@@ -1199,6 +1202,33 @@ int run_app(int argc, char **argv) {
                                         free(pl);
                                     }
                                     if (event_bus_publish(EV_PLAYLIST_LIST_LOADED, ld, sizeof(*ld)) != 0) {
+                                        if (ld->songs) {
+                                            for (int i = 0; i < ld->count; i++)
+                                                song_info_free(&ld->songs[i]);
+                                            free(ld->songs);
+                                        }
+                                        free(ld);
+                                    }
+                                }).detach();
+                            }
+                        } else if (type == 4) {
+                            /* 我喜欢的音乐 (liked songs) */
+                            if (!netease_is_logged_in()) {
+                                start_login();
+                            } else {
+                                StateStore::instance().nav_push();
+                                StateStore::instance().set_loading(true);
+                                std::thread([]() {
+                                    SongInfo *songs = NULL; int sc = 0;
+                                    int ret = netease_liked_songs(&songs, &sc);
+                                    LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
+                                    if (ret == 0 && sc > 0) {
+                                        ld->songs = songs; ld->count = sc;
+                                    } else {
+                                        ld->songs = NULL; ld->count = 0;
+                                        free(songs);
+                                    }
+                                    if (event_bus_publish(EV_PLAYLIST_LOADED, ld, sizeof(*ld)) != 0) {
                                         if (ld->songs) {
                                             for (int i = 0; i < ld->count; i++)
                                                 song_info_free(&ld->songs[i]);
