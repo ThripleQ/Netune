@@ -415,6 +415,10 @@ case "account-name":
 }
 
 func output(body []byte) {
+	os.Stdout.Write(body)
+	os.Stdout.Write([]byte("\n"))
+	return
+	_ = json.Unmarshal  /* keep import */
 	var pretty map[string]interface{}
 	if err := json.Unmarshal(body, &pretty); err == nil {
 		b, _ := json.Marshal(pretty)

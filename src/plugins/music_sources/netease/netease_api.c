@@ -10,7 +10,7 @@
 #define pclose _pclose
 #endif
 #include <stdarg.h>
-#include <ctype.h>
+#include <yyjson.h>
 
 #define CLI "netease-cli"
 static char g_name[128] = "";
@@ -21,101 +21,110 @@ static char *run(const char *fmt, ...) {
     va_start(ap, fmt); vsnprintf(cmd, sizeof(cmd), fmt, ap); va_end(ap);
     FILE *fp = popen(cmd, "r"); if (!fp) return NULL;
     size_t cap = 8192, len = 0; char *b = malloc(cap); if (!b) { pclose(fp); return NULL; }
-    while (!feof(fp)) { if (len+1024>=cap) { cap*=2; char*t=realloc(b,cap); if(!t){free(b);pclose(fp);return NULL;} b=t; } size_t r=fread(b+len,1,cap-len-1,fp); if(r>0)len+=r; else break; }
+    while (!feof(fp)) {
+        if (len+1024>=cap) { cap*=2; char*t=realloc(b,cap); if(!t){free(b);pclose(fp);return NULL;} b=t; }
+        size_t r=fread(b+len,1,cap-len-1,fp); if(r>0)len+=r; else break;
+    }
     b[len]=0; pclose(fp); return b;
 }
-/* ── lightweight JSON helpers ─────────────────────── */
-static char *jstr(const char *j, const char *k) {
-    char s[128]; snprintf(s,sizeof(s),"\"%s\"",k);
-    const char *p = strstr(j,s); if(!p)return NULL; p+=strlen(s);
-    while(*p==':'||*p==' '||*p=='\t'||*p=='\n')p++;
-    /* string value */
-    if(*p=='"'){p++;size_t cap=2048,w=0;char*o=malloc(cap);if(!o)return NULL;
-        while(*p&&*p!='"'){
-            /* ensure capacity (pre-check: escape path can write up to 3 bytes) */
-            if (w + 4 >= cap) { cap *= 2; char *t = realloc(o, cap); if (!t) { free(o); return NULL; } o = t; }
-            if(*p=='\\') {
-                switch(*(p+1)) {
-                case 'n':  o[w++]='\n'; p+=2; break;
-                case 't':  o[w++]='\t'; p+=2; break;
-                case 'r':  o[w++]='\r'; p+=2; break;
-                case '"': o[w++]='"'; p+=2; break;
-                case '\\': o[w++]='\\'; p+=2; break;
-                case 'u':
-                    if(isxdigit((unsigned char)*(p+2))&&isxdigit((unsigned char)*(p+3))&&isxdigit((unsigned char)*(p+4))&&isxdigit((unsigned char)*(p+5))){
-                        char h[5]={*(p+2),*(p+3),*(p+4),*(p+5),0};unsigned long cp=strtoul(h,NULL,16);
-                        if(cp<0x80)o[w++]=(char)cp;else if(cp<0x800){o[w++]=(char)(0xC0|(cp>>6));o[w++]=(char)(0x80|(cp&0x3F));}else{o[w++]=(char)(0xE0|(cp>>12));o[w++]=(char)(0x80|((cp>>6)&0x3F));o[w++]=(char)(0x80|(cp&0x3F));}
-                        p+=6;
-                    } else { o[w++]='\\'; o[w++]='u'; p+=2; }
-                    break;
-                default:
-                    o[w++]='\\'; p+=1; break;
-                }
-            } else {
-                o[w++] = *p++;
-            }
-        }o[w]=0;return o;
-    }
-    /* number value — return as string */
-    if(isdigit((unsigned char)*p)||*p=='-'){
-        const char*e=p;while(isdigit((unsigned char)*e)||*e=='.')e++;
-        char*o=malloc((size_t)(e-p)+1);if(o){memcpy(o,p,(size_t)(e-p));o[e-p]=0;}return o;
-    }
-    return NULL;
+
+/* ── JSON extraction helpers (yyjson-based) ───────── */
+/* Get a string value from an object; returns NULL if missing or wrong type.
+   Caller does NOT free the result (yyjson owns it). */
+static const char *jget_str(yyjson_val *obj, const char *key) {
+    if (!obj) return NULL;
+    yyjson_val *v = yyjson_obj_get(obj, key);
+    return (v && yyjson_is_str(v)) ? yyjson_get_str(v) : NULL;
 }
-static long long jint(const char *j, const char *k) {
-    char s[128]; snprintf(s,sizeof(s),"\"%s\"",k);
-    const char *p = strstr(j,s); if(!p)return 0; p+=strlen(s);
-    while(*p==':'||*p==' '||*p=='\t'||*p=='\n')p++; return atoll(p);
+static long long jget_int(yyjson_val *obj, const char *key) {
+    if (!obj) return 0;
+    yyjson_val *v = yyjson_obj_get(obj, key);
+    return v ? yyjson_get_int(v) : 0;
 }
-static bool jbool(const char *j, const char *k) {
-    char s[128]; snprintf(s,sizeof(s),"\"%s\"",k);
-    const char *p = strstr(j,s); if(!p)return false; p+=strlen(s);
-    while(*p==':'||*p==' '||*p=='\t'||*p=='\n')p++;
-    if(*p=='t'&&strncmp(p,"true",4)==0)return true;
-    return atoll(p)!=0;
+static bool jget_bool(yyjson_val *obj, const char *key) {
+    if (!obj) return false;
+    yyjson_val *v = yyjson_obj_get(obj, key);
+    return v ? yyjson_get_bool(v) : false;
 }
-static const char *jobj(const char *j, const char *k) {
-    char s[128]; snprintf(s,sizeof(s),"\"%s\"",k);
-    const char *p = strstr(j,s); if(!p)return NULL; p+=strlen(s);
-    while(*p&&*p!='{'&&*p!='[')p++; return (*p=='{'||*p=='[')?p:NULL;
+/* Get a sub-object from an object; returns NULL if missing or not an object. */
+static yyjson_val *jget_obj(yyjson_val *obj, const char *key) {
+    if (!obj) return NULL;
+    yyjson_val *v = yyjson_obj_get(obj, key);
+    return (v && yyjson_is_obj(v)) ? v : NULL;
 }
-static const char *jmatch(const char *o) {
-    char oc=*o,cc=(oc=='{')?'}':']';int d=1;const char*p=o+1;
-    while(*p&&d>0){if(*p=='"'){p++;while(*p&&*p!='"'){if(*p=='\\')p++;p++;}}else if(*p==oc)d++;else if(*p==cc)d--;p++;}return p;
+/* Get a sub-array from an object; returns NULL if missing or not an array. */
+static yyjson_val *jget_arr(yyjson_val *obj, const char *key) {
+    if (!obj) return NULL;
+    yyjson_val *v = yyjson_obj_get(obj, key);
+    return (v && yyjson_is_arr(v)) ? v : NULL;
 }
-/* ── parse one song ────────────────────────────────── */
-static void fill(SongInfo *s, const char *jsn) {
-    memset(s,0,sizeof(*s)); s->source=strdup("netease"); s->cover_url=strdup(""); s->aux_label=strdup("");
-    /* extract cover_url from al object before skipping */
-    { const char *al = jobj(jsn, "al"); if (al) { char *u = jstr(al, "picUrl"); if (u && u[0]) { free(s->cover_url); s->cover_url = u; } else free(u); } }
-    /* skip past al, ar objects to get the song-level id */
-    const char *p = jsn;
-    const char *skip_keys[] = {"al", "ar"};
-    for (int sk = 0; sk < 2; sk++) {
-        char skey[128]; snprintf(skey,sizeof(skey),"\"%s\"",skip_keys[sk]);
-        const char *f = strstr(p, skey);
-        if (f) { const char *o = f + strlen(skey); while (*o && *o != '{' && *o != '[') o++; if (*o == '{' || *o == '[') p = jmatch(o); }
-    }
-    char *id=jstr(p,"id"); s->id=id?id:strdup("");
-    char *t=jstr(p,"name"); s->title=t?t:strdup("");
-    const char *ar=jobj(jsn,"ar");if(ar){const char*ap=ar+1;while(*ap&&*ap!='{')ap++;if(*ap=='{'){char*an=jstr(ap,"name");s->artist=an?an:strdup("");}else s->artist=strdup("");}else s->artist=strdup("");
-    const char *al=jobj(jsn,"al");if(al){char*an=jstr(al,"name");s->album=an?an:strdup("");}else s->album=strdup("");
-    s->duration_sec=(int)(jint(jsn,"dt")/1000);
+/* Get first object from an array (for arrays of objects). */
+static yyjson_val *jfirst_obj(yyjson_val *arr) {
+    if (!arr || !yyjson_is_arr(arr)) return NULL;
+    yyjson_val *v = yyjson_arr_get_first(arr);
+    return (v && yyjson_is_obj(v)) ? v : NULL;
 }
-/* ── parse songs array into SongInfo* ──────────────── */
-static int parselist(const char *json, const char *loc, SongInfo **out, int *cnt) { (void)loc; 
+
+/* ── parse one song from a yyjson_val object ──────── */
+static void fill(SongInfo *s, yyjson_val *song) {
+    memset(s,0,sizeof(*s));
+    s->source            = strdup("netease");
+    s->aux_label         = strdup("");
+
+    const char *id   = jget_str(song, "id");   s->id   = id   ? strdup(id)   : strdup("");
+    const char *name = jget_str(song, "name"); s->title = name ? strdup(name) : strdup("");
+
+    /* artist from ar[0].name */
+    yyjson_val *ar = jget_arr(song, "ar") ? jget_arr(song, "ar") : jget_arr(song, "artists");
+    if (ar) {
+        yyjson_val *first = yyjson_arr_get_first(ar);
+        if (first && yyjson_is_obj(first)) {
+            const char *an = jget_str(first, "name");
+            s->artist = an ? strdup(an) : strdup("");
+        } else s->artist = strdup("");
+    } else s->artist = strdup("");
+
+    /* album from al.name */
+    yyjson_val *al = jget_obj(song, "al") ? jget_obj(song, "al") : jget_obj(song, "album");
+    if (al) {
+        const char *an = jget_str(al, "name");
+        s->album = an ? strdup(an) : strdup("");
+        const char *pu = jget_str(al, "picUrl");
+        if (pu) { free(s->cover_url); s->cover_url = strdup(pu); }
+    } else s->album = strdup("");
+
+    s->duration_sec = (int)(jget_int(song, "dt") / 1000);
+    if (!s->cover_url || !s->cover_url[0]) s->cover_url = strdup("");
+}
+
+/* ── parse songs array ─────────────────────────────── */
+static int parselist(const char *json, const char *loc, SongInfo **out, int *cnt) {
+    (void)loc;
     *out=NULL; *cnt=0; if(!json)return -1;
-    const char *s=jobj(json,"songs");
-    if(!s||*s!='['){const char*r=jobj(json,"result");if(r)s=jobj(r,"songs");}
-    if(!s||*s!='['){const char*d=jobj(json,"data");if(d)s=jobj(d,"dailySongs");}
-    if(!s||*s!='[')return -1;
-    int n=0;const char*p=s+1;while(*p){while(*p&&*p!='{'&&*p!=']')p++;if(*p==']')break;p=jmatch(p);n++;}
-    if(!n)return -1;
-    *out=(SongInfo*)calloc((size_t)n,sizeof(SongInfo));*cnt=0;
-    p=s+1;int oi=0;while(*p){while(*p&&*p!='{'&&*p!=']')p++;if(*p==']')break;
-        const char*e=jmatch(p);fill(&(*out)[oi],p);oi++;p=e;}
-    *cnt=oi;return oi>0?0:-1;
+    yyjson_doc *doc = yyjson_read(json, strlen(json), 0);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    if (!root) { yyjson_doc_free(doc); return -1; }
+
+    yyjson_val *songs = jget_arr(root, "songs");
+    if (!songs) { yyjson_val *r = jget_obj(root, "result"); if (r) songs = jget_arr(r, "songs"); }
+    if (!songs) { yyjson_val *d = jget_obj(root, "data"); if (d) songs = jget_arr(d, "dailySongs"); }
+    if (!songs) { yyjson_doc_free(doc); return -1; }
+
+    size_t n = yyjson_arr_size(songs);
+    if (n == 0) { yyjson_doc_free(doc); return -1; }
+
+    *out = (SongInfo*)calloc(n, sizeof(SongInfo));
+    size_t idx; yyjson_val *v;
+    yyjson_arr_iter iter = yyjson_arr_iter_with(songs);
+    int oi = 0;
+    while ((v = yyjson_arr_iter_next(&iter)) && oi < (int)n) {
+        if (yyjson_is_obj(v)) fill(&(*out)[oi], v);
+        oi++;
+    }
+    *cnt = oi;
+    yyjson_doc_free(doc);
+    return oi > 0 ? 0 : -1;
 }
 
 /* ── Init ──────────────────────────────────────────── */
@@ -129,35 +138,94 @@ void netease_shutdown(void) {}
 const char* netease_account_name(void) { return g_name[0]?g_name:NULL; }
 
 /* ── Search ────────────────────────────────────────── */
-int netease_search(const char *kw, int l, int o, NSSearchResult *out) { (void)o; 
+int netease_search(const char *kw, int l, int o, NSSearchResult *out) {
+    (void)o;
     memset(out,0,sizeof(*out)); if(!kw)return -1;
     char *j=run("%s search \"%s\" 2>/dev/null",CLI,kw); if(!j)return -1;
-    const char *s=jobj(jobj(j,"result")?jobj(j,"result"):j,"songs");
-    if(!s||*s!='['){free(j);return 0;}
-    int n=0,max=l>0?l:30;const char*p=s+1;while(*p){while(*p&&*p!='{'&&*p!=']')p++;if(*p==']')break;p=jmatch(p);n++;if(n>=max)break;}
-    if(n==0){free(j);return 0;} out->songs=calloc((size_t)n,sizeof(NSSong)); out->count=n;
-    int oi=0;p=s+1;while(*p&&oi<n){while(*p&&*p!='{'&&*p!=']')p++;if(*p==']')break;const char*e=jmatch(p);
-        NSSong *r=&out->songs[oi]; { const char *pp = p; const char *skipk[]={"al","ar"}; for(int si=0;si<2;si++){char k[128];snprintf(k,sizeof(k),"\"%s\"",skipk[si]);const char*f=strstr(pp,k);if(f){const char*o=f+strlen(k);while(*o&&*o!='{'&&*o!='[')o++;if(*o=='{'||*o=='[')pp=jmatch(o);}} r->id=jstr(pp,"id"); r->title=jstr(pp,"name"); } r->artist=jstr(p,"artist");
-        if(!r->artist){const char*a=jobj(p,"ar");if(a){const char*ap=a+1;while(*ap&&*ap!='{')ap++;if(*ap=='{')r->artist=jstr(ap,"name");}}if(!r->artist)r->artist=strdup("");
-        r->album=jstr(p,"album");if(!r->album){const char*a=jobj(p,"al");if(a)r->album=jstr(a,"name");}if(!r->album)r->album=strdup("");
-        { const char*a=jobj(p,"al"); r->cover_url=a?jstr(a,"picUrl"):NULL; if(!r->cover_url)r->cover_url=strdup(""); }
-        r->dur_ms=(int)jint(p,"dt");oi++;p=e;}
-    out->count=oi; free(j); return 0;
+
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    if (!root) { yyjson_doc_free(doc); return -1; }
+
+    yyjson_val *r = jget_obj(root, "result");
+    yyjson_val *songs = r ? jget_arr(r, "songs") : NULL;
+    if (!songs) { yyjson_doc_free(doc); return 0; }
+
+    size_t n = yyjson_arr_size(songs);
+    int max = (l > 0 && (size_t)l < n) ? l : (int)n;
+    if (max == 0) { yyjson_doc_free(doc); return 0; }
+
+    out->songs = calloc((size_t)max, sizeof(NSSong));
+    out->count = max;
+
+    yyjson_arr_iter iter = yyjson_arr_iter_with(songs);
+    yyjson_val *v;
+    int oi = 0;
+    while ((v = yyjson_arr_iter_next(&iter)) && oi < max) {
+        if (!yyjson_is_obj(v)) continue;
+        NSSong *r = &out->songs[oi]; oi++;
+
+        const char *sid = jget_str(v, "id"); r->id = sid ? strdup(sid) : strdup("");
+        const char *nm  = jget_str(v, "name"); r->title = nm ? strdup(nm) : strdup("");
+
+        /* artist from ar[0].name */
+        yyjson_val *ar = jget_arr(v, "ar") ? jget_arr(v, "ar") : jget_arr(v, "artists");
+        if (ar) {
+            yyjson_val *first = yyjson_arr_get_first(ar);
+            const char *an = first ? jget_str(first, "name") : NULL;
+            r->artist = an ? strdup(an) : strdup("");
+        } else r->artist = strdup("");
+
+        /* album + cover from al */
+        yyjson_val *al = jget_obj(v, "al") ? jget_obj(v, "al") : jget_obj(v, "album");
+        if (al) {
+            const char *an = jget_str(al, "name");
+            r->album = an ? strdup(an) : strdup("");
+            const char *pu = jget_str(al, "picUrl");
+            r->cover_url = pu ? strdup(pu) : strdup("");
+        } else { r->album = strdup(""); r->cover_url = strdup(""); }
+
+        r->dur_ms = (int)jget_int(v, "dt");
+    }
+    out->count = oi;
+    yyjson_doc_free(doc);
+    return 0;
 }
-void netease_search_free(NSSearchResult *r) { if(!r)return;for(int i=0;i<r->count;i++){free(r->songs[i].id);free(r->songs[i].title);free(r->songs[i].artist);free(r->songs[i].album);free(r->songs[i].cover_url);}free(r->songs);r->songs=NULL;r->count=0;}
+void netease_search_free(NSSearchResult *r) {
+    if(!r)return;
+    for(int i=0;i<r->count;i++){free(r->songs[i].id);free(r->songs[i].title);free(r->songs[i].artist);free(r->songs[i].album);free(r->songs[i].cover_url);}
+    free(r->songs); r->songs=NULL; r->count=0;
+}
 
 /* ── Login QR ─────────────────────────────────────── */
 int netease_qr_key(char *u, size_t usz, char *url, size_t usz2) {
-    char *j=run("%s qr-key",CLI);if(!j){LOG_ERROR("netease-cli not found");return -1;}
-    char *uk=jstr(j,"unikey"),*ul=jstr(j,"url"); int r=-1;
-    if(uk&&ul&&uk[0]&&ul[0]){snprintf(u,usz,"%s",uk);snprintf(url,usz2,"%s",ul);r=0;}
-    else LOG_ERROR("qr-key failed, output: %s", j);
-    free(uk);free(ul);free(j);return r;
+    char *j=run("%s qr-key",CLI); if(!j){LOG_ERROR("netease-cli not found");return -1;}
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    const char *uk  = root ? jget_str(root, "unikey") : NULL;
+    const char *url2 = root ? jget_str(root, "url") : NULL;
+    int rv = -1;
+    if (uk && url2 && uk[0] && url2[0]) { snprintf(u, usz, "%s", uk); snprintf(url, usz2, "%s", url2); rv = 0; }
+    else LOG_ERROR("qr-key failed");
+    yyjson_doc_free(doc);
+    if (rv != 0) LOG_ERROR("qr-key failed"); /* re-log outside the if-else to keep msg after doc free (or not, just a LOG) */
+    return rv;
 }
+
 char* netease_qr_render(const char *url) { return run("%s qr-render \"%s\" 2>/dev/null",CLI,url); }
+
 int netease_qr_poll(const char *uk) {
-    char *j=run("%s qr-check \"%s\" 2>/dev/null",CLI,uk);if(!j)return -1;
-    long long c=jint(j,"code");free(j);
+    char *j=run("%s qr-check \"%s\" 2>/dev/null",CLI,uk); if(!j)return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    long long c = root ? jget_int(root, "code") : 0;
+    yyjson_doc_free(doc);
     if(c==803){char*n=run("%s account-name 2>/dev/null",CLI);if(n){size_t l=strlen(n);if(l>0&&n[l-1]=='\n')n[l-1]=0;if(strcmp(n,"error")!=0&&strcmp(n,"未登录")!=0)snprintf(g_name,sizeof(g_name),"%s",n);free(n);}return 0;}
     if(c==800)return 2;
     if(c==802)return 3;
@@ -167,70 +235,119 @@ bool netease_is_logged_in(void) { return g_name[0]!=0; }
 
 /* ── Playlists ────────────────────────────────────── */
 int netease_playlists(bool favorited, SongInfo **out, int *count) {
-    char *j=run("%s playlists 2>/dev/null",CLI);if(!j)return -1;
-    const char *pl=jobj(j,"playlists");if(!pl||*pl!='['){free(j);return -1;}
-    int n=0;const char*p=pl+1;while(*p){while(*p&&*p!='{'&&*p!=']')p++;if(*p==']')break;p=jmatch(p);n++;}
-    if(!n){free(j);return -1;}
-    *out=calloc((size_t)n,sizeof(SongInfo));*count=0;
-    p=pl+1;int oi=0;while(*p){while(*p&&*p!='{'&&*p!=']')p++;if(*p==']')break;const char*e=jmatch(p);
-        bool sub=jbool(p,"subscribed");if(sub!=favorited){p=e;continue;}
-        SongInfo *s=&(*out)[oi];memset(s,0,sizeof(*s));s->source=strdup("netease");s->cover_url=strdup("");s->aux_label=strdup("歌单");
-        char *id=jstr(p,"id");s->id=id?id:strdup("");
-        s->title=jstr(p,"name");if(!s->title)s->title=strdup("");
-        oi++;p=e;}
-    *count=oi;free(j);return 0;
+    char *j=run("%s playlists 2>/dev/null",CLI); if(!j)return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) { *out=NULL; *count=0; return -1; }
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *pl = jget_arr(root, "playlists");
+    if (!pl) { yyjson_doc_free(doc); *out=NULL; *count=0; return -1; }
+
+    size_t n = yyjson_arr_size(pl);
+    if (n == 0) { yyjson_doc_free(doc); *out=NULL; *count=0; return -1; }
+
+    *out = calloc(n, sizeof(SongInfo));
+    int oi = 0;
+    yyjson_arr_iter iter = yyjson_arr_iter_with(pl);
+    yyjson_val *v;
+    while ((v = yyjson_arr_iter_next(&iter))) {
+        if (!yyjson_is_obj(v)) continue;
+        bool sub = jget_bool(v, "subscribed");
+        if (sub != favorited) continue;
+        SongInfo *s = &(*out)[oi];
+        memset(s,0,sizeof(*s));
+        s->source    = strdup("netease");
+        s->cover_url = strdup("");
+        s->aux_label = strdup("歌单");
+        const char *sid = jget_str(v, "id");   s->id    = sid ? strdup(sid) : strdup("");
+        const char *nm  = jget_str(v, "name"); s->title = nm  ? strdup(nm)  : strdup("");
+        oi++;
+    }
+    *count = oi;
+    yyjson_doc_free(doc);
+    return oi > 0 ? 0 : -1;
 }
+
 int netease_playlist_songs(const char *id, SongInfo **out, int *count) {
-    char *j=run("%s playlist-tracks \"%s\" 2>/dev/null",CLI,id);if(!j)return -1;
-    int r=parselist(j,"songs",out,count);free(j);return r;
+    char *j=run("%s playlist-tracks \"%s\" 2>/dev/null",CLI,id); if(!j)return -1;
+    int r = parselist(j, "songs", out, count);
+    free(j); return r;
 }
+
 int netease_liked_songs(SongInfo **out, int *count) {
-    char *j=run("%s liked 2>/dev/null",CLI);if(!j)return -1;
-    int r=parselist(j,"songs",out,count);free(j);return r;
+    char *j=run("%s liked 2>/dev/null",CLI); if(!j)return -1;
+    int r = parselist(j, "songs", out, count);
+    free(j); return r;
 }
-int netease_menu_songs(int type, int limit, SongInfo **out, int *count) { (void)limit; 
-    if(type==0){char*j=run("%s recommend-songs 2>/dev/null",CLI);if(!j)return -1;int r=parselist(j,"songs",out,count);free(j);return r;}
+
+int netease_menu_songs(int type, int limit, SongInfo **out, int *count) {
+    (void)limit;
+    if (type == 0) {
+        char *j = run("%s recommend-songs 2>/dev/null",CLI); if(!j) return -1;
+        int r = parselist(j, "songs", out, count);
+        free(j); return r;
+    }
     return -1;
 }
 
 /* ── Play URL ──────────────────────────────────────── */
+int netease_play_url(const char *id, char *url, size_t sz) {
+    const char *lvl = "standard";
+    char *j = run("%s song-url \"%s\" %s 2>/dev/null",CLI,id,lvl); if(!j)return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) { if(sz>0)url[0]=0; return -1; }
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *data = jget_arr(root, "data");
+    int r = -1;
+    if (data) {
+        yyjson_val *first = yyjson_arr_get_first(data);
+        if (first && yyjson_is_obj(first)) {
+            const char *u = jget_str(first, "url");
+            if (u && u[0]) { snprintf(url, sz, "%s", u); r = 0; }
+        }
+    }
+    yyjson_doc_free(doc);
+    if (r != 0 && sz > 0) url[0] = 0;
+    return r;
+}
+
 /* ── Lyrics ──────────────────────────────────────────── */
 int netease_lyric(const char *song_id, char **buf) {
     if (!song_id || !buf) return -1;
     char *j = run("%s lyric \"%s\"", CLI, song_id);
     if (!j) return -1;
-    char *lyric = jstr(j, "lyric");
-    if (lyric && lyric[0]) {
-        *buf = lyric;
-        free(j);
-        return 0;
-    }
-    /* check code */
-    char *code_str = jstr(j, "code");
-    if (code_str) {
-        long long code = atoll(code_str);
-        if (code != 200) {
-            LOG_WARN("netease lyric api returned code=%lld", code);
-        }
-        free(code_str);
-    }
-    free(lyric);
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
     free(j);
-    return -1;
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    int rv = -1;
+    if (root) {
+        const char *lyric = jget_str(root, "lrc");
+        /* Netease sometimes returns "lrc" as an object with a "lyric" field */
+        if (!lyric) {
+            yyjson_val *lrc = jget_obj(root, "lrc");
+            if (lrc) lyric = jget_str(lrc, "lyric");
+        }
+        /* fallback: try "lyric" directly */
+        if (!lyric) lyric = jget_str(root, "lyric");
+        if (lyric && lyric[0]) {
+            *buf = strdup(lyric);
+            rv = 0;
+        } else {
+            long long code = jget_int(root, "code");
+            if (code != 200) LOG_WARN("netease lyric api returned code=%lld", code);
+        }
+    }
+    yyjson_doc_free(doc);
+    return rv;
 }
 
-int netease_play_url(const char *id, char *url, size_t sz) {
-    const char *lvl="standard";
-    char *j=run("%s song-url \"%s\" %s 2>/dev/null",CLI,id,lvl);if(!j)return -1;
-    const char *d=jobj(j,"data");int r=-1;
-    if(d&&*d=='['){const char*p=d+1;while(*p&&*p!='{')p++;if(*p=='{'){char*u=jstr(p,"url");if(u&&u[0]){snprintf(url,sz,"%s",u);r=0;}free(u);}}
-    free(j);if(r!=0&&sz>0)url[0]=0;return r;
-}
 char* netease_download(const char *id, const char *url) {
-    char path[256];snprintf(path,sizeof(path),"/tmp/netune_%s.mp3",id);
+    char path[256]; snprintf(path,sizeof(path),"/tmp/netune_%s.mp3",id);
     unlink(path);
-    char cmd[3072];snprintf(cmd,sizeof(cmd),"curl -sL --max-time 60 \"%s\" -o \"%s\"",url,path);
-    int rc=system(cmd);
-    if(rc!=0){unlink(path);return NULL;}
-    char *out=strdup(path);return out;
+    char cmd[3072]; snprintf(cmd,sizeof(cmd),"curl -sL --max-time 60 \"%s\" -o \"%s\"",url,path);
+    int rc = system(cmd);
+    if (rc != 0) { unlink(path); return NULL; }
+    return strdup(path);
 }
