@@ -8,6 +8,11 @@ extern "C" {
 #include <stddef.h>
 
 /* ── Song metadata ─────────────────────────────────── */
+/* ⚠️ 加字段后同步修改（grep 找: SongInfo ):               */
+/*    music_source.c : song_info_copy(), song_info_free() */
+/*    state_store.cpp: copy_song_info()                   */
+/*    app.cpp        : 手动构造 SongInfo 的地方           */
+/*    netease_source.c: ns_search() 手动赋值             */
 typedef struct {
     char *id;           /* unique source-specific id   */
     char *source;       /* "local", "netease", "qq"    */

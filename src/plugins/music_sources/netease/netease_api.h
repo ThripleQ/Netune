@@ -13,6 +13,8 @@ void netease_shutdown(void);
 const char* netease_account_name(void);
 
 /* ── Search ────────────────────────────────────────── */
+/* ⚠️ 加字段后同步修改: netease_api.c(fill/search), netease_source.c(ns_search) */
+/*    app.cpp 手动构造 NSSong 的地方 */
 typedef struct { char *id, *title, *artist, *album, *cover_url; int dur_ms; int fee; } NSSong;
 typedef struct { NSSong *songs; int count; } NSSearchResult;
 
