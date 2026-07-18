@@ -160,7 +160,7 @@ Element render_song_list(const AppState &s) {
                 if (shown >= 30) break;
                 bool selected = (shown == s.search_selected);
                 std::string prefix;
-                if (song.fee > 0) prefix = "\u25c6 ";
+                if (song.fee == 1) prefix = "\u25c6 ";
                 std::string label;
                 if (song.title) label += prefix + song.title;
                 if (song.artist) { label += " \u2014 "; label += song.artist; }
@@ -264,7 +264,7 @@ Element render_song_list(const AppState &s) {
             bool sel = ((int)i == s.selected_index);
 
             std::string prefix;
-            if (song.fee > 0) prefix = "◆ ";
+            if (song.fee == 1) prefix = "◆ ";
             std::string content;
             if (song.title && song.title[0])
                 content = prefix + song.title;
