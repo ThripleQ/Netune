@@ -38,17 +38,6 @@ apt install cmake pkg-config libavformat-dev libavcodec-dev libswresample-dev \
 > - `libyyjson-dev` is not available in some Debian/Ubuntu releases. CMake will fall back to building yyjson from source automatically, so it does not need to be installed manually.
 > - `netease-cli` requires **Go >= 1.22**. The `golang-go` package in older Debian/Ubuntu releases (e.g., Ubuntu 22.04 ships Go 1.18) is too old; install a newer Go from [go.dev/dl](https://go.dev/dl/) if you need Netease Cloud Music support.
 
-### Build netease-cli (required for Netease Cloud Music)
-
-`netease-cli` is a Go helper that is **not** built by the CMake target. Build it manually after compiling the main project (requires Go >= 1.22):
-
-```bash
-cd src/plugins/music_sources/netease/netease-cli
-go build -o netease-cli .
-mv netease-cli ../../../../build/
-cd ../../../../
-```
-
 ### Install to PATH
 
 ```bash
@@ -57,6 +46,8 @@ cp build/netease-cli ~/.local/bin/
 cp -r data ~/.local/bin/data/
 netune
 ```
+
+> `netease-cli` is auto-built by CMake when Go >= 1.22 is available. To verify: `ls -l build/netease-cli`
 
 ## Features
 
