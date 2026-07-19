@@ -389,7 +389,10 @@ next_song:
     }
 
 cleanup:
-    if (ffstream) ffstream_close(ffstream); ffstream = NULL;
+    if (ffstream) {
+        ffstream_close(ffstream);
+        ffstream = NULL;
+    }
     if (decoder) decoder_close(decoder);
     if (audio)   audio_output_destroy(audio);
     free(pcm_buf);

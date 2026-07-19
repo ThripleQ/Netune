@@ -17,25 +17,43 @@ cmake --build build -j$(nproc)
 | Package | Required for |
 |---------|-------------|
 | CMake | Build system |
-| FFmpeg (libavformat, libavcodec, libswresample) | Streaming decoder |
+| FFmpeg >= 4.0 (>= 5.1 recommended; libavformat, libavcodec, libswresample) | Streaming decoder |
 | ALSA | Audio output (Linux) |
 | PulseAudio | Audio output (Linux) |
 | SDL2 | Audio output (cross-platform) |
 | yyjson | JSON parsing |
 | libyaml | Config loading |
-| Go | Building netease-cli (needed for Netease features) |
+| Go >= 1.22 | Building netease-cli (needed for Netease features) |
 
-FTXUI is auto-downloaded by CMake.
+FTXUI and yyjson are auto-downloaded by CMake when they are not installed system-wide.
 
 Install with your system's package manager. For example on Debian/Ubuntu:
-`apt install cmake libavformat-dev libavcodec-dev libswresample-dev \
-  libasound2-dev libpulse-dev libsdl2-dev libyyjson-dev libyaml-dev`
+
+```bash
+apt install cmake pkg-config libavformat-dev libavcodec-dev libswresample-dev \
+  libasound2-dev libpulse-dev libsdl2-dev libyaml-dev
+```
+
+> Notes:
+> - `libyyjson-dev` is not available in some Debian/Ubuntu releases. CMake will fall back to building yyjson from source automatically, so it does not need to be installed manually.
+> - `netease-cli` requires **Go >= 1.22**. The `golang-go` package in older Debian/Ubuntu releases (e.g., Ubuntu 22.04 ships Go 1.18) is too old; install a newer Go from [go.dev/dl](https://go.dev/dl/) if you need Netease Cloud Music support.
+
+### Build netease-cli (required for Netease Cloud Music)
+
+`netease-cli` is a Go helper that is **not** built by the CMake target. Build it manually after compiling the main project (requires Go >= 1.22):
+
+```bash
+cd src/plugins/music_sources/netease/netease-cli
+go build -o netease-cli .
+mv netease-cli ../../../../build/
+cd ../../../../
+```
 
 ### Install to PATH
 
 ```bash
 cp build/netune ~/.local/bin/
-cp bin/netease-cli ~/.local/bin/
+cp build/netease-cli ~/.local/bin/
 cp -r data ~/.local/bin/data/
 netune
 ```

@@ -2,6 +2,7 @@
 #include "infra/log.h"
 #include <stdlib.h>
 #include <string.h>
+#include <libavcodec/version.h>
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
 #include <libswresample/swresample.h>
@@ -25,8 +26,15 @@ FFStream* ffstream_open(const char *url, int *sr, int *ch, int *dur) {
     s->fmt->max_analyze_duration = 10 * AV_TIME_BASE;
     if (avformat_find_stream_info(s->fmt, NULL) < 0) goto fail;
 
+    /* av_find_best_stream changed the decoder pointer type from
+       AVCodec** (FFmpeg 4.x) to const AVCodec** (FFmpeg 5.x+). */
+#if LIBAVCODEC_VERSION_MAJOR >= 59
     const AVCodec *codec = NULL;
-    s->stream_idx = av_find_best_stream(s->fmt, AVMEDIA_TYPE_AUDIO, -1,-1,&codec,0);
+    s->stream_idx = av_find_best_stream(s->fmt, AVMEDIA_TYPE_AUDIO, -1, -1, &codec, 0);
+#else
+    AVCodec *codec = NULL;
+    s->stream_idx = av_find_best_stream(s->fmt, AVMEDIA_TYPE_AUDIO, -1, -1, &codec, 0);
+#endif
     if (s->stream_idx < 0) goto fail;
 
     AVCodecParameters *par = s->fmt->streams[s->stream_idx]->codecpar;
@@ -36,12 +44,23 @@ FFStream* ffstream_open(const char *url, int *sr, int *ch, int *dur) {
     if (avcodec_open2(s->codec, codec, NULL) < 0) goto fail;
 
     s->sample_rate = s->codec->sample_rate;
-    s->channels    = s->codec->ch_layout.nb_channels;
+#if LIBAVCODEC_VERSION_MAJOR >= 59
+    s->channels = s->codec->ch_layout.nb_channels;
+#else
+    s->channels = s->codec->channels;
+#endif
 
+#if LIBAVCODEC_VERSION_MAJOR >= 59
     AVChannelLayout out_l = s->codec->ch_layout;
     swr_alloc_set_opts2(&s->swr,
         &out_l, AV_SAMPLE_FMT_S16, s->sample_rate,
         &s->codec->ch_layout, s->codec->sample_fmt, s->sample_rate, 0, NULL);
+#else
+    s->swr = swr_alloc_set_opts(NULL,
+        s->codec->channel_layout, AV_SAMPLE_FMT_S16, s->sample_rate,
+        s->codec->channel_layout, s->codec->sample_fmt, s->sample_rate,
+        0, NULL);
+#endif
     if (!s->swr || swr_init(s->swr) < 0) goto fail;
 
     s->pkt = av_packet_alloc();

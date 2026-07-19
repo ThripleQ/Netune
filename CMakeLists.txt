@@ -7,30 +7,52 @@ set(CMAKE_C_EXTENSIONS ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# ── FetchContent helper ────────────────────────────────
+# ── FetchContent helper and dependency resolution macro ─
 include(FetchContent)
 
+# netune_find_dep(<Name> <min-version> [FETCH_CONTENT <args>...])
+# First tries find_package(<Name> <min-version> CONFIG QUIET).
+# If not found and FETCH_CONTENT arguments are provided, falls back to
+# FetchContent_Declare + FetchContent_MakeAvailable from the given source.
+macro(netune_find_dep _name _min_ver)
+  set(_args "${ARGN}")
+  list(FIND _args "FETCH_CONTENT" _split_idx)
+  if(_split_idx GREATER -1)
+    math(EXPR _fc_start "${_split_idx} + 1")
+    list(SUBLIST _args ${_fc_start} -1 _fc_args)
+  endif()
+
+  find_package(${_name} ${_min_ver} CONFIG QUIET)
+  if(${_name}_FOUND)
+    message(STATUS "${_name}: system package found (>= ${_min_ver})")
+  elseif(_fc_args)
+    message(STATUS "${_name}: system package not found, building from source")
+    FetchContent_Declare(${_name} ${_fc_args})
+    FetchContent_MakeAvailable(${_name})
+  else()
+    message(FATAL_ERROR "${_name}: not found (required >= ${_min_ver})")
+  endif()
+endmacro()
+
 # ── FTXUI ─────────────────────────────────────────────
-FetchContent_Declare(
-  ftxui
-  GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
-  GIT_TAG        v6.0.0
-)
 set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(FTXUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(ftxui)
+netune_find_dep(ftxui 6.0.0
+  FETCH_CONTENT
+    GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
+    GIT_TAG        v6.0.0
+)
 
 # ── yyjson (official CMake) ──────────────────────────
-# Try system install first; fall back to FetchContent
-find_package(yyjson CONFIG QUIET)
-if(NOT yyjson_FOUND)
-  message(STATUS "yyjson: not found as system package, building from source")
-  FetchContent_Declare(
-    yyjson
+netune_find_dep(yyjson 0.10.0
+  FETCH_CONTENT
     GIT_REPOSITORY https://github.com/ibireme/yyjson.git
     GIT_TAG        0.10.0
-  )
-  FetchContent_MakeAvailable(yyjson)
+)
+# FetchContent builds the plain target 'yyjson'; provide the namespaced
+# alias that the rest of the project expects.
+if(NOT TARGET yyjson::yyjson AND TARGET yyjson)
+  add_library(yyjson::yyjson ALIAS yyjson)
 endif()
 
 # ── Remaining deps (pkg-config) ──────────────────────
@@ -41,9 +63,112 @@ pkg_check_modules(YAML   REQUIRED IMPORTED_TARGET yaml-0.1)
 pkg_check_modules(ALSA   QUIET IMPORTED_TARGET alsa)
 pkg_check_modules(PULSE  QUIET IMPORTED_TARGET libpulse-simple)
 pkg_check_modules(SDL2   QUIET IMPORTED_TARGET sdl2)
-pkg_check_modules(FFMPEG QUIET IMPORTED_TARGET
-  libavformat libavcodec libswresample libavutil)
 find_package(Threads REQUIRED)
+
+# ── FFmpeg (system first, then build from source) ────
+# NETUNE_PREFER_SYSTEM_FFMPEG=ON (default): use the system FFmpeg if it meets
+# the minimum version. Otherwise build a minimal FFmpeg from source.
+# NETUNE_PREFER_SYSTEM_FFMPEG=OFF: always build FFmpeg from source.
+option(NETUNE_PREFER_SYSTEM_FFMPEG "Prefer system FFmpeg over building from source" ON)
+
+# Try to locate a system FFmpeg that is new enough. FFmpeg 5.1 introduced
+# ch_layout / swr_alloc_set_opts2 used by this project.
+function(netune_find_system_ffmpeg out_target)
+  pkg_check_modules(FFMPEG_SYSTEM QUIET IMPORTED_TARGET
+    libavformat>=59.27.100
+    libavcodec>=59.37.100
+    libswresample>=4.7.100
+    libavutil>=57.28.100)
+  if(FFMPEG_SYSTEM_FOUND)
+    set(${out_target} PkgConfig::FFMPEG_SYSTEM PARENT_SCOPE)
+  else()
+    set(${out_target} "" PARENT_SCOPE)
+  endif()
+endfunction()
+
+# Build a minimal FFmpeg from the official Git repository.
+function(netune_build_ffmpeg_from_source out_target)
+  message(STATUS "FFmpeg: building from source")
+
+  find_program(MAKE_EXECUTABLE make REQUIRED)
+  find_program(NASM_EXECUTABLE nasm)
+  if(NOT NASM_EXECUTABLE)
+    find_program(YASM_EXECUTABLE yasm)
+    if(NOT YASM_EXECUTABLE)
+      message(FATAL_ERROR "FFmpeg: nasm or yasm is required to build from source")
+    endif()
+  endif()
+
+  include(ExternalProject)
+  set(FFMPEG_INSTALL_DIR ${CMAKE_BINARY_DIR}/ffmpeg-install)
+
+  # Create placeholder directories/files so that CMake's configure-time
+  # validation of IMPORTED targets succeeds. The real files are produced by
+  # the ExternalProject build step.
+  file(MAKE_DIRECTORY ${FFMPEG_INSTALL_DIR}/include)
+  file(MAKE_DIRECTORY ${FFMPEG_INSTALL_DIR}/lib)
+  foreach(_lib avformat avcodec swresample avutil)
+    file(WRITE ${FFMPEG_INSTALL_DIR}/lib/lib${_lib}.so "")
+  endforeach()
+
+  ExternalProject_Add(ffmpeg_external
+    PREFIX ${CMAKE_BINARY_DIR}/ffmpeg-prefix
+    GIT_REPOSITORY https://git.ffmpeg.org/ffmpeg.git
+    GIT_TAG n6.1
+    CONFIGURE_COMMAND <SOURCE_DIR>/configure
+      --prefix=${FFMPEG_INSTALL_DIR}
+      --enable-shared
+      --disable-static
+      --disable-doc
+      --disable-programs
+      --disable-everything
+      --enable-protocol=file
+      --enable-demuxer=mp3,flac,wav
+      --enable-decoder=mp3,flac,pcm_s16le
+      --enable-encoder=pcm_s16le
+      --enable-swresample
+      --enable-avformat
+      --enable-avcodec
+      --enable-avutil
+    BUILD_COMMAND ${MAKE_EXECUTABLE} -j${CMAKE_BUILD_PARALLEL_LEVEL}
+    INSTALL_COMMAND ${MAKE_EXECUTABLE} install
+    BUILD_BYPRODUCTS
+      ${FFMPEG_INSTALL_DIR}/lib/libavformat.so
+      ${FFMPEG_INSTALL_DIR}/lib/libavcodec.so
+      ${FFMPEG_INSTALL_DIR}/lib/libswresample.so
+      ${FFMPEG_INSTALL_DIR}/lib/libavutil.so
+  )
+
+  foreach(_lib avformat avcodec swresample avutil)
+    add_library(ffmpeg_${_lib} SHARED IMPORTED)
+    add_dependencies(ffmpeg_${_lib} ffmpeg_external)
+    set_target_properties(ffmpeg_${_lib} PROPERTIES
+      IMPORTED_LOCATION ${FFMPEG_INSTALL_DIR}/lib/lib${_lib}.so
+      INTERFACE_INCLUDE_DIRECTORIES ${FFMPEG_INSTALL_DIR}/include
+    )
+  endforeach()
+
+  add_library(PkgConfig::FFMPEG_NETUNE_BUILT INTERFACE IMPORTED)
+  set_target_properties(PkgConfig::FFMPEG_NETUNE_BUILT PROPERTIES
+    INTERFACE_LINK_LIBRARIES "ffmpeg_avformat;ffmpeg_avcodec;ffmpeg_swresample;ffmpeg_avutil"
+    INTERFACE_INCLUDE_DIRECTORIES ${FFMPEG_INSTALL_DIR}/include
+  )
+
+  list(APPEND CMAKE_BUILD_RPATH ${FFMPEG_INSTALL_DIR}/lib)
+  set(${out_target} PkgConfig::FFMPEG_NETUNE_BUILT PARENT_SCOPE)
+endfunction()
+
+# Resolve FFmpeg: system first (if allowed and new enough), then source build.
+if(NETUNE_PREFER_SYSTEM_FFMPEG)
+  netune_find_system_ffmpeg(NETUNE_FFMPEG_TARGET)
+  if(NETUNE_FFMPEG_TARGET)
+    message(STATUS "FFmpeg: using system package")
+  endif()
+endif()
+
+if(NOT NETUNE_FFMPEG_TARGET)
+  netune_build_ffmpeg_from_source(NETUNE_FFMPEG_TARGET)
+endif()
 
 # ── Sources ───────────────────────────────────────────
 set(CORE_SOURCES
@@ -83,7 +208,7 @@ endif()
 
 if(PULSE_FOUND)
   list(APPEND PLUGIN_AUDIO_SOURCES src/plugins/audio_outputs/pulseaudio/pulse_plugin.c)
-  message(STATUS "PulseAudio found: building PulseAudio backend")
+  message(STATUS "PulseAudio found: building PulseAudio audio backend")
 else()
   message(STATUS "PulseAudio not found: skipping PulseAudio")
 endif()
@@ -163,7 +288,7 @@ target_link_libraries(netune PRIVATE
   ftxui::component
   yyjson::yyjson
   PkgConfig::YAML
-  PkgConfig::FFMPEG
+  ${NETUNE_FFMPEG_TARGET}
   Threads::Threads
 )
 

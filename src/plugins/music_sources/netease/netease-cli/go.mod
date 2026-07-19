@@ -1,6 +1,6 @@
 module netease-cli
 
-go 1.26.4
+go 1.22
 
 require (
 	github.com/go-musicfox/netease-music v1.6.0
