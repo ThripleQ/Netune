@@ -317,3 +317,25 @@ endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(netune PRIVATE -Wall -Wextra)
 endif()
+
+# ── netease-cli (Go helper for Netease Cloud Music) ───
+find_program(GO_EXECUTABLE go)
+if(GO_EXECUTABLE)
+  set(NETEASE_CLI_DIR "${CMAKE_SOURCE_DIR}/src/plugins/music_sources/netease/netease-cli")
+  set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/netease-cli")
+
+  add_custom_command(
+    OUTPUT  "${NETEASE_CLI_OUT}"
+    COMMAND "${GO_EXECUTABLE}" build "-ldflags=-s -w" -o "${NETEASE_CLI_OUT}" .
+    WORKING_DIRECTORY "${NETEASE_CLI_DIR}"
+    COMMENT "Building netease-cli (Go helper)..."
+  )
+  add_custom_target(netease-cli ALL DEPENDS "${NETEASE_CLI_OUT}")
+  add_dependencies(netune netease-cli)
+
+  message(STATUS "netease-cli: Go found (${GO_EXECUTABLE}), will auto-build")
+  install(PROGRAMS "${NETEASE_CLI_OUT}" DESTINATION bin)
+else()
+  message(WARNING "netease-cli: Go not found. Netease features won't work. "
+                  "Install Go >= 1.22 and rebuild.")
+endif()
