@@ -1,5 +1,6 @@
 #include "ui/components/login_screen.h"
 #include "ui/components/theme_util.h"
+#include "ui/theme.h"
 #include <cstdio>
 #include <string>
 #include <sstream>
@@ -79,5 +80,6 @@ Element render_login_screen(const AppState &s) {
 
     auto page = vbox(std::move(col));
     /* yframe + flex: fills available height, adds scrollbar if needed */
-    return page | yframe | flex | bgcolor(Color::RGB(15, 15, 25));
+    auto &theme = ThemeManager::instance().current();
+    return page | yframe | flex | bgcolor(Color::RGB(theme.overlay_bg.r, theme.overlay_bg.g, theme.overlay_bg.b));
 }

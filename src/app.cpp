@@ -589,7 +589,7 @@ int run_app(int argc, char **argv) {
         char tpl[1024];
         snprintf(tpl, sizeof(tpl), "%s", xdg_dir("XDG_CONFIG_HOME", "themes/default.yaml"));
         ensure_template(tpl,
-            "name: \"Netune Dark\"\ncolors:\n  bg: \"#1a1b26\"\n  fg: \"#c0caf5\"\n  accent: \"#7aa2f7\"\n");
+            "name: \"Tokyo Night\"\ncolors:\n  bg: \"#1a1b26\"\n  fg: \"#c0caf5\"\n  accent: \"#7aa2f7\"\n  accent_bg: \"#33467c\"\n  muted: \"#565f89\"\n  border: \"#292e42\"\n  success: \"#9ece6a\"\n  warning: \"#e0af68\"\n  error: \"#f7768e\"\n  overlay_bg: \"#16161e\"\n");
     }
     {
         char tpl[1024];
@@ -640,16 +640,9 @@ int run_app(int argc, char **argv) {
     }
     g_keybindings.load(kb_path);
 
-    /* load theme */
-    const char *t_name = config_get_str(cfg, "ui.theme", NULL);
-    char t_buf[1024];
-    const char *t_path;
-    if (t_name && strcmp(t_name, "default") != 0) {
-        t_path = t_name;
-    } else {
-        snprintf(t_buf, sizeof(t_buf), "%s", xdg_dir("XDG_CONFIG_HOME", "themes/default.yaml"));
-        t_path = t_buf;
-    }
+    /* load theme — use ThemeManager::resolve_path for proper name→path resolution */
+    const char *t_name = config_get_str(cfg, "ui.theme", nullptr);
+    std::string t_path = ThemeManager::resolve_path(t_name ? t_name : "default");
     ThemeManager::instance().load(t_path);
 
     /* layout engine */

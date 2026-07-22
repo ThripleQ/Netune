@@ -1,5 +1,12 @@
-name: "Netune Dark"
+name: "Tokyo Night"
 colors:
   bg: "#1a1b26"
   fg: "#c0caf5"
   accent: "#7aa2f7"
+  accent_bg: "#33467c"
+  muted: "#565f89"
+  border: "#292e42"
+  success: "#9ece6a"
+  warning: "#e0af68"
+  error: "#f7768e"
+  overlay_bg: "#16161e"

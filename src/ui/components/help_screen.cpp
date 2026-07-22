@@ -1,5 +1,6 @@
 #include "ui/components/help_screen.h"
 #include "ui/components/theme_util.h"
+#include "ui/theme.h"
 #include <cstdio>
 using namespace ftxui;
 
@@ -40,7 +41,8 @@ Element render_help_screen(const AppState &s) {
     col.push_back(text(" Press ? again or Escape to close ") | dim | center);
 
     auto help_box = vbox(std::move(col));
-    auto framed = help_box | border | center | clear_under | bgcolor(Color::RGB(20,20,30));
+    auto &theme = ThemeManager::instance().current();
+    auto framed = help_box | border | center | clear_under | bgcolor(Color::RGB(theme.overlay_bg.r, theme.overlay_bg.g, theme.overlay_bg.b));
 
     return framed;
 }
