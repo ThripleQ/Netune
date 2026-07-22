@@ -25,6 +25,9 @@ Thumbs.db
 netease-cli
 netease-cli-*
 
+# Custom build dir (cmake -B Netune/build)
+/Netune/
+
 # Misc trash
 2_windows.txt
 文本文件.txt
