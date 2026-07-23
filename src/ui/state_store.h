@@ -116,6 +116,9 @@ public:
     static StateStore& instance();
     const AppState& state() const { return state_; }
 
+    /* selection validation */
+    void validate_selection(void);
+
     /* playback */
     void set_playback_state(PlaybackState s);
     void set_current_song(const SongInfo &song);
