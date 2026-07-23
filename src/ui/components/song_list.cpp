@@ -140,7 +140,7 @@ Element render_song_list(const AppState &s) {
                 if (song.artist) content += std::string(" — ") + song.artist;
                 std::string row = build_info_row(content, avail_w, sel);
                 if (sel)
-                    els.push_back(theme_accent(text("> " + row) | inverted | focus));
+                    els.push_back(theme_selection(text("> " + row) | focus));
                 else
                     els.push_back(theme_fg(text("  " + row)));
                 shown++;
@@ -166,7 +166,7 @@ Element render_song_list(const AppState &s) {
                 if (song.artist) { label += " \u2014 "; label += song.artist; }
                 label = fit_text(label, avail_w);
                 if (selected)
-                    els.push_back(theme_accent(text("> " + label) | inverted | focus));
+                    els.push_back(theme_selection(text("> " + label) | focus));
                 else
                     els.push_back(theme_fg(text("  " + label)));
                 shown++;
@@ -242,9 +242,9 @@ Element render_song_list(const AppState &s) {
             std::string row = build_info_row(content, avail_w, scroll);
 
             if (s.active_panel == 1 && sel)
-                els.push_back(theme_accent(text("> " + row) | inverted | focus));
+                els.push_back(theme_selection(text("> " + row) | focus));
             else if (s.active_panel == 0 && sel)
-                els.push_back(theme_fg(text("  " + row) | focus));
+                els.push_back(theme_fg(text("  " + row) | bold));
             else
                 els.push_back(theme_fg(text("  " + row)));
         }

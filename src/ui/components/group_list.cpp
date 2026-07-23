@@ -14,7 +14,7 @@ Element render_group_list(const AppState &s) {
     if (s.music_mode == MusicMode::Local) {
         bool netease_sel = (s.active_panel == 0 && s.group_index < 0);
         if (netease_sel)
-            els.push_back(theme_accent(text("> >> 网易云音乐") | bold | inverted));
+            els.push_back(theme_selection(text("> >> 网易云音乐") | bold | focus));
         else
             els.push_back(theme_fg(text("  >> 网易云音乐") | dim));
 
@@ -23,11 +23,10 @@ Element render_group_list(const AppState &s) {
             bool sel = ((int)i == s.group_index);
 
             if (s.active_panel == 0 && sel) {
-                /* ── Selected: auto-wrap via paragraph ── */
-                els.push_back(theme_accent(
+                els.push_back(theme_selection(
                     hflow(paragraph("> " + label)) | bold | focus));
             } else if (s.active_panel == 1 && sel) {
-                els.push_back(theme_fg(text("  " + label) | bold | focus));
+                els.push_back(theme_fg(text("  " + label) | bold));
             } else {
                 els.push_back(theme_fg(text("  " + label)));
             }
@@ -35,7 +34,7 @@ Element render_group_list(const AppState &s) {
     } else {
         bool back_sel = (s.active_panel == 0 && s.netease_selected < 0);
         if (back_sel)
-            els.push_back(theme_accent(text("> << 本地音乐") | bold | inverted));
+            els.push_back(theme_selection(text("> << 本地音乐") | bold | focus));
         else
             els.push_back(theme_fg(text("  << 本地音乐") | dim));
 
@@ -46,7 +45,7 @@ Element render_group_list(const AppState &s) {
             bool sel = ((int)i == s.netease_selected);
 
             if (s.active_panel == 0 && sel) {
-                els.push_back(theme_accent(
+                els.push_back(theme_selection(
                     hflow(paragraph("> " + label)) | bold | focus));
             } else {
                 els.push_back(theme_fg(text("  " + label)));

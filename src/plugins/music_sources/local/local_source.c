@@ -115,14 +115,17 @@ static bool song_matches(const SongInfo *s, const char *keyword) {
            strcasestr(fname, keyword);
 }
 
-/* Ensure the global cache is populated. Idempotent. */
+/* Ensure the global cache is populated. Idempotent.
+   If no dirs are configured, the cache stays empty — we NEVER fall back
+   to scanning $HOME (which would walk node_modules/.cache/etc and hang
+   startup). Users must explicitly configure music_sources.local.dirs. */
 static void ensure_cache(void) {
     if (g_scanned) return;
     Config *cfg = config_global();
     int ndirs = cfg ? config_get_array_size(cfg, "music_sources.local.dirs") : 0;
     if (ndirs <= 0) {
-        const char *home = getenv("HOME");
-        scan_dir(home ? home : ".", &g_all_songs);
+        LOG_WARN("No music_sources.local.dirs configured — local cache empty. "
+                 "Configure dirs in data/config.json to enable local music.");
     } else {
         for (int i = 0; i < ndirs; i++) {
             char key[64];

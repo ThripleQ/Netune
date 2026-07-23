@@ -187,7 +187,9 @@ void StateStore::set_groups(const std::vector<SongGroup> &grps) {
         for (auto &s : g.songs) song_info_free(&s);
     }
     state_.groups.clear();
-    state_.group_index = 0;
+    /* Always start from Netease entry (group_index = -1).
+       User navigates to local groups with down arrow. */
+    state_.group_index = -1;
     state_.selected_index = 0;
 
     /* copy new */
@@ -202,8 +204,10 @@ void StateStore::set_groups(const std::vector<SongGroup> &grps) {
         state_.groups.push_back(std::move(copy));
     }
 
-    /* update right panel to first group */
-    set_group_index(0);
+    /* Only populate right panel if groups exist; otherwise
+       keep netease entry selected (group_index stays -1). */
+    if (!state_.groups.empty())
+        set_group_index(0);
 }
 
 void StateStore::set_group_index(int idx) {

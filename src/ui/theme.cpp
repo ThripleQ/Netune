@@ -113,10 +113,11 @@ void ThemeManager::derive_colors() {
 }
 
 /* Resolve a theme name to a file path.
-   Tries: data/themes/<name>.yaml, then XDG config dir. */
+   All themes live under XDG_CONFIG_HOME/netune/data/themes/.
+   No external scanning or fallback lookup is performed. */
 std::string ThemeManager::resolve_path(const std::string &name) {
     if (name.empty() || name == "default") {
-        return xdg_config_path("themes/default.yaml");
+        return xdg_config_path("data/themes/default.yaml");
     }
 
     /* If it looks like a path (contains /), use directly */
@@ -124,31 +125,18 @@ std::string ThemeManager::resolve_path(const std::string &name) {
         return name;
     }
 
-    /* Bare name → try data/themes/<name>.yaml relative to CWD */
-    std::string data_path = std::string("data/themes/") + name + ".yaml";
-    if (access(data_path.c_str(), R_OK) == 0) {
-        return data_path;
-    }
-
-    /* Then try XDG_CONFIG_HOME/themes/<name>.yaml */
-    std::string xdg_path = xdg_config_path("themes/" + name + ".yaml");
-    if (access(xdg_path.c_str(), R_OK) == 0) {
-        return xdg_path;
-    }
-
-    /* Fallback: return data path even if it doesn't exist (load() will handle error) */
-    return data_path;
+    /* Bare name → data/themes/<name>.yaml under the XDG config dir */
+    return xdg_config_path("data/themes/" + name + ".yaml");
 }
 
-/* List available built-in theme names from data/themes/ */
+/* List available built-in theme names from data/themes/ under XDG config dir */
 std::vector<std::string> ThemeManager::list_builtin_themes() {
     std::vector<std::string> names;
-    /* Check a few known themes (avoids dirent dependency) */
+    /* Check the known bundled themes (avoids dirent dependency) */
     const char *known[] = {"default", "dracula", "catppuccin",
-                           "netease_dark", "netease_light", "tokyonight",
-                           "gruvbox", "nord", "rosepine"};
+                           "netease_dark", "netease_light"};
     for (const char *n : known) {
-        std::string p = std::string("data/themes/") + n + ".yaml";
+        std::string p = xdg_config_path(std::string("data/themes/") + n + ".yaml");
         if (access(p.c_str(), R_OK) == 0)
             names.push_back(n);
     }

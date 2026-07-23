@@ -63,7 +63,7 @@ struct AppState {
 
     /* left panel: groups (folders) */
     std::vector<SongGroup> groups;
-    int  group_index = 0;
+    int  group_index = -1;  /* -1 = netease entry selected */
 
     /* panel focus: 0 = left (groups), 1 = right (songs) */
     int  active_panel = 0;

@@ -524,6 +524,161 @@ static void ensure_dir(const char *filepath) {
     }
 }
 
+/* ── XDG data root helper ─────────────────────────── */
+/* Returns the canonical data root where ALL runtime-editable
+   resources live: XDG_CONFIG_HOME/netune/data/
+   Cache and log are intentionally NOT under here — they stay
+   under XDG_CACHE_HOME. */
+static const char *xdg_data_root(void) {
+    const char *d = getenv("XDG_CONFIG_HOME");
+    static char buf[1024];
+    if (d && d[0]) {
+        snprintf(buf, sizeof(buf), "%s/netune/data", d);
+    } else {
+        const char *home = getenv("HOME");
+        if (!home) home = "/tmp";
+        snprintf(buf, sizeof(buf), "%s/.config/netune/data", home);
+    }
+    return buf;
+}
+
+/* ── Default data tree content ─────────────────────── */
+/* These embedded blobs let the app rebuild a complete default
+   data/ tree on startup — no scanning, no fallback lookups. */
+
+static const char *DEFAULT_CONFIG_JSON =
+    "{\n"
+    "  \"version\": \"1.0\",\n"
+    "  \"audio\": { \"backend\": \"auto\", \"volume\": 80 },\n"
+    "  \"playback\": { \"loop_mode\": 0, \"seek_step_sec\": 5 },\n"
+    "  \"ui\": { \"theme\": \"default\", \"layout\": \"default\", \"keybindings\": \"default\" },\n"
+    "  \"music_sources\": {\n"
+    "    \"local\": { \"enabled\": true, \"dirs\": [] },\n"
+    "    \"netease\": { \"enabled\": true }\n"
+    "  }\n"
+    "}\n";
+
+static const char *DEFAULT_LAYOUT_YAML =
+    "layout:\n"
+    "  type: \"vertical\"\n"
+    "  children:\n"
+    "    - component: \"top_bar\"\n"
+    "      height: 1\n"
+    "    - type: \"horizontal\"\n"
+    "      flex: 1\n"
+    "      children:\n"
+    "        - component: \"group_list\"\n"
+    "          width: 20\n"
+    "        - component: \"song_list\"\n"
+    "          flex: 1\n"
+    "    - component: \"status_bar\"\n"
+    "      height: 2\n";
+
+static const char *DEFAULT_KEYBINDINGS_YAML =
+    "keybindings:\n"
+    "  move_down:     [\"j\", \"down\"]\n"
+    "  move_up:       [\"k\", \"up\"]\n"
+    "  panel_switch:  [\"tab\"]\n"
+    "  play_pause:    [\"space\"]\n"
+    "  play_select:   [\"enter\"]\n"
+    "  next_track:    [\"n\"]\n"
+    "  prev_track:    [\"p\"]\n"
+    "  seek_forward:   [\"right\"]\n"
+    "  seek_backward:  [\"left\"]\n"
+    "  volume_up:     [\"+\", \"=\"]\n"
+    "  volume_down:   [\"-\"]\n"
+    "  open_search:   [\"/\"]\n"
+    "  stop:          [\"s\"]\n"
+    "  toggle_mute:   [\"m\"]\n"
+    "  cycle_loop:    [\"r\"]\n"
+    "  toggle_lyrics: [\"l\"]\n"
+    "  show_help:     [\"?\", \"escape\"]\n"
+    "  quit:          [\"q\"]\n";
+
+static const char *DEFAULT_THEME_DEFAULT_YAML =
+    "name: \"Tokyo Night\"\n"
+    "colors:\n"
+    "  bg: \"#1a1b26\"\n"
+    "  fg: \"#c0caf5\"\n"
+    "  accent: \"#7aa2f7\"\n"
+    "  accent_bg: \"#33467c\"\n"
+    "  muted: \"#565f89\"\n"
+    "  border: \"#292e42\"\n"
+    "  success: \"#9ece6a\"\n"
+    "  warning: \"#e0af68\"\n"
+    "  error: \"#f7768e\"\n"
+    "  overlay_bg: \"#16161e\"\n";
+
+static const char *DEFAULT_THEME_CATPPUCCIN_YAML =
+    "name: \"Catppuccin Mocha\"\n"
+    "colors:\n"
+    "  bg: \"#1e1e2e\"\n"
+    "  fg: \"#cdd6f4\"\n"
+    "  accent: \"#89b4fa\"\n";
+
+static const char *DEFAULT_THEME_DRACULA_YAML =
+    "name: \"Dracula\"\n"
+    "colors:\n"
+    "  bg: \"#282a36\"\n"
+    "  fg: \"#f8f8f2\"\n"
+    "  accent: \"#bd93f9\"\n";
+
+static const char *DEFAULT_THEME_NETEASE_DARK_YAML =
+    "name: \"Netease Dark\"\n"
+    "colors:\n"
+    "  bg: \"#1a1a2e\"\n"
+    "  fg: \"#c8c8dc\"\n"
+    "  accent: \"#e3322d\"\n";
+
+static const char *DEFAULT_THEME_NETEASE_LIGHT_YAML =
+    "name: \"Netease Light\"\n"
+    "colors:\n"
+    "  bg: \"#f5f5f5\"\n"
+    "  fg: \"#333333\"\n"
+    "  accent: \"#d43c33\"\n";
+
+/* ── Ensure the full default data tree exists ──────── */
+/* On startup, walks the canonical data root and creates
+   whatever is missing — directories AND default file
+   contents. Existing files are NEVER overwritten.
+   No external scanning or fallback lookup is performed. */
+static void ensure_default_data_tree(void) {
+    const char *root = xdg_data_root();
+
+    /* Ensure the root directory exists */
+    ensure_dir(root);
+
+    /* Helper: create a default file (with parent dirs) if it
+       does not already exist. Never touches existing files. */
+    auto ensure_file = [&](const char *rel, const char *content) {
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/%s", root, rel);
+        if (access(path, F_OK) == 0) return;  /* already there */
+        ensure_dir(path);
+        FILE *f = fopen(path, "w");
+        if (f) {
+            fputs(content, f);
+            fclose(f);
+            LOG_INFO("Created default data file: %s", path);
+        } else {
+            LOG_WARN("Failed to create default data file: %s", path);
+        }
+    };
+
+    /* config.json at the data root */
+    ensure_file("config.json", DEFAULT_CONFIG_JSON);
+    /* layouts */
+    ensure_file("layouts/default.yaml", DEFAULT_LAYOUT_YAML);
+    /* keybindings */
+    ensure_file("keybindings/default.yaml", DEFAULT_KEYBINDINGS_YAML);
+    /* themes — all bundled defaults */
+    ensure_file("themes/default.yaml",       DEFAULT_THEME_DEFAULT_YAML);
+    ensure_file("themes/catppuccin.yaml",    DEFAULT_THEME_CATPPUCCIN_YAML);
+    ensure_file("themes/dracula.yaml",       DEFAULT_THEME_DRACULA_YAML);
+    ensure_file("themes/netease_dark.yaml",  DEFAULT_THEME_NETEASE_DARK_YAML);
+    ensure_file("themes/netease_light.yaml", DEFAULT_THEME_NETEASE_LIGHT_YAML);
+}
+
 int run_app(int argc, char **argv) {
     if (argc > 1 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
         printf("Netune v2.0.0 — Terminal music player\nUsage: %s [config.json]\n", argv[0]);
@@ -536,31 +691,14 @@ int run_app(int argc, char **argv) {
     log_init(log_path);
     LOG_INFO("Netune v2.0.0 starting");
 
-    /* ── Config (only XDG_CONFIG_HOME) ── */
-    const char *cfg_path = xdg_dir("XDG_CONFIG_HOME", "config.json");
-    char cfg_buf[1024];
-    snprintf(cfg_buf, sizeof(cfg_buf), "%s", cfg_path);
-    /* If config doesn't exist: create from shipped default, else embedded fallback */
-    if (access(cfg_buf, F_OK) != 0) {
-        ensure_dir(cfg_buf);
-        char exe_dir[1024];
-        { char link[1024]; snprintf(link, sizeof(link), "/proc/self/exe");
-          ssize_t r = readlink(link, exe_dir, sizeof(exe_dir) - 1);
-          if (r > 0) { exe_dir[r] = 0; char *s = strrchr(exe_dir, '/'); if (s) *s = 0; } }
-        char shipped[1024];
-        snprintf(shipped, sizeof(shipped), "%s/data/config.json", exe_dir);
-        FILE *src = fopen(shipped, "rb");
-        if (src) {
-            FILE *dst = fopen(cfg_buf, "w");
-            if (dst) { char buf[4096]; size_t n; while ((n = fread(buf, 1, sizeof(buf), src)) > 0) fwrite(buf, 1, n, dst); fclose(dst); }
-            fclose(src);
-            LOG_INFO("Created config from shipped default: %s", shipped);
-        } else {
-            FILE *f = fopen(cfg_buf, "w");
-            if (f) { fputs("{\"version\":\"1.0\",\"audio\":{\"volume\":80},\"playback\":{\"loop_mode\":0},\"ui\":{\"theme\":\"default\",\"keybindings\":\"default\"},\"music_sources\":{\"local\":{\"enabled\":true,\"dirs\":[]},\"netease\":{\"enabled\":true}}}\n", f); fclose(f); }
-        }
-    }
+    /* ── Ensure default data tree exists (XDG_CONFIG_HOME/netune/data/) ── */
+    /* Rebuilds config.json / themes / layouts / keybindings if missing.
+       No scanning, no fallback lookups elsewhere. */
+    ensure_default_data_tree();
 
+    /* ── Config (under data/) ── */
+    char cfg_buf[1024];
+    snprintf(cfg_buf, sizeof(cfg_buf), "%s/config.json", xdg_data_root());
     Config *cfg = config_load(cfg_buf);
     if (!cfg) LOG_WARN("No config loaded, using defaults");
     config_set_global(cfg);
@@ -577,26 +715,8 @@ int run_app(int argc, char **argv) {
     g_thread_pool = threadpool_create(8);
     if (!g_thread_pool) LOG_WARN("Failed to create thread pool, cover art will not load");
 
-    /* ── Ensure template files exist (themes/keybindings/layouts) ── */
-    auto ensure_template = [](const char *path, const char *content) {
-        if (access(path, F_OK) != 0) {
-            ensure_dir(path);
-            FILE *f = fopen(path, "w");
-            if (f) { fputs(content, f); fclose(f); LOG_INFO("Created template: %s", path); }
-        }
-    };
-    {
-        char tpl[1024];
-        snprintf(tpl, sizeof(tpl), "%s", xdg_dir("XDG_CONFIG_HOME", "themes/default.yaml"));
-        ensure_template(tpl,
-            "name: \"Tokyo Night\"\ncolors:\n  bg: \"#1a1b26\"\n  fg: \"#c0caf5\"\n  accent: \"#7aa2f7\"\n  accent_bg: \"#33467c\"\n  muted: \"#565f89\"\n  border: \"#292e42\"\n  success: \"#9ece6a\"\n  warning: \"#e0af68\"\n  error: \"#f7768e\"\n  overlay_bg: \"#16161e\"\n");
-    }
-    {
-        char tpl[1024];
-        snprintf(tpl, sizeof(tpl), "%s", xdg_dir("XDG_CONFIG_HOME", "keybindings/default.yaml"));
-        ensure_template(tpl,
-            "keybindings:\n  move_down:     [\"j\", \"down\"]\n  move_up:       [\"k\", \"up\"]\n  panel_switch:  [\"tab\"]\n");
-    }
+    /* Default templates for themes/keybindings/layouts are created by
+       ensure_default_data_tree() above — nothing else to do here. */
 
         event_bus_subscribe(EV_PROGRESS_UPDATE,   ev_progress, NULL);
     event_bus_subscribe(EV_PLAYBACK_START,    ev_playback_start, NULL);
@@ -628,14 +748,16 @@ int run_app(int argc, char **argv) {
         }
     }
 
-    /* load keybindings */
+    /* load keybindings — always from data/keybindings/<name>.yaml */
     const char *kb_name = config_get_str(cfg, "ui.keybindings", NULL);
     const char *kb_path;
     static char kb_buf[1024];
-    if (kb_name && strcmp(kb_name, "default") != 0) {
-        kb_path = kb_name;
+    if (kb_name && strcmp(kb_name, "default") != 0 && kb_name[0] == '/') {
+        kb_path = kb_name;  /* absolute path: use as-is */
     } else {
-        snprintf(kb_buf, sizeof(kb_buf), "%s", xdg_dir("XDG_CONFIG_HOME", "keybindings/default.yaml"));
+        const char *name = (kb_name && strcmp(kb_name, "default") != 0) ? kb_name : "default";
+        snprintf(kb_buf, sizeof(kb_buf), "%s/keybindings/%s.yaml",
+                 xdg_data_root(), name);
         kb_path = kb_buf;
     }
     g_keybindings.load(kb_path);
@@ -645,7 +767,7 @@ int run_app(int argc, char **argv) {
     std::string t_path = ThemeManager::resolve_path(t_name ? t_name : "default");
     ThemeManager::instance().load(t_path);
 
-    /* layout engine */
+    /* layout engine — always load from data/layouts/<name>.yaml */
     LayoutEngine layout_engine;
     layout_engine.register_component("top_bar", render_top_bar);
     layout_engine.register_component("status_bar", render_status_bar);
@@ -655,25 +777,13 @@ int run_app(int argc, char **argv) {
     char l_buf[1024];
     const char *l_path;
     if (l_name && strcmp(l_name, "default") != 0
-        && access(l_name, F_OK) == 0) {
-        l_path = l_name;  /* absolute path */
+        && l_name[0] == '/' && access(l_name, F_OK) == 0) {
+        l_path = l_name;  /* absolute path: use as-is */
     } else {
-        snprintf(l_buf, sizeof(l_buf), "%s", xdg_dir("XDG_CONFIG_HOME", "layouts/default.yaml"));
+        const char *name = (l_name && strcmp(l_name, "default") != 0) ? l_name : "default";
+        snprintf(l_buf, sizeof(l_buf), "%s/layouts/%s.yaml",
+                 xdg_data_root(), name);
         l_path = l_buf;
-        if (access(l_path, F_OK) != 0) {
-            /* Create default layout template */
-            ensure_dir(l_path);
-            const char *layout_content =
-                "layout:\n  type: \"vertical\"\n  children:\n"
-                "    - component: \"top_bar\"\n      height: 1\n"
-                "    - type: \"horizontal\"\n      flex: 1\n      children:\n"
-                "        - component: \"group_list\"\n          width: 20\n"
-                "        - component: \"song_list\"\n          flex: 1\n"
-                "    - component: \"status_bar\"\n      height: 2\n";
-            FILE *f = fopen(l_path, "w");
-            if (f) { fputs(layout_content, f); fclose(f);
-                LOG_INFO("Created default layout: %s", l_path); }
-        }
     }
     layout_engine.load(l_path);
 
@@ -824,7 +934,6 @@ int run_app(int argc, char **argv) {
         else if (event == ftxui::Event::ArrowRight) { ev_key = "right"; }
         else if (event.is_character()) {
             ev_key = event.character();
-            /* Space: event.character() returns " ", normalize to "space" */
             if (ev_key == " ") ev_key = "space";
         }
         if (ev_key.empty()) return false;
