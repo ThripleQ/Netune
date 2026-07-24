@@ -79,7 +79,7 @@ netune
 
 ## 主题
 
-编辑 `data/config.json` → `"theme"`：`default`、`catppuccin`、`dracula`、`netease_dark`、`netease_light`。
+编辑 `data/config.json` → `"theme"`：`文件名字`
 
 ## 协议
 
