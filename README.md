@@ -79,8 +79,9 @@ netune
 
 ## 主题
 
-编辑 `data/config.json` → `"theme"`：`文件名字`
+编辑 `data/config.json` → `"theme"`：`"文件名字"`
 
+感谢 go-musicfox/netease-music — 完整的网易云 API Go 封装，提供加密/签名/UNM 一站式方案
 ## 协议
 
 MIT
