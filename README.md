@@ -64,24 +64,68 @@ netune
 
 | 按键 | 功能 |
 |------|------|
-| `j/k` 或 `↑/↓` | 导航 |
-| `Tab` | 切换面板 |
-| `Enter` | 播放 / 选择 |
+| `Tab` | 切换面板（歌单 / 歌曲） |
+| `j / ↓` | 向下 |
+| `k / ↑` | 向上 |
+| `Enter` | 播放选中 |
 | `Space` | 播放 / 暂停 |
-| `/` | 筛选播放列表 |
-| `←`/`→` | 快进/快退 |
-| `+`/`-` | 音量 |
+| `n` | 下一首 |
+| `p` | 上一首 |
+| `→` | 快进 |
+| `←` | 快退 |
+| `+ / =` | 音量加 |
+| `-` | 音量减 |
 | `r` | 循环模式 |
-| `s` | 停止 |
+| `l` | 切换歌词 |
 | `m` | 静音 |
+| `s` | 停止 |
+| `/` | 搜索 |
 | `?` | 帮助 |
-| `q` | 退出 |
+| `q / Esc` | 退出 |
 
-## 主题
+## 配置
 
-编辑 `data/config.json` → `"theme"`：`"文件名字"`
+编辑 `data/config.json`（运行时也可指定路径）：
 
-感谢 go-musicfox/netease-music — 完整的网易云 API Go 封装，提供加密/签名/UNM 一站式方案
+### 本地音乐
+
+```json
+"music_sources": {
+  "local": {
+    "enabled": true,
+    "dirs": ["~/Music/pop", "~/Music/rock"]
+  }
+}
+```
+
+`dirs` 支持 `~` 和 `$HOME` 等 shell 展开，默认不填则不扫描任何目录。
+
+### 主题
+
+```json
+"ui": {
+  "theme": "default"
+}
+```
+
+`theme` 为配置文件名（存在于 `data/themes/` 或 `~/.config/netune/themes/`），不带 `.yaml`。可选：`default`、`catppuccin`、`dracula`、`netease_dark`、`netease_light`。
+
+### 音频后端
+
+```json
+"audio": {
+  "backend": "auto",
+  "sample_rate": 44100,
+  "volume": 80
+}
+```
+
+`backend`：`auto` | `alsa` | `pulseaudio` | `sdl`。
+
+## 感谢
+
+感谢 [go-musicfox/netease-music](https://github.com/go-musicfox/netease-music) — 完整的网易云 API Go 封装，提供加密/签名/UNM 一站式方案
+
 ## 协议
 
 MIT

@@ -26,6 +26,8 @@ double      config_get_double(Config *cfg, const char *key, double fallback);
 /* array size */
 int         config_get_array_size(Config *cfg, const char *key);
 
+
+
 #ifdef __cplusplus
 }
 #endif

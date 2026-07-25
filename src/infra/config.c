@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+
 /* ── Global singleton ──────────────────────────────── */
 static Config *g_config = NULL;
 
@@ -34,7 +35,7 @@ Config* config_load(const char *path) {
     fclose(fp);
 
     yyjson_read_err err;
-    yyjson_doc *doc = yyjson_read_opts(buf, size, 0, NULL, &err);
+    yyjson_doc *doc = yyjson_read_opts(buf, size, YYJSON_READ_ALLOW_COMMENTS, NULL, &err);
     free(buf);
 
     if (!doc) {
@@ -118,3 +119,4 @@ int config_get_array_size(Config *cfg, const char *key) {
     if (!v || !yyjson_is_arr(v)) return 0;
     return (int)yyjson_arr_size(v);
 }
+

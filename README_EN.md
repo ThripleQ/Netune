@@ -64,22 +64,63 @@ netune
 
 | Key | Action |
 |-----|--------|
-| `j/k` or `↑/↓` | Navigate |
-| `Tab` | Switch panel |
-| `Enter` | Play / Select |
+| `Tab` | Switch panel (groups / songs) |
+| `j / Down` | Move down |
+| `k / Up` | Move up |
+| `Enter` | Play selected |
 | `Space` | Play / Pause |
-| `/` | Filter playlist |
-| `←`/`→` | Seek |
-| `+`/`-` | Volume |
-| `l` | Loop mode |
-| `s` | Stop |
-| `m` | Mute |
+| `n` | Next track |
+| `p` | Previous track |
+| `Right` | Seek forward |
+| `Left` | Seek backward |
+| `+ / =` | Volume up |
+| `-` | Volume down |
+| `r` | Cycle loop mode |
+| `l` | Toggle lyrics |
+| `m` | Toggle mute |
+| `s` | Stop playback |
+| `/` | Search |
 | `?` | Help |
-| `q` | Quit |
+| `q / Esc` | Quit |
 
-## Themes
+## Configuration
 
-Edit `data/config.json` → `"theme"`: `default`, `catppuccin`, `dracula`, `netease_dark`, `netease_light`.
+Edit `data/config.json` (a custom path can also be specified at runtime):
+
+### Local Music
+
+```json
+"music_sources": {
+  "local": {
+    "enabled": true,
+    "dirs": ["~/Music/pop", "~/Music/rock"]
+  }
+}
+```
+
+`dirs` supports `~` and `$HOME` shell expansion. Leave empty to skip scanning entirely.
+
+### Theme
+
+```json
+"ui": {
+  "theme": "default"
+}
+```
+
+Options: `default`, `catppuccin`, `dracula`, `netease_dark`, `netease_light`.
+
+### Audio Backend
+
+```json
+"audio": {
+  "backend": "auto",
+  "sample_rate": 44100,
+  "volume": 80
+}
+```
+
+`backend`: `auto` | `alsa` | `pulseaudio` | `sdl`.
 
 ## License
 
