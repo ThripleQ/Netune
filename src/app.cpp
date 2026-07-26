@@ -1531,9 +1531,7 @@ int run_app(int argc, char **argv) {
             return true;
 
         case Action::Stop:
-            if (cur.playback_state != PlaybackState::Stopped) {
-                event_bus_publish(EV_PLAYBACK_STOP, NULL, 0);
-            }
+            event_bus_publish(EV_PLAYBACK_STOP, NULL, 0);
             return true;
 
         case Action::ToggleMute: {
