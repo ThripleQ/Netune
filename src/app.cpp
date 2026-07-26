@@ -7,6 +7,8 @@
 #ifndef _WIN32
 #include <unistd.h>
 #include <sys/stat.h>   /* mkdir */
+#define PATH_SEP "/"
+#define PATH_SEP_CHR '/'
 #else
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -15,6 +17,8 @@
 #define access _access
 #define F_OK 0
 #define mkdir(p,m) _mkdir(p)
+#define PATH_SEP "\\"
+#define PATH_SEP_CHR '\\'
 #endif
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,6 +70,12 @@ static KeybindingManager g_keybindings;
 static threadpool_t *g_thread_pool = NULL;
 
 static volatile bool g_running = true;
+
+/* ── Seek accumulation ────────────────────────────── */
+/* Press: accumulate. Release (>150ms idle): fire once. */
+static int g_seek_accum = 0;
+static int g_seek_target = -1;   /* seek destination (sec), -1 = none; cleared when progress reaches target */
+static std::chrono::steady_clock::time_point g_last_seek_tp;
 
 static void on_signal(int sig) { (void)sig; g_running = false; }
 
@@ -271,6 +281,12 @@ static void ev_progress(const BusEvent *ev, void *data) {
         int tot = (p[2] > 0 && p[1] > 0) ? p[1] / p[2] : 0;
         int cur_ms = (p[2] > 0) ? (int)((long long)p[0] * 1000LL / p[2]) : 0;
         StateStore::instance().set_progress_ms(prog, cur_ms, tot);
+        /* Clear seek target once progress is within 1s of the target (seek executed) */
+        int seek_dist = cur_ms / 1000 - g_seek_target;
+        if (g_seek_target >= 0 && seek_dist >= -1 && seek_dist <= 1) {
+            g_seek_target = -1;
+            StateStore::instance().set_seek_target_progress(0.0f);
+        }
     }
 }
 /* forward decl — defined below */
@@ -304,9 +320,9 @@ static void ev_playback_finish(const BusEvent *ev, void *data) {
     int idx = st.selected_index;
     int next = -1;
     switch (st.loop_mode) {
-    case LoopMode::Track:   next = idx; break;
+    case LoopMode::Track:    next = idx; break;
     case LoopMode::Playlist: next = (idx + 1 >= total) ? 0 : idx + 1; break;
-    default:                next = (idx + 1 >= total) ? -1 : idx + 1; break;
+    default:                 next = -1; break;
     }
     LOG_INFO("ADV: total=%d idx=%d next=%d loop=%d", total, idx, next, (int)st.loop_mode);
     if (total <= 0) {
@@ -485,6 +501,7 @@ static void ev_playlist_changed(const BusEvent *ev, void *data) {
 static const char *xdg_dir(const char *env, const char *sub) {
     const char *d = getenv(env);
     static char buf[1024];
+#ifndef _WIN32
     if (d && d[0]) {
         snprintf(buf, sizeof(buf), "%s/netune/%s", d, sub ? sub : "");
     } else {
@@ -493,6 +510,23 @@ static const char *xdg_dir(const char *env, const char *sub) {
         const char *prefix = strstr(env, "CONFIG") ? ".config" : ".cache";
         snprintf(buf, sizeof(buf), "%s/%s/netune/%s", home, prefix, sub ? sub : "");
     }
+#else
+    /* Windows: map XDG_*_HOME to APPDATA / LOCALAPPDATA */
+    const char *win_env = NULL;
+    if (strstr(env, "CACHE"))
+        win_env = "LOCALAPPDATA";
+    else if (strstr(env, "CONFIG"))
+        win_env = "APPDATA";
+    if (win_env) d = getenv(win_env);
+    if (d && d[0]) {
+        snprintf(buf, sizeof(buf), "%s\\netune\\%s", d, sub ? sub : "");
+    } else {
+        const char *home = getenv("USERPROFILE");
+        if (!home) home = "C:\\";
+        const char *prefix = strstr(env, "CONFIG") ? ".config" : ".cache";
+        snprintf(buf, sizeof(buf), "%s\\%s\\netune\\%s", home, prefix, sub ? sub : "");
+    }
+#endif
     return buf;
 }
 
@@ -500,19 +534,24 @@ static void ensure_dir(const char *filepath) {
     /* mkdir -p the parent directory of filepath */
     char tmp[1024];
     snprintf(tmp, sizeof(tmp), "%s", filepath);
-    char *last = strrchr(tmp, '/');
+    /* find last separator (handles both / and \) */
+    char *last_slash = strrchr(tmp, '/');
+    char *last_bslash = strrchr(tmp, '\\');
+    char *last = (last_bslash && last_bslash > last_slash) ? last_bslash : last_slash;
     if (!last) return;
     if (last == tmp) return;  /* root dir, nothing to do */
-    *last = 0;  /* strip file name (or trailing slash) */
+    char sep_chr = *last;
+    *last = 0;  /* strip file name (or trailing separator) */
     for (char *p = tmp + 1; *p; p++) {
-        if (*p == '/') {
+        if (*p == '/' || *p == '\\') {
+            char saved = *p;
             *p = 0;
 #ifndef _WIN32
             mkdir(tmp, 0755);
 #else
             _mkdir(tmp);
 #endif
-            *p = '/';
+            *p = saved;
         }
     }
     if (tmp[0]) {
@@ -522,6 +561,7 @@ static void ensure_dir(const char *filepath) {
         _mkdir(tmp);
 #endif
     }
+    (void)sep_chr;
 }
 
 /* ── XDG data root helper ─────────────────────────── */
@@ -530,8 +570,9 @@ static void ensure_dir(const char *filepath) {
    Cache and log are intentionally NOT under here — they stay
    under XDG_CACHE_HOME. */
 static const char *xdg_data_root(void) {
-    const char *d = getenv("XDG_CONFIG_HOME");
     static char buf[1024];
+#ifndef _WIN32
+    const char *d = getenv("XDG_CONFIG_HOME");
     if (d && d[0]) {
         snprintf(buf, sizeof(buf), "%s/netune/data", d);
     } else {
@@ -539,6 +580,17 @@ static const char *xdg_data_root(void) {
         if (!home) home = "/tmp";
         snprintf(buf, sizeof(buf), "%s/.config/netune/data", home);
     }
+#else
+    /* Windows: use APPDATA (same mapping as XDG_CONFIG_HOME) */
+    const char *d = getenv("APPDATA");
+    if (d && d[0]) {
+        snprintf(buf, sizeof(buf), "%s\\netune\\data", d);
+    } else {
+        const char *home = getenv("USERPROFILE");
+        if (!home) home = "C:\\";
+        snprintf(buf, sizeof(buf), "%s\\.config\\netune\\data", home);
+    }
+#endif
     return buf;
 }
 
@@ -652,7 +704,7 @@ static void ensure_default_data_tree(void) {
        does not already exist. Never touches existing files. */
     auto ensure_file = [&](const char *rel, const char *content) {
         char path[1024];
-        snprintf(path, sizeof(path), "%s/%s", root, rel);
+        snprintf(path, sizeof(path), "%s" PATH_SEP "%s", root, rel);
         if (access(path, F_OK) == 0) return;  /* already there */
         ensure_dir(path);
         FILE *f = fopen(path, "w");
@@ -698,7 +750,7 @@ int run_app(int argc, char **argv) {
 
     /* ── Config (under data/) ── */
     char cfg_buf[1024];
-    snprintf(cfg_buf, sizeof(cfg_buf), "%s/config.json", xdg_data_root());
+    snprintf(cfg_buf, sizeof(cfg_buf), "%s" PATH_SEP "config.json", xdg_data_root());
     Config *cfg = config_load(cfg_buf);
     if (!cfg) LOG_WARN("No config loaded, using defaults");
     config_set_global(cfg);
@@ -752,11 +804,16 @@ int run_app(int argc, char **argv) {
     const char *kb_name = config_get_str(cfg, "ui.keybindings", NULL);
     const char *kb_path;
     static char kb_buf[1024];
-    if (kb_name && strcmp(kb_name, "default") != 0 && kb_name[0] == '/') {
+    if (kb_name && strcmp(kb_name, "default") != 0
+#ifndef _WIN32
+        && kb_name[0] == '/') {
+#else
+        && ((kb_name[0] && kb_name[1] == ':') || kb_name[0] == '/' || kb_name[0] == '\\')) {
+#endif
         kb_path = kb_name;  /* absolute path: use as-is */
     } else {
         const char *name = (kb_name && strcmp(kb_name, "default") != 0) ? kb_name : "default";
-        snprintf(kb_buf, sizeof(kb_buf), "%s/keybindings/%s.yaml",
+        snprintf(kb_buf, sizeof(kb_buf), "%s" PATH_SEP "keybindings" PATH_SEP "%s.yaml",
                  xdg_data_root(), name);
         kb_path = kb_buf;
     }
@@ -777,11 +834,16 @@ int run_app(int argc, char **argv) {
     char l_buf[1024];
     const char *l_path;
     if (l_name && strcmp(l_name, "default") != 0
+#ifndef _WIN32
         && l_name[0] == '/' && access(l_name, F_OK) == 0) {
+#else
+        && (((l_name[0] && l_name[1] == ':') || l_name[0] == '/' || l_name[0] == '\\')
+            && access(l_name, F_OK) == 0)) {
+#endif
         l_path = l_name;  /* absolute path: use as-is */
     } else {
         const char *name = (l_name && strcmp(l_name, "default") != 0) ? l_name : "default";
-        snprintf(l_buf, sizeof(l_buf), "%s/layouts/%s.yaml",
+        snprintf(l_buf, sizeof(l_buf), "%s" PATH_SEP "layouts" PATH_SEP "%s.yaml",
                  xdg_data_root(), name);
         l_path = l_buf;
     }
@@ -814,8 +876,11 @@ int run_app(int argc, char **argv) {
                 continue;
             }
             SongGroup g;
-            const char *slash = strrchr(dir.c_str(), '/');
-            g.name = slash ? slash + 1 : dir.c_str();
+            const char *slash_fwd = strrchr(dir.c_str(), '/');
+            const char *slash_back = strrchr(dir.c_str(), '\\');
+            const char *last_sep = (slash_back && (!slash_fwd || slash_back > slash_fwd))
+                                   ? slash_back : slash_fwd;
+            g.name = last_sep ? last_sep + 1 : dir.c_str();
             for (int j = 0; j < result.count; j++) {
                 SongInfo copy;
                 song_info_copy(&copy, &result.songs[j]);
@@ -845,7 +910,9 @@ int run_app(int argc, char **argv) {
     event_bus_poll();
 
     signal(SIGINT, on_signal);
+#ifndef _WIN32
     signal(SIGTERM, on_signal);
+#endif
 
     auto screen = ScreenInteractive::Fullscreen();
 
@@ -859,8 +926,27 @@ int run_app(int argc, char **argv) {
 
     auto &state = StateStore::instance();
 
+    auto consume_seek = [&]() {
+        auto now = std::chrono::steady_clock::now();
+        if (g_seek_accum == 0) return;
+        if (now - g_last_seek_tp < std::chrono::milliseconds(150))
+            return;
+        const AppState &st = state.state();
+        if (st.playback_state != PlaybackState::Stopped && st.total_time_sec > 0) {
+            int target = st.current_time_sec + g_seek_accum;
+            if (target > st.total_time_sec) target = st.total_time_sec;
+            if (target < 0) target = 0;
+            event_bus_publish(EV_BUFFERING_UPDATE, &target, sizeof(target));
+            g_seek_target = target;
+            state.set_seek_target_progress((float)target / st.total_time_sec);
+        }
+        g_seek_accum = 0;
+        state.set_seek_indicator(0);
+    };
+
     auto component = Renderer([&]() -> Element {
         event_bus_poll();
+        consume_seek();
         const AppState &s = state.state();
 
         state.set_song_panel_width(screen.dimx() - 29);
@@ -923,6 +1009,14 @@ int run_app(int argc, char **argv) {
     });
 
     component |= CatchEvent([&](ftxui::Event event) -> bool {
+        /* ── Non-seek key → discard pending seek ── */
+        if (g_seek_accum != 0 && event != ftxui::Event::ArrowLeft && event != ftxui::Event::ArrowRight) {
+            g_seek_accum = 0;
+            g_seek_target = -1;
+            state.set_seek_indicator(0);
+            state.set_seek_target_progress(0.0f);
+        }
+
         std::string ev_key;
         if (event == ftxui::Event::Backspace) { ev_key = "backspace"; }
         else if (event == ftxui::Event::Tab) { ev_key = "tab"; }
@@ -1421,30 +1515,24 @@ int run_app(int argc, char **argv) {
             return true;
         }
 
-        case Action::SeekForward: {
+        case Action::SeekForward:
             if (cur.playback_state != PlaybackState::Stopped && cur.total_time_sec > 0) {
-                int step = config_get_int(config_global(), "playback.seek_step_sec", 5);
-                int target = cur.current_time_sec + step;
-                if (target > cur.total_time_sec) target = cur.total_time_sec;
-                event_bus_publish(EV_BUFFERING_UPDATE, &target, sizeof(target));
+                g_seek_accum += config_get_int(config_global(), "playback.seek_step_sec", 5);
+                g_last_seek_tp = std::chrono::steady_clock::now();
+                state.set_seek_indicator(g_seek_accum);
             }
             return true;
-        }
 
-        case Action::SeekBackward: {
+        case Action::SeekBackward:
             if (cur.playback_state != PlaybackState::Stopped && cur.total_time_sec > 0) {
-                int step = config_get_int(config_global(), "playback.seek_step_sec", 5);
-                int target = cur.current_time_sec - step;
-                if (target < 0) target = 0;
-                event_bus_publish(EV_BUFFERING_UPDATE, &target, sizeof(target));
+                g_seek_accum -= config_get_int(config_global(), "playback.seek_step_sec", 5);
+                g_last_seek_tp = std::chrono::steady_clock::now();
+                state.set_seek_indicator(g_seek_accum);
             }
             return true;
-        }
 
         case Action::Stop:
-            if (cur.playback_state != PlaybackState::Stopped) {
-                event_bus_publish(EV_PLAYBACK_STOP, NULL, 0);
-            }
+            event_bus_publish(EV_PLAYBACK_STOP, NULL, 0);
             return true;
 
         case Action::ToggleMute: {

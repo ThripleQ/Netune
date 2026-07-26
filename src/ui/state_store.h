@@ -52,6 +52,8 @@ struct AppState {
     int           current_time_sec = 0;
     int           current_time_ms  = 0;  /* ms precision for lyrics/karaoke */
     int           total_time_sec = 0;
+    int           seek_indicator = 0;  /* non-zero = pending seek delta (s) */
+    float         seek_target_progress = 0.0f;  /* after seek fires, gauge stays here until progress catches up */
 
     /* volume */
     int  volume = 80;
@@ -124,6 +126,8 @@ public:
     void set_current_song(const SongInfo &song);
     void set_progress(double pos, int cur_sec, int total_sec);
     void set_progress_ms(double pos, int cur_ms, int total_sec);
+    void set_seek_indicator(int delta);
+    void set_seek_target_progress(float p);
 
     /* volume */
     void set_volume(int vol);

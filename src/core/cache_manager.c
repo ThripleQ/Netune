@@ -5,10 +5,15 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#ifndef _WIN32
+#ifdef _WIN32
+#include <direct.h>
+#define PATH_SEP "\\"
+#else
 #include <unistd.h>
+#define PATH_SEP "/"
 #endif
 #include <dirent.h>
+#include <strings.h>
 #include <yyjson.h>
 
 /* ── Internals ──────────────────────────────────────── */
@@ -22,7 +27,11 @@ static char  g_cache_path[1100] = {0};
 static void ensure_dir(const char *dir) {
     struct stat st = {0};
     if (stat(dir, &st) == -1) {
+#ifdef _WIN32
+        _mkdir(dir);
+#else
         mkdir(dir, 0755);
+#endif
     }
 }
 
@@ -30,7 +39,7 @@ static void ensure_dir(const char *dir) {
 int cache_init(const char *cache_dir) {
     if (!cache_dir) return -1;
     snprintf(g_cache_dir, sizeof(g_cache_dir), "%s", cache_dir);
-    snprintf(g_cache_path, sizeof(g_cache_path), "%s/%s", cache_dir, CACHE_FILE_NAME);
+    snprintf(g_cache_path, sizeof(g_cache_path), "%s" PATH_SEP "%s", cache_dir, CACHE_FILE_NAME);
     ensure_dir(cache_dir);
     cache_cleanup();
     LOG_INFO("Cache initialized: %s", g_cache_path);
