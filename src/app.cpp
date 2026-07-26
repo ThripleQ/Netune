@@ -319,9 +319,9 @@ static void ev_playback_finish(const BusEvent *ev, void *data) {
     int idx = st.selected_index;
     int next = -1;
     switch (st.loop_mode) {
-    case LoopMode::Track:   next = idx; break;
+    case LoopMode::Track:    next = idx; break;
     case LoopMode::Playlist: next = (idx + 1 >= total) ? 0 : idx + 1; break;
-    default:                next = (idx + 1 >= total) ? -1 : idx + 1; break;
+    default:                 next = -1; break;
     }
     LOG_INFO("ADV: total=%d idx=%d next=%d loop=%d", total, idx, next, (int)st.loop_mode);
     if (total <= 0) {
