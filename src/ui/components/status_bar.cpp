@@ -19,12 +19,18 @@ Element render_status_bar(const AppState &s) {
     std::string time_str = buf;
 
     /* Append seek target time if pending */
-    if (s.seek_indicator != 0 && s.total_time_sec > 0) {
-        int tgt = s.current_time_sec + s.seek_indicator;
+    bool seek_pending = (s.seek_indicator != 0 || s.seek_target_progress > 0.0f);
+    if (seek_pending && s.total_time_sec > 0) {
+        int tgt;
+        if (s.seek_indicator != 0) {
+            tgt = s.current_time_sec + s.seek_indicator;
+        } else {
+            tgt = (int)(s.seek_target_progress * s.total_time_sec);
+        }
         if (tgt < 0) tgt = 0;
         if (tgt > s.total_time_sec) tgt = s.total_time_sec;
         char tgt_buf[16];
-        const char *arrow = (s.seek_indicator > 0) ? " -> " : " <- ";
+        const char *arrow = (tgt >= s.current_time_sec) ? " -> " : " <- ";
         snprintf(tgt_buf, sizeof(tgt_buf), "%s%02d:%02d", arrow, tgt / 60, tgt % 60);
         time_str += tgt_buf;
     }
