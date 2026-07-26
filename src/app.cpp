@@ -74,8 +74,7 @@ static volatile bool g_running = true;
 /* ── Seek accumulation ────────────────────────────── */
 /* Press: accumulate. Release (>150ms idle): fire once. */
 static int g_seek_accum = 0;
-static int g_seek_target = -1;   /* seek destination (sec), -1 = none; cleared ~50ms after fire */
-static std::chrono::steady_clock::time_point g_seek_fire_tp;
+static int g_seek_target = -1;   /* seek destination (sec), -1 = none; cleared when progress reaches target */
 static std::chrono::steady_clock::time_point g_last_seek_tp;
 
 static void on_signal(int sig) { (void)sig; g_running = false; }
@@ -282,6 +281,12 @@ static void ev_progress(const BusEvent *ev, void *data) {
         int tot = (p[2] > 0 && p[1] > 0) ? p[1] / p[2] : 0;
         int cur_ms = (p[2] > 0) ? (int)((long long)p[0] * 1000LL / p[2]) : 0;
         StateStore::instance().set_progress_ms(prog, cur_ms, tot);
+        /* Clear seek target once progress is within 1s of the target (seek executed) */
+        int seek_dist = cur_ms / 1000 - g_seek_target;
+        if (g_seek_target >= 0 && seek_dist >= -1 && seek_dist <= 1) {
+            g_seek_target = -1;
+            StateStore::instance().set_seek_target_progress(0.0f);
+        }
     }
 }
 /* forward decl — defined below */
@@ -923,11 +928,6 @@ int run_app(int argc, char **argv) {
 
     auto consume_seek = [&]() {
         auto now = std::chrono::steady_clock::now();
-        /* Clear seek target ~50ms after fire (enough for playback thread to process) */
-        if (g_seek_target >= 0 && now - g_seek_fire_tp > std::chrono::milliseconds(50)) {
-            g_seek_target = -1;
-            state.set_seek_target_progress(0.0f);
-        }
         if (g_seek_accum == 0) return;
         if (now - g_last_seek_tp < std::chrono::milliseconds(150))
             return;
@@ -938,7 +938,6 @@ int run_app(int argc, char **argv) {
             if (target < 0) target = 0;
             event_bus_publish(EV_BUFFERING_UPDATE, &target, sizeof(target));
             g_seek_target = target;
-            g_seek_fire_tp = std::chrono::steady_clock::now();
             state.set_seek_target_progress((float)target / st.total_time_sec);
         }
         g_seek_accum = 0;
