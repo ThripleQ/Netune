@@ -2,7 +2,6 @@
 #include "ui/components/theme_util.h"
 #include <cstdio>
 #include <string>
-#include <algorithm>
 using namespace ftxui;
 
 Element render_status_bar(const AppState &s) {
@@ -60,8 +59,8 @@ Element render_status_bar(const AppState &s) {
 
     float gv = s.progress;
     if (s.seek_target_progress > 0.0f) {
-        /* After seek fired, keep gauge at target until progress catches up */
-        gv = std::max((float)s.progress, s.seek_target_progress);
+        /* Show seek target until real progress reaches it */
+        gv = s.seek_target_progress;
     } else if (s.seek_indicator != 0 && s.total_time_sec > 0) {
         /* Accumulating: show merged progress + seek delta */
         int merged = s.current_time_sec + s.seek_indicator;
