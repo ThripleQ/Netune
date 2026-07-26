@@ -24,7 +24,8 @@ Element render_status_bar(const AppState &s) {
         if (tgt < 0) tgt = 0;
         if (tgt > s.total_time_sec) tgt = s.total_time_sec;
         char tgt_buf[16];
-        snprintf(tgt_buf, sizeof(tgt_buf), " -> %02d:%02d", tgt / 60, tgt % 60);
+        const char *arrow = (s.seek_indicator > 0) ? " -> " : " <- ";
+        snprintf(tgt_buf, sizeof(tgt_buf), "%s%02d:%02d", arrow, tgt / 60, tgt % 60);
         time_str += tgt_buf;
     }
 
