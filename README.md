@@ -1,8 +1,8 @@
-# Netune v2.0 — Terminal Music Player
+# Netune v2.0 — 终端音乐播放器
 
-A terminal-based music player with local file support and Netease Cloud Music integration, built with C/FFmpeg and FTXUI.
+基于 C/FFmpeg 和 FTXUI 构建的终端音乐播放器，支持本地文件播放和网易云音乐集成。
 
-## Build
+## 构建
 
 ```bash
 git clone https://github.com/ThripleQ/Netune.git
@@ -12,33 +12,33 @@ cmake --build build -j$(nproc)
 ./build/netune
 ```
 
-### Dependencies
+### 依赖
 
-| Package | Required for |
-|---------|-------------|
-| CMake | Build system |
-| FFmpeg >= 4.0 (>= 5.1 recommended; libavformat, libavcodec, libswresample) | Streaming decoder |
-| ALSA | Audio output (Linux) |
-| PulseAudio | Audio output (Linux) |
-| SDL2 | Audio output (cross-platform) |
-| yyjson | JSON parsing |
-| libyaml | Config loading |
-| Go >= 1.22 | Building netease-cli (needed for Netease features) |
+| 包 | 用途 |
+|------|------|
+| CMake | 构建系统 |
+| FFmpeg >= 4.0（推荐 >= 5.1；需要 libavformat、libavcodec、libswresample） | 流媒体解码 |
+| ALSA | 音频输出（Linux） |
+| PulseAudio | 音频输出（Linux） |
+| SDL2 | 音频输出（跨平台） |
+| yyjson | JSON 解析 |
+| libyaml | 配置加载 |
+| Go >= 1.22 | 构建 netease-cli（网易云功能需要） |
 
-FTXUI and yyjson are auto-downloaded by CMake when they are not installed system-wide.
+FTXUI 和 yyjson 由 CMake 自动下载（若系统未安装）。
 
-Install with your system's package manager. For example on Debian/Ubuntu:
+系统包管理器安装示例（Debian/Ubuntu）：
 
 ```bash
 apt install cmake pkg-config libavformat-dev libavcodec-dev libswresample-dev \
   libasound2-dev libpulse-dev libsdl2-dev libyaml-dev
 ```
 
-> Notes:
-> - `libyyjson-dev` is not available in some Debian/Ubuntu releases. CMake will fall back to building yyjson from source automatically, so it does not need to be installed manually.
-> - `netease-cli` requires **Go >= 1.22**. The `golang-go` package in older Debian/Ubuntu releases (e.g., Ubuntu 22.04 ships Go 1.18) is too old; install a newer Go from [go.dev/dl](https://go.dev/dl/) if you need Netease Cloud Music support.
+> 注意：
+> - 部分 Debian/Ubuntu 版本没有 `libyyjson-dev` 包。CMake 会自动从源码编译 yyjson，无需手动安装。
+> - `netease-cli` 需要 **Go >= 1.22**。旧版 Debian/Ubuntu（如 Ubuntu 22.04 自带 Go 1.18）需要从 [go.dev/dl](https://go.dev/dl/) 安装新版 Go。
 
-### Install to PATH
+### 安装到 PATH
 
 ```bash
 cp build/netune ~/.local/bin/
@@ -47,40 +47,87 @@ cp -r data ~/.local/bin/data/
 netune
 ```
 
-> `netease-cli` is auto-built by CMake when Go >= 1.22 is available. To verify: `ls -l build/netease-cli`
+> `netease-cli` 在检测到 Go >= 1.22 时由 CMake 自动构建。验证：`ls -l build/netease-cli`
 
-## Features
+## 功能
 
-- Local MP3/FLAC/WAV playback
-- Netease Cloud Music (search, playlists, daily recommend)
-- Theme system with 5 presets
-- Fiter mode (`/`) and global search
-- Seek forward/backward (`←`/`→`)
-- Loop modes: Off / One / All (`l` key)
-- ALSA, PulseAudio, SDL2 auto-detection
-- Navigation stack: `Esc` to go back
+- 本地 MP3/FLAC/WAV 播放
+- 网易云音乐（搜索、歌单、每日推荐）
+- 主题系统，内置 5 套预设
+- 筛选模式（`/`）和全局搜索
+- 快进/快退（`←`/`→`）
+- 循环模式：不循环 / 单曲循环 / 列表循环（`r` 键）
+- ALSA、PulseAudio、SDL2 自动检测
+- 导航栈：`Esc` 返回
 
-## Keybindings
+## 快捷键
 
-| Key | Action |
-|-----|--------|
-| `j/k` or `↑/↓` | Navigate |
-| `Tab` | Switch panel |
-| `Enter` | Play / Select |
-| `Space` | Play / Pause |
-| `/` | Filter playlist |
-| `←`/`→` | Seek |
-| `+`/`-` | Volume |
-| `l` | Loop mode |
-| `s` | Stop |
-| `m` | Mute |
-| `?` | Help |
-| `q` | Quit |
+| 按键 | 功能 |
+|------|------|
+| `Tab` | 切换面板（歌单 / 歌曲） |
+| `j / ↓` | 向下 |
+| `k / ↑` | 向上 |
+| `Enter` | 播放选中 |
+| `Space` | 播放 / 暂停 |
+| `n` | 下一首 |
+| `p` | 上一首 |
+| `→` | 快进 |
+| `←` | 快退 |
+| `+ / =` | 音量加 |
+| `-` | 音量减 |
+| `r` | 循环模式 |
+| `l` | 切换歌词 |
+| `m` | 静音 |
+| `s` | 停止 |
+| `/` | 搜索 |
+| `?` | 帮助 |
+| `q / Esc` | 退出 |
 
-## Themes
+## 配置
 
-Edit `data/config.json` → `"theme"`: `default`, `catppuccin`, `dracula`, `netease_dark`, `netease_light`.
+编辑 `data/config.json`（运行时也可指定路径）：
 
-## License
+### 本地音乐
+
+```json
+"music_sources": {
+  "local": {
+    "enabled": true,
+    "dirs": ["~/Music/pop", "~/Music/rock"]
+  }
+}
+```
+
+`dirs` 支持 `~` 和 `$HOME` 等 shell 展开，默认不填则不扫描任何目录。
+
+### 主题
+
+```json
+"ui": {
+  "theme": "default"
+}
+```
+
+`theme` 为配置文件名（存在于 `data/themes/` 或 `~/.config/netune/themes/`），不带 `.yaml`。可选：`default`、`catppuccin`、`dracula`、`netease_dark`、`netease_light`。
+
+### 音频后端
+
+```json
+"audio": {
+  "backend": "auto",
+  "sample_rate": 44100,
+  "volume": 80
+}
+```
+
+`backend`：`auto` | `alsa` | `pulseaudio` | `sdl`。
+
+## 感谢
+
+感谢 [go-musicfox/netease-music](https://github.com/go-musicfox/netease-music) — 完整的网易云 API Go 封装，提供加密/签名/UNM 一站式方案
+
+## 协议
 
 MIT
+
+[English version](README_EN.md)

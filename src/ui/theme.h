@@ -40,10 +40,11 @@ public:
     const Theme& current() const { return theme_; }
 
     /* Resolve a theme name to a file path.
-       - "default" or NULL → XDG_CONFIG_HOME/themes/default.yaml
-       - bare name (e.g. "dracula") → search data/themes/<name>.yaml
-                                     then XDG_CONFIG_HOME/themes/<name>.yaml
-       - path with '/' → used as-is */
+       - "default" or NULL → XDG_CONFIG_HOME/netune/data/themes/default.yaml
+       - bare name (e.g. "dracula") → XDG_CONFIG_HOME/netune/data/themes/<name>.yaml
+       - path with '/' → used as-is
+       Default files are auto-created on startup by ensure_default_data_tree()
+       in app.cpp; no other locations are scanned. */
     static std::string resolve_path(const std::string &name);
 
     /* List available built-in theme names */

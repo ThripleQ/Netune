@@ -38,6 +38,31 @@ StateStore& StateStore::instance() {
     return s;
 }
 
+/* ── Selection validation ──────────────────────────────
+   After any mutation that could leave the selection
+   pointing at nothing, clamp to the nearest valid target.
+   Cross-panel fallback: if the active panel has no
+   selectable items, switch to the other panel. */
+void StateStore::validate_selection(void) {
+    /* Left panel: groups */
+    if (!state_.groups.empty() && state_.group_index >= (int)state_.groups.size())
+        state_.group_index = (int)state_.groups.size() - 1;
+
+    /* Right panel: playlist */
+    if (!state_.playlist.empty() && state_.selected_index >= (int)state_.playlist.size())
+        state_.selected_index = (int)state_.playlist.size() - 1;
+
+    /* If active panel has nothing selectable, try the other */
+    if (state_.active_panel == 1 && state_.playlist.empty()) {
+        if (!state_.groups.empty() || state_.group_index == -1)
+            state_.active_panel = 0;
+    }
+    if (state_.active_panel == 0 && state_.groups.empty() && state_.group_index >= 0) {
+        /* No local groups — fall back to netease entry */
+        state_.group_index = -1;
+    }
+}
+
 void StateStore::set_playback_state(PlaybackState s) {
     state_.playback_state = s;
 }
@@ -88,6 +113,7 @@ void StateStore::set_playlist(const std::vector<SongInfo> &list, int index) {
         state_.playlist.push_back(copy);
     }
     state_.selected_index = index;
+    validate_selection();
 }
 
 void StateStore::set_music_mode(MusicMode mode) {
@@ -98,6 +124,7 @@ void StateStore::set_music_mode(MusicMode mode) {
     state_.playlist.clear();
     state_.selected_index = 0;
     state_.active_panel = 0;
+    validate_selection();
 
     /* When switching to Netease, populate default menu items */
     if (mode == MusicMode::Netease && state_.netease_menu.empty()) {
@@ -179,6 +206,7 @@ void StateStore::set_search_results(const std::vector<SongInfo> &results, int to
 
 void StateStore::set_selected_index(int idx) {
     state_.selected_index = idx;
+    validate_selection();
 }
 
 void StateStore::set_groups(const std::vector<SongGroup> &grps) {
@@ -187,7 +215,9 @@ void StateStore::set_groups(const std::vector<SongGroup> &grps) {
         for (auto &s : g.songs) song_info_free(&s);
     }
     state_.groups.clear();
-    state_.group_index = 0;
+    /* Always start from Netease entry (group_index = -1).
+       User navigates to local groups with down arrow. */
+    state_.group_index = -1;
     state_.selected_index = 0;
 
     /* copy new */
@@ -202,17 +232,21 @@ void StateStore::set_groups(const std::vector<SongGroup> &grps) {
         state_.groups.push_back(std::move(copy));
     }
 
-    /* update right panel to first group */
-    set_group_index(0);
+    /* Only populate right panel if groups exist; otherwise
+       keep netease entry selected (group_index stays -1). */
+    if (!state_.groups.empty())
+        set_group_index(0);
+    validate_selection();
 }
 
 void StateStore::set_group_index(int idx) {
     state_.group_index = idx;
     if (idx < 0) {
         /* -1 = cross-mode entry (netease), no playlist update */
+        validate_selection();
         return;
     }
-    if (idx >= (int)state_.groups.size()) { state_.group_index = 0; return; }
+    if (idx >= (int)state_.groups.size()) { state_.group_index = 0; validate_selection(); return; }
     /* update right panel from this group */
     auto &grp = state_.groups[idx];
     set_playlist(grp.songs, 0);
@@ -267,6 +301,7 @@ void StateStore::clear_nav_stack(void) {
 
 void StateStore::set_active_panel(int panel) {
     state_.active_panel = (panel == 0 || panel == 1) ? panel : 0;
+    validate_selection();
 }
 
 void StateStore::set_song_panel_width(int cols) {

@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [ master, outer ]
+    branches: [ master ]
     tags: [ "v*" ]
   release:
     types: [ published ]

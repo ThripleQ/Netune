@@ -185,8 +185,8 @@ set(CORE_SOURCES
 
 set(INFRA_SOURCES
   src/infra/log.c
-  src/infra/path.c
   src/infra/config.c
+  src/infra/path.c
   src/infra/ring_buffer.c
   src/infra/thread_pool.c
 )
