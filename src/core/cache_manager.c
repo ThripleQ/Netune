@@ -13,6 +13,7 @@
 #define PATH_SEP "/"
 #endif
 #include <dirent.h>
+#include <strings.h>
 #include <yyjson.h>
 
 /* ── Internals ──────────────────────────────────────── */
