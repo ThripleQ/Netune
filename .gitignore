@@ -33,3 +33,7 @@ images.png
 # Keep pre-built binaries
 !bin/
 !bin/*
+
+# External patches (not part of source)
+外部/
+外部2/
