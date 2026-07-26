@@ -85,6 +85,14 @@ void StateStore::set_progress_ms(double pos, int cur_ms, int total_sec) {
     state_.total_time_sec  = total_sec;
 }
 
+void StateStore::set_seek_indicator(int delta) {
+    state_.seek_indicator = delta;
+}
+
+void StateStore::set_seek_target_progress(float p) {
+    state_.seek_target_progress = p;
+}
+
 void StateStore::set_volume(int vol) {
     if (vol < 0) vol = 0;
     if (vol > 100) vol = 100;

@@ -71,6 +71,12 @@ static threadpool_t *g_thread_pool = NULL;
 
 static volatile bool g_running = true;
 
+/* ── Seek accumulation ────────────────────────────── */
+/* Press: accumulate. Release (>150ms idle): fire once. */
+static int g_seek_accum = 0;
+static int g_seek_target = -1;   /* seek destination (sec), -1 = none; cleared when progress catches up */
+static std::chrono::steady_clock::time_point g_last_seek_tp;
+
 static void on_signal(int sig) { (void)sig; g_running = false; }
 
 /* ── Login state ────────────────────────────────────── */
@@ -275,6 +281,11 @@ static void ev_progress(const BusEvent *ev, void *data) {
         int tot = (p[2] > 0 && p[1] > 0) ? p[1] / p[2] : 0;
         int cur_ms = (p[2] > 0) ? (int)((long long)p[0] * 1000LL / p[2]) : 0;
         StateStore::instance().set_progress_ms(prog, cur_ms, tot);
+        /* If seek target was set, clear indicator once progress catches up */
+        if (g_seek_target >= 0 && cur_ms / 1000 >= g_seek_target) {
+            g_seek_target = -1;
+            StateStore::instance().set_seek_target_progress(0.0f);
+        }
     }
 }
 /* forward decl — defined below */
@@ -914,8 +925,27 @@ int run_app(int argc, char **argv) {
 
     auto &state = StateStore::instance();
 
+    auto consume_seek = [&]() {
+        if (g_seek_accum == 0) return;
+        auto now = std::chrono::steady_clock::now();
+        if (now - g_last_seek_tp < std::chrono::milliseconds(150))
+            return;
+        const AppState &st = state.state();
+        if (st.playback_state != PlaybackState::Stopped && st.total_time_sec > 0) {
+            int target = st.current_time_sec + g_seek_accum;
+            if (target > st.total_time_sec) target = st.total_time_sec;
+            if (target < 0) target = 0;
+            event_bus_publish(EV_BUFFERING_UPDATE, &target, sizeof(target));
+            g_seek_target = target;
+            state.set_seek_target_progress((float)target / st.total_time_sec);
+        }
+        g_seek_accum = 0;
+        state.set_seek_indicator(0);
+    };
+
     auto component = Renderer([&]() -> Element {
         event_bus_poll();
+        consume_seek();
         const AppState &s = state.state();
 
         state.set_song_panel_width(screen.dimx() - 29);
@@ -978,6 +1008,14 @@ int run_app(int argc, char **argv) {
     });
 
     component |= CatchEvent([&](ftxui::Event event) -> bool {
+        /* ── Non-seek key → discard pending seek ── */
+        if (g_seek_accum != 0 && event != ftxui::Event::ArrowLeft && event != ftxui::Event::ArrowRight) {
+            g_seek_accum = 0;
+            g_seek_target = -1;
+            state.set_seek_indicator(0);
+            state.set_seek_target_progress(0.0f);
+        }
+
         std::string ev_key;
         if (event == ftxui::Event::Backspace) { ev_key = "backspace"; }
         else if (event == ftxui::Event::Tab) { ev_key = "tab"; }
@@ -1476,25 +1514,21 @@ int run_app(int argc, char **argv) {
             return true;
         }
 
-        case Action::SeekForward: {
+        case Action::SeekForward:
             if (cur.playback_state != PlaybackState::Stopped && cur.total_time_sec > 0) {
-                int step = config_get_int(config_global(), "playback.seek_step_sec", 5);
-                int target = cur.current_time_sec + step;
-                if (target > cur.total_time_sec) target = cur.total_time_sec;
-                event_bus_publish(EV_BUFFERING_UPDATE, &target, sizeof(target));
+                g_seek_accum += config_get_int(config_global(), "playback.seek_step_sec", 5);
+                g_last_seek_tp = std::chrono::steady_clock::now();
+                state.set_seek_indicator(g_seek_accum);
             }
             return true;
-        }
 
-        case Action::SeekBackward: {
+        case Action::SeekBackward:
             if (cur.playback_state != PlaybackState::Stopped && cur.total_time_sec > 0) {
-                int step = config_get_int(config_global(), "playback.seek_step_sec", 5);
-                int target = cur.current_time_sec - step;
-                if (target < 0) target = 0;
-                event_bus_publish(EV_BUFFERING_UPDATE, &target, sizeof(target));
+                g_seek_accum -= config_get_int(config_global(), "playback.seek_step_sec", 5);
+                g_last_seek_tp = std::chrono::steady_clock::now();
+                state.set_seek_indicator(g_seek_accum);
             }
             return true;
-        }
 
         case Action::Stop:
             if (cur.playback_state != PlaybackState::Stopped) {

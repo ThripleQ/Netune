@@ -2,6 +2,7 @@
 #include "ui/components/theme_util.h"
 #include <cstdio>
 #include <string>
+#include <algorithm>
 using namespace ftxui;
 
 Element render_status_bar(const AppState &s) {
@@ -17,6 +18,16 @@ Element render_status_bar(const AppState &s) {
     int m = s.current_time_sec / 60, sc = s.current_time_sec % 60;
     snprintf(buf, sizeof(buf), "%02d:%02d", m, sc);
     std::string time_str = buf;
+
+    /* Append seek target time if pending */
+    if (s.seek_indicator != 0 && s.total_time_sec > 0) {
+        int tgt = s.current_time_sec + s.seek_indicator;
+        if (tgt < 0) tgt = 0;
+        if (tgt > s.total_time_sec) tgt = s.total_time_sec;
+        char tgt_buf[16];
+        snprintf(tgt_buf, sizeof(tgt_buf), " -> %02d:%02d", tgt / 60, tgt % 60);
+        time_str += tgt_buf;
+    }
 
     const char *loop_str = "Off";
     switch (s.loop_mode) {
@@ -47,8 +58,19 @@ Element render_status_bar(const AppState &s) {
         top_line = buf;
     }
 
+    float gv = s.progress;
+    if (s.seek_target_progress > 0.0f) {
+        /* After seek fired, keep gauge at target until progress catches up */
+        gv = std::max((float)s.progress, s.seek_target_progress);
+    } else if (s.seek_indicator != 0 && s.total_time_sec > 0) {
+        /* Accumulating: show merged progress + seek delta */
+        int merged = s.current_time_sec + s.seek_indicator;
+        if (merged < 0) merged = 0;
+        if (merged > s.total_time_sec) merged = s.total_time_sec;
+        gv = (float)merged / s.total_time_sec;
+    }
     return theme_bg(vbox(Elements{
         theme_fg(text(top_line)) | dim,
-        gauge(s.progress) | theme_accent,
+        gauge(gv) | theme_accent,
     }));
 }
