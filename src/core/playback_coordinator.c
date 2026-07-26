@@ -15,9 +15,14 @@
 #include <stdatomic.h>
 #ifndef _WIN32
 #include <unistd.h>
+#include <sys/wait.h>
 #endif
 #include <sys/stat.h>
-#include <sys/wait.h>
+/* NOTE: Windows has <signal.h> but with a limited signal set (SIGABRT, SIGFPE,
+   SIGILL, SIGINT, SIGSEGV, SIGTERM). This file does not currently use any
+   signal functions, so the header is included only for potential indirect use.
+   If POSIX-specific signals (e.g. SIGCHLD, SIGPIPE) are added later, wrap
+   them in #ifndef _WIN32. */
 #include <signal.h>
 
 
@@ -206,8 +211,29 @@ static void* playback_thread(void *arg) {
                 if (audio)   { audio_output_destroy(audio); audio = NULL; }
 
                 const char *play_path = cmd.path;
-                int is_local = (cmd.path[0] == '/' || cmd.path[0] == '~'
-                                || strchr(cmd.path, '.'));
+
+                /* Determine if path points to a local file (vs. a streaming
+                   source ID such as a netease song ID).  Checks, in order:
+                   1. file:// URL prefix
+                   2. POSIX absolute path (starts with '/')
+                   3. User home directory (starts with '~')
+                   4. Windows drive-letter absolute path (e.g. C:\ or C:/)
+                   5. Contains a path separator AND a dot — likely a
+                      relative file path with an extension */
+                int is_local = 0;
+                if (strncmp(cmd.path, "file://", 7) == 0) {
+                    is_local = 1;
+                } else if (cmd.path[0] == '/' || cmd.path[0] == '~') {
+                    is_local = 1;
+                } else if (((cmd.path[0] >= 'A' && cmd.path[0] <= 'Z') ||
+                            (cmd.path[0] >= 'a' && cmd.path[0] <= 'z')) &&
+                           cmd.path[1] == ':') {
+                    is_local = 1;
+                } else if ((strchr(cmd.path, '/') || strchr(cmd.path, '\\')) &&
+                           strchr(cmd.path, '.')) {
+                    is_local = 1;
+                }
+
                 int is_ff = 0;  /* using FFmpeg stream */
 
                 if (!is_local) {

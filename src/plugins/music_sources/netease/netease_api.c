@@ -5,9 +5,12 @@
 #include <string.h>
 #ifndef _WIN32
 #include <unistd.h>
+#define STDERR_REDIRECT " 2>/dev/null"
 #else
+#include <windows.h>
 #define popen  _popen
 #define pclose _pclose
+#define STDERR_REDIRECT " 2>NUL"
 #endif
 #include <stdarg.h>
 #include <yyjson.h>
@@ -137,7 +140,7 @@ static int parselist(const char *json, const char *loc, SongInfo **out, int *cnt
 
 /* ── Init ──────────────────────────────────────────── */
 int netease_init(void) {
-    char *n=run("%s account-name 2>/dev/null",CLI);
+    char *n=run("%s account-name%s",CLI,STDERR_REDIRECT);
     if(!n){LOG_WARN("netease-cli not found");return -1;}
     if(n[0]&&strcmp(n,"未登录\n")!=0&&strcmp(n,"error\n")!=0){size_t l=strlen(n);if(l>0&&n[l-1]=='\n')n[l-1]=0;snprintf(g_name,sizeof(g_name),"%s",n);}
     free(n);LOG_INFO("netease ready");return 0;
@@ -149,7 +152,7 @@ const char* netease_account_name(void) { return g_name[0]?g_name:NULL; }
 int netease_search(const char *kw, int l, int o, NSSearchResult *out) {
     (void)o;
     memset(out,0,sizeof(*out)); if(!kw)return -1;
-    char *j=run("%s search \"%s\" 2>/dev/null",CLI,kw); if(!j)return -1;
+    char *j=run("%s search \"%s\"%s",CLI,kw,STDERR_REDIRECT); if(!j)return -1;
 
     yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
     free(j);
@@ -225,17 +228,17 @@ int netease_qr_key(char *u, size_t usz, char *url, size_t usz2) {
     return rv;
 }
 
-char* netease_qr_render(const char *url) { return run("%s qr-render \"%s\" 2>/dev/null",CLI,url); }
+char* netease_qr_render(const char *url) { return run("%s qr-render \"%s\"%s",CLI,url,STDERR_REDIRECT); }
 
 int netease_qr_poll(const char *uk) {
-    char *j=run("%s qr-check \"%s\" 2>/dev/null",CLI,uk); if(!j)return -1;
+    char *j=run("%s qr-check \"%s\"%s",CLI,uk,STDERR_REDIRECT); if(!j)return -1;
     yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
     free(j);
     if (!doc) return -1;
     yyjson_val *root = yyjson_doc_get_root(doc);
     long long c = root ? jget_int(root, "code") : 0;
     yyjson_doc_free(doc);
-    if(c==803){char*n=run("%s account-name 2>/dev/null",CLI);if(n){size_t l=strlen(n);if(l>0&&n[l-1]=='\n')n[l-1]=0;if(strcmp(n,"error")!=0&&strcmp(n,"未登录")!=0)snprintf(g_name,sizeof(g_name),"%s",n);free(n);}return 0;}
+    if(c==803){char*n=run("%s account-name%s",CLI,STDERR_REDIRECT);if(n){size_t l=strlen(n);if(l>0&&n[l-1]=='\n')n[l-1]=0;if(strcmp(n,"error")!=0&&strcmp(n,"未登录")!=0)snprintf(g_name,sizeof(g_name),"%s",n);free(n);}return 0;}
     if(c==800)return 2;
     if(c==802)return 3;
     return 1;
@@ -244,7 +247,7 @@ bool netease_is_logged_in(void) { return g_name[0]!=0; }
 
 /* ── Playlists ────────────────────────────────────── */
 int netease_playlists(bool favorited, SongInfo **out, int *count) {
-    char *j=run("%s playlists 2>/dev/null",CLI); if(!j)return -1;
+    char *j=run("%s playlists%s",CLI,STDERR_REDIRECT); if(!j)return -1;
     yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
     free(j);
     if (!doc) { *out=NULL; *count=0; return -1; }
@@ -281,13 +284,13 @@ int netease_playlists(bool favorited, SongInfo **out, int *count) {
 }
 
 int netease_playlist_songs(const char *id, SongInfo **out, int *count) {
-    char *j=run("%s playlist-tracks \"%s\" 2>/dev/null",CLI,id); if(!j)return -1;
+    char *j=run("%s playlist-tracks \"%s\"%s",CLI,id,STDERR_REDIRECT); if(!j)return -1;
     int r = parselist(j, "songs", out, count);
     free(j); return r;
 }
 
 int netease_liked_songs(SongInfo **out, int *count) {
-    char *j=run("%s liked 2>/dev/null",CLI); if(!j)return -1;
+    char *j=run("%s liked%s",CLI,STDERR_REDIRECT); if(!j)return -1;
     int r = parselist(j, "songs", out, count);
     free(j); return r;
 }
@@ -295,7 +298,7 @@ int netease_liked_songs(SongInfo **out, int *count) {
 int netease_menu_songs(int type, int limit, SongInfo **out, int *count) {
     (void)limit;
     if (type == 0) {
-        char *j = run("%s recommend-songs 2>/dev/null",CLI); if(!j) return -1;
+        char *j = run("%s recommend-songs%s",CLI,STDERR_REDIRECT); if(!j) return -1;
         int r = parselist(j, "songs", out, count);
         free(j); return r;
     }
@@ -305,7 +308,7 @@ int netease_menu_songs(int type, int limit, SongInfo **out, int *count) {
 /* ── Play URL ──────────────────────────────────────── */
 int netease_play_url(const char *id, char *url, size_t sz) {
     const char *lvl = "standard";
-    char *j = run("%s song-url \"%s\" %s 2>/dev/null",CLI,id,lvl); if(!j)return -1;
+    char *j = run("%s song-url \"%s\" %s%s",CLI,id,lvl,STDERR_REDIRECT); if(!j)return -1;
     yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
     free(j);
     if (!doc) { if(sz>0)url[0]=0; return -1; }
@@ -356,10 +359,18 @@ int netease_lyric(const char *song_id, char **buf) {
 }
 
 char* netease_download(const char *id, const char *url) {
-    char path[256]; snprintf(path,sizeof(path),"/tmp/netune_%s.mp3",id);
-    unlink(path);
+    char path[512];
+#ifndef _WIN32
+    snprintf(path, sizeof(path), "/tmp/netune_%s.mp3", id);
+#else
+    char tmpdir[MAX_PATH];
+    DWORD tlen = GetTempPathA(MAX_PATH, tmpdir);
+    if (tlen == 0 || tlen >= MAX_PATH) return NULL;
+    snprintf(path, sizeof(path), "%snetune_%s.mp3", tmpdir, id);
+#endif
+    remove(path);
     char cmd[3072]; snprintf(cmd,sizeof(cmd),"curl -sL --max-time 60 \"%s\" -o \"%s\"",url,path);
     int rc = system(cmd);
-    if (rc != 0) { unlink(path); return NULL; }
+    if (rc != 0) { remove(path); return NULL; }
     return strdup(path);
 }

@@ -43,7 +43,11 @@ void log_write(LogLevel level, const char *file, int line,
     /* timestamp */
     time_t now = time(NULL);
     struct tm tm_buf;
+#ifdef _WIN32
+    localtime_s(&tm_buf, &now);
+#else
     localtime_r(&now, &tm_buf);
+#endif
     char ts[32];
     strftime(ts, sizeof(ts), "%H:%M:%S", &tm_buf);
 

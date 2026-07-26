@@ -4,6 +4,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+
+#ifdef _WIN32
+  #define POPEN  _popen
+  #define PCLOSE _pclose
+#else
+  #define POPEN  popen
+  #define PCLOSE pclose
+#endif
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -25,23 +33,23 @@ static void cover_scale(const uint8_t *src, int sw, int sh, int ch,
 
 /* ── Run a program and capture stdout ────────────── */
 static char *popen_read(const char *cmd, size_t *out_size) {
-    FILE *fp = popen(cmd, "r");
+    FILE *fp = POPEN(cmd, "r");
     if (!fp) return NULL;
     size_t cap = 65536, len = 0;
     char *buf = (char*)malloc(cap);
-    if (!buf) { pclose(fp); return NULL; }
+    if (!buf) { PCLOSE(fp); return NULL; }
     while (!feof(fp)) {
         if (len + 4096 >= cap) {
             cap *= 2;
             char *t = (char*)realloc(buf, cap);
-            if (!t) { free(buf); pclose(fp); return NULL; }
+            if (!t) { free(buf); PCLOSE(fp); return NULL; }
             buf = t;
         }
         size_t r = fread(buf + len, 1, cap - len - 1, fp);
         if (r > 0) len += r; else break;
     }
     buf[len] = '\0';
-    pclose(fp);
+    PCLOSE(fp);
     if (out_size) *out_size = len;
     return buf;
 }
@@ -54,7 +62,11 @@ int cover_load(const char *url, CoverData *out) {
 
     /* Download image data */
     char cmd[2048];
+#ifdef _WIN32
+    snprintf(cmd, sizeof(cmd), "curl -sL --max-time 10 \"%s\" 2>NUL", url);
+#else
     snprintf(cmd, sizeof(cmd), "curl -sL --max-time 10 '%s' 2>/dev/null", url);
+#endif
     size_t img_size = 0;
     char *img_data = popen_read(cmd, &img_size);
     if (!img_data || img_size == 0) {

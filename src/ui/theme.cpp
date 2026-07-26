@@ -4,11 +4,35 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#ifdef _WIN32
+#include <io.h>
+#ifndef R_OK
+#define R_OK 0x04
+#endif
+#define access _access
+#else
 #include <unistd.h>
+#endif
 #include <algorithm>
 
-/* ── XDG path helper (local copy, avoids dependency on app.cpp) ── */
+/* ── Path separator helper ────────────────────────── */
+#ifdef _WIN32
+static const char PATH_SEP = '\\';
+#else
+static const char PATH_SEP = '/';
+#endif
+
+/* ── XDG / Windows config path helper ─────────────── */
 static std::string xdg_config_path(const std::string &sub) {
+#ifdef _WIN32
+    const char *d = getenv("APPDATA");
+    if (d && d[0]) {
+        return std::string(d) + "\\netune\\" + sub;
+    }
+    const char *home = getenv("USERPROFILE");
+    if (!home) home = "C:\\";
+    return std::string(home) + "\\AppData\\Roaming\\netune\\" + sub;
+#else
     const char *d = getenv("XDG_CONFIG_HOME");
     if (d && d[0]) {
         return std::string(d) + "/netune/" + sub;
@@ -16,6 +40,7 @@ static std::string xdg_config_path(const std::string &sub) {
     const char *home = getenv("HOME");
     if (!home) home = "/tmp";
     return std::string(home) + "/.config/netune/" + sub;
+#endif
 }
 
 /* ── Hex ↔ ThemeColor ─────────────────────────────── */
@@ -113,42 +138,30 @@ void ThemeManager::derive_colors() {
 }
 
 /* Resolve a theme name to a file path.
-   Tries: data/themes/<name>.yaml, then XDG config dir. */
+   All themes live under XDG_CONFIG_HOME/netune/data/themes/.
+   No external scanning or fallback lookup is performed. */
 std::string ThemeManager::resolve_path(const std::string &name) {
     if (name.empty() || name == "default") {
-        return xdg_config_path("themes/default.yaml");
+        return xdg_config_path(std::string("data/themes") + PATH_SEP + "default.yaml");
     }
 
-    /* If it looks like a path (contains /), use directly */
-    if (name.find('/') != std::string::npos) {
+    /* If it looks like a path (contains / or \), use directly */
+    if (name.find('/') != std::string::npos || name.find('\\') != std::string::npos) {
         return name;
     }
 
-    /* Bare name → try data/themes/<name>.yaml relative to CWD */
-    std::string data_path = std::string("data/themes/") + name + ".yaml";
-    if (access(data_path.c_str(), R_OK) == 0) {
-        return data_path;
-    }
-
-    /* Then try XDG_CONFIG_HOME/themes/<name>.yaml */
-    std::string xdg_path = xdg_config_path("themes/" + name + ".yaml");
-    if (access(xdg_path.c_str(), R_OK) == 0) {
-        return xdg_path;
-    }
-
-    /* Fallback: return data path even if it doesn't exist (load() will handle error) */
-    return data_path;
+    /* Bare name → data/themes/<name>.yaml under the config dir */
+    return xdg_config_path(std::string("data/themes") + PATH_SEP + name + ".yaml");
 }
 
-/* List available built-in theme names from data/themes/ */
+/* List available built-in theme names from data/themes/ under XDG config dir */
 std::vector<std::string> ThemeManager::list_builtin_themes() {
     std::vector<std::string> names;
-    /* Check a few known themes (avoids dirent dependency) */
+    /* Check the known bundled themes (avoids dirent dependency) */
     const char *known[] = {"default", "dracula", "catppuccin",
-                           "netease_dark", "netease_light", "tokyonight",
-                           "gruvbox", "nord", "rosepine"};
+                           "netease_dark", "netease_light"};
     for (const char *n : known) {
-        std::string p = std::string("data/themes/") + n + ".yaml";
+        std::string p = xdg_config_path(std::string("data/themes") + PATH_SEP + n + ".yaml");
         if (access(p.c_str(), R_OK) == 0)
             names.push_back(n);
     }
