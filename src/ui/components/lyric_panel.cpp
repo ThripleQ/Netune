@@ -23,7 +23,7 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
         if (kprog > 1.0f) kprog = 1.0f;
     }
 
-    const int max_text = col_w - 2;  /* indent */
+    const int max_text = col_w - 1;  /* 1-char safety margin */
     if (max_text < 4) return text("") | size(HEIGHT, EQUAL, 20);
 
     auto centered = [](Element e) {
