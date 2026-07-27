@@ -1,5 +1,3 @@
-# Netune v2.0 — Terminal Music Player
-
 A terminal-based music player with local file support and Netease Cloud Music integration, built with C/FFmpeg and FTXUI.
 
 ## Build
