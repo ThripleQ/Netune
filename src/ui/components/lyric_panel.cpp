@@ -26,6 +26,10 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
     const int max_text = col_w - 2;  /* indent */
     if (max_text < 4) return text("") | size(HEIGHT, EQUAL, 20);
 
+    auto centered = [](Element e) {
+        return hbox({filler(), std::move(e), filler()});
+    };
+
     Elements lines;
     for (int i = 0; i < ly->count; i++) {
         std::string raw = ly->lines[i].text ? ly->lines[i].text : "";
@@ -47,22 +51,22 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
         }
 
         if (i == base) {
-            /* Current line: text row + progress bar row */
-            int text_chars = 2 + string_width(raw);
-            int bar_len = (int)(kprog * (float)(text_chars - 2));
+            /* Current line: centered text + centered progress bar below */
+            int text_w = string_width(raw);
+            int bar_len = (int)(kprog * (float)text_w);
             if (bar_len < 0) bar_len = 0;
-            if (bar_len > text_chars - 2) bar_len = text_chars - 2;
-            std::string bar_str = std::string(2, ' ');
+            if (bar_len > text_w) bar_len = text_w;
+            std::string bar_str;
             for (int j = 0; j < bar_len; j++) bar_str += "\u2501";
 
             lines.push_back(
                 vbox({
-                    text("  " + raw) | bold,
-                    theme_accent(text(bar_str)),
+                    centered(text(raw) | bold),
+                    centered(theme_accent(text(bar_str))),
                 }) | focus
             );
         } else {
-            lines.push_back(theme_fg(text("  " + raw)) | dim);
+            lines.push_back(centered(theme_fg(text(raw)) | dim));
         }
     }
 
