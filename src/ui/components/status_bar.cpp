@@ -23,9 +23,10 @@ class GaugeSmooth : public ftxui::Node {
     int width = box_.x_max - box_.x_min + 1;
     if (width <= 0) return;
 
-    float exact_pos = progress_ * (float)(width - 1);
-    int full = (int)exact_pos;
-    int frac = (int)((exact_pos - full) * 8.F);
+    /* exact number of character-positions to fill (float) */
+    float filled = progress_ * (float)width;
+    int full = (int)filled;                    /* fully filled chars */
+    int frac = (int)((filled - full) * 8.F);   /* 0-8, fractional part */
     if (frac < 0) frac = 0;
     if (frac > 8) frac = 8;
 
@@ -34,15 +35,21 @@ class GaugeSmooth : public ftxui::Node {
 
     int y = box_.y_min;
     int x0 = box_.x_min;
+    int x;
 
-    for (int i = 0; i < full && i < width; i++)
-      screen.at(x0 + i, y) = "\u2588";
+    /* full blocks */
+    for (x = 0; x < full && x < width; x++)
+      screen.at(x0 + x, y) = "\u2588";
 
-    if (full < width - 1)
-      screen.at(x0 + full, y) = kFrac[frac];
+    /* fractional block (if room) */
+    if (x < width) {
+      screen.at(x0 + x, y) = kFrac[frac];
+      x++;
+    }
 
-    for (int i = full + 1; i < width; i++)
-      screen.at(x0 + i, y) = " ";
+    /* trailing spaces */
+    for (; x < width; x++)
+      screen.at(x0 + x, y) = " ";
   }
 
  private:
