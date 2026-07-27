@@ -1,8 +1,9 @@
 #include "ui/components/theme_util.h"
 
 /* ── Hardcoded safe defaults (Tokyo Night) ───────────── */
-/* Used when a theme color slot has never been set. */
-static const Color kDefaultBg     = Color::RGB( 26,  27,  38);
+/* Used when a theme color slot has never been set.
+   Exception: bg has NO fallback — when unset, the terminal's own
+   background shows through (no bgcolor decoration applied). */
 static const Color kDefaultFg     = Color::RGB(192, 202, 245);
 static const Color kDefaultAccent = Color::RGB(122, 162, 247);
 static const Color kDefaultMuted  = Color::RGB( 86,  95, 137);
@@ -15,9 +16,6 @@ static const Color kDefaultError  = Color::RGB(247, 118, 142);
 static Color pick_fg(const Theme &t) {
     return t.fg.has_color ? Color::RGB(t.fg.r, t.fg.g, t.fg.b) : kDefaultFg;
 }
-static Color pick_bg(const Theme &t) {
-    return t.bg.has_color ? Color::RGB(t.bg.r, t.bg.g, t.bg.b) : kDefaultBg;
-}
 static Color pick_accent(const Theme &t) {
     return t.accent.has_color ? Color::RGB(t.accent.r, t.accent.g, t.accent.b) : kDefaultAccent;
 }
@@ -29,7 +27,10 @@ Element theme_fg(Element e) {
 }
 
 Element theme_bg(Element e) {
-    return e | bgcolor(pick_bg(ThemeManager::instance().current()));
+    auto &t = ThemeManager::instance().current();
+    if (t.bg.has_color)
+        return e | bgcolor(Color::RGB(t.bg.r, t.bg.g, t.bg.b));
+    return e;  /* no bg → terminal native background shows through */
 }
 
 Element theme_accent(Element e) {

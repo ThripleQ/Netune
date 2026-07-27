@@ -222,12 +222,11 @@ bool ThemeManager::load(const std::string &yaml_path) {
         /* Derive any unset extended colors */
         derive_colors();
 
-        /* Safety net: if core colors are STILL unset (empty/malformed YAML),
-           fall back to hardcoded safe defaults so the UI is always readable. */
-        if (!theme_.bg.has_color || !theme_.fg.has_color || !theme_.accent.has_color) {
-            LOG_WARN("Theme is missing core colors, applying safe defaults");
-            theme_.name = "Default Dark";
-            theme_.bg    = theme_color_from_hex("#1a1b26");
+        /* Safety net: if fg or accent are still unset (empty/malformed YAML),
+           fall back to hardcoded defaults. bg is intentionally excluded —
+           leaving it unset lets the terminal's own background show through. */
+        if (!theme_.fg.has_color || !theme_.accent.has_color) {
+            LOG_WARN("Theme is missing fg or accent, applying safe defaults");
             theme_.fg    = theme_color_from_hex("#c0caf5");
             theme_.accent = theme_color_from_hex("#7aa2f7");
             derive_colors();
@@ -240,10 +239,10 @@ bool ThemeManager::load(const std::string &yaml_path) {
         return true;
     }
 
-    /* File not found — fallback to safe hardcoded defaults */
+    /* File not found — fallback to safe hardcoded defaults.
+       bg intentionally omitted to let terminal bg show through. */
     LOG_WARN("Cannot open theme: %s, using safe defaults", yaml_path.c_str());
     theme_.name = "Default Dark";
-    theme_.bg = theme_color_from_hex("#1a1b26");
     theme_.fg = theme_color_from_hex("#c0caf5");
     theme_.accent = theme_color_from_hex("#7aa2f7");
     derive_colors();
