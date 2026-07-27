@@ -14,9 +14,6 @@
 #include <windows.h>
 #include <io.h>
 #include <direct.h>      /* _mkdir */
-#define access _access
-#define F_OK 0
-#define mkdir(p,m) _mkdir(p)
 #define PATH_SEP "\\"
 #define PATH_SEP_CHR '\\'
 #endif
@@ -24,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <cstring>
+#include "compat/utf8.h"   /* UTF-8 aware getenv/fopen/access/mkdir for Windows */
 #include <vector>
 #include <string>
 #include <algorithm>
@@ -499,13 +497,13 @@ static void ev_playlist_changed(const BusEvent *ev, void *data) {
 
 /* ── XDG path helpers ────────────────────────────── */
 static const char *xdg_dir(const char *env, const char *sub) {
-    const char *d = getenv(env);
+    const char *d = getenv_utf8(env);
     static char buf[1024];
 #ifndef _WIN32
     if (d && d[0]) {
         snprintf(buf, sizeof(buf), "%s/netune/%s", d, sub ? sub : "");
     } else {
-        const char *home = getenv("HOME");
+        const char *home = getenv_utf8("HOME");
         if (!home) home = "/tmp";
         const char *prefix = strstr(env, "CONFIG") ? ".config" : ".cache";
         snprintf(buf, sizeof(buf), "%s/%s/netune/%s", home, prefix, sub ? sub : "");
@@ -517,11 +515,11 @@ static const char *xdg_dir(const char *env, const char *sub) {
         win_env = "LOCALAPPDATA";
     else if (strstr(env, "CONFIG"))
         win_env = "APPDATA";
-    if (win_env) d = getenv(win_env);
+    if (win_env) d = getenv_utf8(win_env);
     if (d && d[0]) {
         snprintf(buf, sizeof(buf), "%s\\netune\\%s", d, sub ? sub : "");
     } else {
-        const char *home = getenv("USERPROFILE");
+        const char *home = getenv_utf8("USERPROFILE");
         if (!home) home = "C:\\";
         const char *prefix = strstr(env, "CONFIG") ? ".config" : ".cache";
         snprintf(buf, sizeof(buf), "%s\\%s\\netune\\%s", home, prefix, sub ? sub : "");
@@ -546,20 +544,12 @@ static void ensure_dir(const char *filepath) {
         if (*p == '/' || *p == '\\') {
             char saved = *p;
             *p = 0;
-#ifndef _WIN32
-            mkdir(tmp, 0755);
-#else
-            _mkdir(tmp);
-#endif
+            mkdir_utf8(tmp);
             *p = saved;
         }
     }
     if (tmp[0]) {
-#ifndef _WIN32
-        mkdir(tmp, 0755);
-#else
-        _mkdir(tmp);
-#endif
+        mkdir_utf8(tmp);
     }
     (void)sep_chr;
 }
@@ -572,21 +562,21 @@ static void ensure_dir(const char *filepath) {
 static const char *xdg_data_root(void) {
     static char buf[1024];
 #ifndef _WIN32
-    const char *d = getenv("XDG_CONFIG_HOME");
+    const char *d = getenv_utf8("XDG_CONFIG_HOME");
     if (d && d[0]) {
         snprintf(buf, sizeof(buf), "%s/netune/data", d);
     } else {
-        const char *home = getenv("HOME");
+        const char *home = getenv_utf8("HOME");
         if (!home) home = "/tmp";
         snprintf(buf, sizeof(buf), "%s/.config/netune/data", home);
     }
 #else
     /* Windows: use APPDATA (same mapping as XDG_CONFIG_HOME) */
-    const char *d = getenv("APPDATA");
+    const char *d = getenv_utf8("APPDATA");
     if (d && d[0]) {
         snprintf(buf, sizeof(buf), "%s\\netune\\data", d);
     } else {
-        const char *home = getenv("USERPROFILE");
+        const char *home = getenv_utf8("USERPROFILE");
         if (!home) home = "C:\\";
         snprintf(buf, sizeof(buf), "%s\\.config\\netune\\data", home);
     }
@@ -705,9 +695,9 @@ static void ensure_default_data_tree(void) {
     auto ensure_file = [&](const char *rel, const char *content) {
         char path[1024];
         snprintf(path, sizeof(path), "%s" PATH_SEP "%s", root, rel);
-        if (access(path, F_OK) == 0) return;  /* already there */
+        if (access_utf8(path, F_OK) == 0) return;  /* already there */
         ensure_dir(path);
-        FILE *f = fopen(path, "w");
+        FILE *f = fopen_utf8(path, "w");
         if (f) {
             fputs(content, f);
             fclose(f);
@@ -758,7 +748,7 @@ int run_app(int argc, char **argv) {
     /* ── Cache (XDG_CACHE_HOME) ─────────────────────── */
     const char *cache_dir = xdg_dir("XDG_CACHE_HOME", NULL);
     ensure_dir(cache_dir);
-    mkdir(cache_dir, 0755);
+    mkdir_utf8(cache_dir);
     cache_init(cache_dir);
     search_manager_init();
 
@@ -835,10 +825,10 @@ int run_app(int argc, char **argv) {
     const char *l_path;
     if (l_name && strcmp(l_name, "default") != 0
 #ifndef _WIN32
-        && l_name[0] == '/' && access(l_name, F_OK) == 0) {
+        && l_name[0] == '/' && access_utf8(l_name, F_OK) == 0) {
 #else
         && (((l_name[0] && l_name[1] == ':') || l_name[0] == '/' || l_name[0] == '\\')
-            && access(l_name, F_OK) == 0)) {
+            && access_utf8(l_name, F_OK) == 0)) {
 #endif
         l_path = l_name;  /* absolute path: use as-is */
     } else {

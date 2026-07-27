@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include "compat/utf8.h"   /* UTF-8 aware fopen for Windows */
 
 /* ── Parse a single LRC timestamp line ──────────────── */
 /* Returns number of lines parsed from this one string. */
@@ -132,7 +133,7 @@ int lyric_find_line(const Lyrics *ly, int time_ms) {
 /* ── Load LRC from file ──────────────────────────── */
 Lyrics* lrc_load_file(const char *path) {
     if (!path) return NULL;
-    FILE *f = fopen(path, "rb");
+    FILE *f = fopen_utf8(path, "rb");
     if (!f) return NULL;
 
     fseek(f, 0, SEEK_END);

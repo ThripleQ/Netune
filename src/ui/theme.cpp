@@ -4,15 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#ifdef _WIN32
-#include <io.h>
-#ifndef R_OK
-#define R_OK 0x04
-#endif
-#define access _access
-#else
-#include <unistd.h>
-#endif
+#include "compat/utf8.h"
 #include <algorithm>
 
 /* ── Path separator helper ────────────────────────── */
@@ -33,11 +25,11 @@ static std::string xdg_config_path(const std::string &sub) {
     if (!home) home = "C:\\";
     return std::string(home) + "\\AppData\\Roaming\\netune\\" + sub;
 #else
-    const char *d = getenv("XDG_CONFIG_HOME");
+    const char *d = getenv_utf8("XDG_CONFIG_HOME");
     if (d && d[0]) {
         return std::string(d) + "/netune/" + sub;
     }
-    const char *home = getenv("HOME");
+    const char *home = getenv_utf8("HOME");
     if (!home) home = "/tmp";
     return std::string(home) + "/.config/netune/" + sub;
 #endif
@@ -162,14 +154,14 @@ std::vector<std::string> ThemeManager::list_builtin_themes() {
                            "netease_dark", "netease_light"};
     for (const char *n : known) {
         std::string p = xdg_config_path(std::string("data/themes") + PATH_SEP + n + ".yaml");
-        if (access(p.c_str(), R_OK) == 0)
+        if (access_utf8(p.c_str(), R_OK) == 0)
             names.push_back(n);
     }
     return names;
 }
 
 bool ThemeManager::load(const std::string &yaml_path) {
-    FILE *fp = fopen(yaml_path.c_str(), "rb");
+    FILE *fp = fopen_utf8(yaml_path.c_str(), "rb");
     if (fp) {
         yaml_parser_t parser;
         yaml_event_t  event;

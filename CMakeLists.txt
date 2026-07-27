@@ -167,6 +167,13 @@ if(NETUNE_PREFER_SYSTEM_FFMPEG)
 endif()
 
 if(NOT NETUNE_FFMPEG_TARGET)
+  if(WIN32)
+    message(FATAL_ERROR
+      "FFmpeg: system FFmpeg not found or too old.\n"
+      "On Windows, install FFmpeg via vcpkg:\n"
+      "  vcpkg install ffmpeg:x64-windows\n"
+      "and pass -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake")
+  endif()
   netune_build_ffmpeg_from_source(NETUNE_FFMPEG_TARGET)
 endif()
 
@@ -272,7 +279,9 @@ if(EXISTS "${CMAKE_BINARY_DIR}/netease-cli")
 endif()
 
 target_include_directories(netune PRIVATE src)
-target_compile_definitions(netune PRIVATE _GNU_SOURCE)
+if(NOT WIN32)
+  target_compile_definitions(netune PRIVATE _GNU_SOURCE)
+endif()
 if(ALSA_FOUND)
   target_compile_definitions(netune PRIVATE HAS_ALSA)
 endif()
@@ -309,6 +318,7 @@ endif()
 
 if(MSVC)
   target_compile_definitions(netune PRIVATE _CRT_NONSTDC_NO_DEPRECATE)
+  target_compile_options(netune PRIVATE /utf-8)
   target_include_directories(netune BEFORE PRIVATE src/compat)
 endif()
 

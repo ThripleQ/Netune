@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "compat/utf8.h"
 #ifndef _WIN32
 #include <unistd.h>
 #define STDERR_REDIRECT " 2>/dev/null"
@@ -359,18 +360,23 @@ int netease_lyric(const char *song_id, char **buf) {
 }
 
 char* netease_download(const char *id, const char *url) {
-    char path[512];
+    /* Use the platform temp directory: $TMPDIR / $TEMP / $TMP on Windows,
+       /tmp on POSIX. */
+    const char *tmpdir = getenv_utf8("TMPDIR");
 #ifndef _WIN32
-    snprintf(path, sizeof(path), "/tmp/netune_%s.mp3", id);
+    if (!tmpdir || !tmpdir[0]) tmpdir = "/tmp";
 #else
-    char tmpdir[MAX_PATH];
-    DWORD tlen = GetTempPathA(MAX_PATH, tmpdir);
-    if (tlen == 0 || tlen >= MAX_PATH) return NULL;
-    snprintf(path, sizeof(path), "%snetune_%s.mp3", tmpdir, id);
+    if (!tmpdir || !tmpdir[0]) tmpdir = getenv_utf8("TEMP");
+    if (!tmpdir || !tmpdir[0]) tmpdir = getenv_utf8("TMP");
+    if (!tmpdir || !tmpdir[0]) tmpdir = ".";
 #endif
-    remove(path);
+    char path[512];
+    const char *sep = (tmpdir[strlen(tmpdir)-1] == '/' || tmpdir[strlen(tmpdir)-1] == '\\')
+                      ? "" : "/";
+    snprintf(path, sizeof(path), "%s%snetune_%s.mp3", tmpdir, sep, id);
+    remove_utf8(path);
     char cmd[3072]; snprintf(cmd,sizeof(cmd),"curl -sL --max-time 60 \"%s\" -o \"%s\"",url,path);
     int rc = system(cmd);
-    if (rc != 0) { remove(path); return NULL; }
+    if (rc != 0) { remove_utf8(path); return NULL; }
     return strdup(path);
 }

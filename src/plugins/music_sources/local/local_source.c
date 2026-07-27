@@ -7,9 +7,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "compat/utf8.h"
 #include <strings.h>
 #include <dirent.h>
-#include <sys/stat.h>
 
 /* ── Cross-platform path helpers ────────────────────── */
 #ifdef _WIN32
@@ -17,16 +17,6 @@
 #else
 #define PATH_SEP "/"
 #endif
-
-/* Extract the filename portion from a path.
- * Handles both '/' and '\\' separators for cross-platform compatibility. */
-static const char* path_basename(const char *path) {
-    if (!path) return "";
-    const char *slash = strrchr(path, '/');
-    const char *backslash = strrchr(path, '\\');
-    const char *last = (slash > backslash) ? slash : backslash;
-    return last ? last + 1 : path;
-}
 
 /* ── Dynamic array helpers ──────────────────────────── */
 typedef struct {
@@ -65,6 +55,18 @@ static bool has_music_ext(const char *name) {
     return decoder_supports_ext(dot + 1);
 }
 
+/* Find the filename portion of a path, handling both / and \ separators. */
+static const char *path_basename(const char *path) {
+    if (!path) return NULL;
+    const char *base = path;
+    const char *slash = strrchr(path, '/');
+    const char *bslash = strrchr(path, '\\');
+    const char *last = (slash && bslash) ? (slash > bslash ? slash : bslash)
+                     : slash ? slash : bslash;
+    if (last) base = last + 1;
+    return base;
+}
+
 static void scan_dir(const char *dir_path, SongArray *arr) {
     DIR *dir = opendir(dir_path);
     if (!dir) return;
@@ -79,7 +81,7 @@ static void scan_dir(const char *dir_path, SongArray *arr) {
         snprintf(full, sizeof(full), "%s" PATH_SEP "%s", dir_path, entry->d_name);
 
         struct stat st;
-        if (stat(full, &st) != 0) continue;
+        if (stat_utf8(full, &st) != 0) continue;
 
         if (S_ISDIR(st.st_mode)) {
             scan_dir(full, arr);

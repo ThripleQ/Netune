@@ -19,17 +19,32 @@ int audio_output_register_backend(AudioOutputBackend *backend) {
     return 0;
 }
 
-/* built-in backends */
+/* built-in backends — guarded by HAS_* macros so that platforms without a
+   given backend (e.g. Windows without ALSA/PulseAudio) don't get unresolved
+   linker symbols. CMakeLists.txt defines these when the corresponding
+   pkg-config library is found. */
+#ifdef HAS_ALSA
 extern AudioOutputBackend g_alsa_backend;
+#endif
+#ifdef HAS_PULSE
 extern AudioOutputBackend g_pulse_backend;
+#endif
+#ifdef HAS_SDL
 extern AudioOutputBackend g_sdl_backend;
+#endif
 
 static void register_builtins(void) {
     static int done = 0;
     if (done) return;
+#ifdef HAS_ALSA
     audio_output_register_backend(&g_alsa_backend);
+#endif
+#ifdef HAS_PULSE
     audio_output_register_backend(&g_pulse_backend);
+#endif
+#ifdef HAS_SDL
     audio_output_register_backend(&g_sdl_backend);
+#endif
     done = 1;
 }
 

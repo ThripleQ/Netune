@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "compat/utf8.h"
 
 
 /* ── Global singleton ──────────────────────────────── */
@@ -18,7 +19,7 @@ struct Config {
 };
 
 Config* config_load(const char *path) {
-    FILE *fp = fopen(path, "rb");
+    FILE *fp = fopen_utf8(path, "rb");
     if (!fp) {
         LOG_WARN("Cannot open config file: %s", path);
         return NULL;
