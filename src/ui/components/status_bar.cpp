@@ -2,64 +2,6 @@
 #include "ui/components/theme_util.h"
 #include <cstdio>
 #include <string>
-
-/* ── Smooth gauge using 1/8-width block characters ── */
-/* Replaces FTXUI's built-in gauge() which only has 4 discrete levels.
-   Uses: ▏▎▍▌▋▊▉█ for sub-character smoothness (8 increments per column). */
-class GaugeSmooth : public ftxui::Node {
- public:
-  GaugeSmooth(float progress) : progress_(progress) {
-    if (!(progress_ > 0.F)) progress_ = 0.F;
-    if (!(progress_ < 1.F)) progress_ = 1.F;
-  }
-
-  void ComputeRequirement() override {
-    requirement_.flex_grow_x = 1;
-    requirement_.min_x = 2;
-    requirement_.min_y = 1;
-  }
-
-  void Render(ftxui::Screen &screen) override {
-    int width = box_.x_max - box_.x_min + 1;
-    if (width <= 0) return;
-
-    /* exact number of character-positions to fill (float) */
-    float filled = progress_ * (float)width;
-    int full = (int)filled;                    /* fully filled chars */
-    int frac = (int)((filled - full) * 8.F);   /* 0-8, fractional part */
-    if (frac < 0) frac = 0;
-    if (frac > 8) frac = 8;
-
-    static const char *kFrac[9] = {" ", "\u258f", "\u258e", "\u258d",
-                                    "\u258c", "\u258b", "\u258a", "\u2589", "\u2588"};
-
-    int y = box_.y_min;
-    int x0 = box_.x_min;
-    int x;
-
-    /* full blocks */
-    for (x = 0; x < full && x < width; x++)
-      screen.at(x0 + x, y) = "\u2588";
-
-    /* fractional block (if room) */
-    if (x < width) {
-      screen.at(x0 + x, y) = kFrac[frac];
-      x++;
-    }
-
-    /* trailing spaces */
-    for (; x < width; x++)
-      screen.at(x0 + x, y) = " ";
-  }
-
- private:
-  float progress_;
-};
-
-static ftxui::Element gaugeSmooth(float progress) {
-  return std::make_shared<GaugeSmooth>(progress);
-}
-
 using namespace ftxui;
 
 Element render_status_bar(const AppState &s) {
@@ -135,6 +77,6 @@ Element render_status_bar(const AppState &s) {
     }
     return theme_bg(vbox(Elements{
         theme_fg(text(top_line)) | dim,
-        gaugeSmooth(gv) | theme_accent,
+        gauge(gv) | theme_accent,
     }));
 }
