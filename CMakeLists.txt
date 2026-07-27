@@ -333,7 +333,11 @@ endif()
 find_program(GO_EXECUTABLE go)
 if(GO_EXECUTABLE)
   set(NETEASE_CLI_DIR "${CMAKE_SOURCE_DIR}/src/plugins/music_sources/netease/netease-cli")
-  set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/netease-cli")
+  if(WIN32)
+    set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/netease-cli.exe")
+  else()
+    set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/netease-cli")
+  endif()
 
   add_custom_command(
     OUTPUT  "${NETEASE_CLI_OUT}"

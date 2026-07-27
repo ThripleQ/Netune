@@ -103,12 +103,6 @@ jobs:
           }
           Copy-Item $dlls -Destination build\Release\ -ErrorAction SilentlyContinue
 
-      - name: Build netease-cli
-        run: |
-          cd src\plugins\music_sources\netease\netease-cli
-          go build -ldflags="-s -w" -o netease-cli.exe .
-          move netease-cli.exe ..\..\..\..\build\Release\
-
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
