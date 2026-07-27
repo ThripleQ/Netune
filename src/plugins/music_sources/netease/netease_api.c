@@ -67,12 +67,7 @@ static yyjson_val *jget_arr(yyjson_val *obj, const char *key) {
     yyjson_val *v = yyjson_obj_get(obj, key);
     return (v && yyjson_is_arr(v)) ? v : NULL;
 }
-/* Get first object from an array (for arrays of objects). */
-static yyjson_val *jfirst_obj(yyjson_val *arr) {
-    if (!arr || !yyjson_is_arr(arr)) return NULL;
-    yyjson_val *v = yyjson_arr_get_first(arr);
-    return (v && yyjson_is_obj(v)) ? v : NULL;
-}
+/* jfirst_obj removed — use yyjson_arr_get_first() directly */
 
 /* ── parse one song from a yyjson_val object ──────── */
 static void fill(SongInfo *s, yyjson_val *song) {
@@ -81,7 +76,7 @@ static void fill(SongInfo *s, yyjson_val *song) {
     s->aux_label         = strdup("");
 
     int64_t sid = jget_sint64(song, "id");
-    char idbuf[32]; snprintf(idbuf, sizeof(idbuf), "%lld", (long long)sid);
+    char idbuf[32]; snprintf(idbuf, sizeof(idbuf), "%ld", (long)sid);
     s->id = strdup(idbuf);
     const char *name = jget_str(song, "name"); s->title = name ? strdup(name) : strdup("");
 
@@ -127,7 +122,7 @@ static int parselist(const char *json, const char *loc, SongInfo **out, int *cnt
     if (n == 0) { yyjson_doc_free(doc); return -1; }
 
     *out = (SongInfo*)calloc(n, sizeof(SongInfo));
-    size_t idx; yyjson_val *v;
+    yyjson_val *v;
     yyjson_arr_iter iter = yyjson_arr_iter_with(songs);
     int oi = 0;
     while ((v = yyjson_arr_iter_next(&iter)) && oi < (int)n) {
@@ -179,7 +174,7 @@ int netease_search(const char *kw, int l, int o, NSSearchResult *out) {
         if (!yyjson_is_obj(v)) continue;
         NSSong *r = &out->songs[oi]; oi++;
 
-        int64_t sid = jget_sint64(v, "id"); char bid[32]; snprintf(bid, sizeof(bid), "%lld", (long long)sid); r->id = strdup(bid);
+        int64_t sid = jget_sint64(v, "id"); char bid[32]; snprintf(bid, sizeof(bid), "%ld", (long)sid); r->id = strdup(bid);
         const char *nm  = jget_str(v, "name"); r->title = nm ? strdup(nm) : strdup("");
 
         /* artist from ar[0].name */
@@ -274,7 +269,7 @@ int netease_playlists(bool favorited, SongInfo **out, int *count) {
         s->aux_label = strdup("歌单");
         int64_t sid = jget_sint64(v, "id");
         char id_str[32];
-        snprintf(id_str, sizeof(id_str), "%lld", sid);
+        snprintf(id_str, sizeof(id_str), "%ld", (long)sid);
         s->id = strdup(id_str);
         const char *nm  = jget_str(v, "name"); s->title = nm  ? strdup(nm)  : strdup("");
         oi++;

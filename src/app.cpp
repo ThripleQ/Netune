@@ -693,7 +693,7 @@ static void ensure_default_data_tree(void) {
     /* Helper: create a default file (with parent dirs) if it
        does not already exist. Never touches existing files. */
     auto ensure_file = [&](const char *rel, const char *content) {
-        char path[1024];
+        char path[2048];
         snprintf(path, sizeof(path), "%s" PATH_SEP "%s", root, rel);
         if (access_utf8(path, F_OK) == 0) return;  /* already there */
         ensure_dir(path);
@@ -739,7 +739,7 @@ int run_app(int argc, char **argv) {
     ensure_default_data_tree();
 
     /* ── Config (under data/) ── */
-    char cfg_buf[1024];
+    char cfg_buf[2048];
     snprintf(cfg_buf, sizeof(cfg_buf), "%s" PATH_SEP "config.json", xdg_data_root());
     Config *cfg = config_load(cfg_buf);
     if (!cfg) LOG_WARN("No config loaded, using defaults");
@@ -793,7 +793,7 @@ int run_app(int argc, char **argv) {
     /* load keybindings — always from data/keybindings/<name>.yaml */
     const char *kb_name = config_get_str(cfg, "ui.keybindings", NULL);
     const char *kb_path;
-    static char kb_buf[1024];
+    static char kb_buf[2048];
     if (kb_name && strcmp(kb_name, "default") != 0
 #ifndef _WIN32
         && kb_name[0] == '/') {
@@ -805,6 +805,7 @@ int run_app(int argc, char **argv) {
         const char *name = (kb_name && strcmp(kb_name, "default") != 0) ? kb_name : "default";
         snprintf(kb_buf, sizeof(kb_buf), "%s" PATH_SEP "keybindings" PATH_SEP "%s.yaml",
                  xdg_data_root(), name);
+        kb_buf[sizeof(kb_buf) - 1] = '\0';
         kb_path = kb_buf;
     }
     g_keybindings.load(kb_path);
@@ -821,7 +822,7 @@ int run_app(int argc, char **argv) {
     layout_engine.register_component("group_list", render_group_list);
     layout_engine.register_component("song_list", render_song_list);
     const char *l_name = config_get_str(cfg, "ui.layout", NULL);
-    char l_buf[1024];
+    char l_buf[2048];
     const char *l_path;
     if (l_name && strcmp(l_name, "default") != 0
 #ifndef _WIN32
@@ -835,6 +836,7 @@ int run_app(int argc, char **argv) {
         const char *name = (l_name && strcmp(l_name, "default") != 0) ? l_name : "default";
         snprintf(l_buf, sizeof(l_buf), "%s" PATH_SEP "layouts" PATH_SEP "%s.yaml",
                  xdg_data_root(), name);
+        l_buf[sizeof(l_buf) - 1] = '\0';
         l_path = l_buf;
     }
     layout_engine.load(l_path);

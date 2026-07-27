@@ -79,11 +79,6 @@ static ThemeColor blend(const ThemeColor &a, const ThemeColor &b, float t) {
     return r;
 }
 
-static ThemeColor darken(const ThemeColor &c, float t) {
-    ThemeColor black = {0, 0, 0, true};
-    return blend(c, black, t);
-}
-
 static ThemeColor lighten(const ThemeColor &c, float t) {
     ThemeColor white = {255, 255, 255, true};
     return blend(c, white, t);
