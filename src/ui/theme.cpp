@@ -222,6 +222,17 @@ bool ThemeManager::load(const std::string &yaml_path) {
         /* Derive any unset extended colors */
         derive_colors();
 
+        /* Safety net: if core colors are STILL unset (empty/malformed YAML),
+           fall back to hardcoded safe defaults so the UI is always readable. */
+        if (!theme_.bg.has_color || !theme_.fg.has_color || !theme_.accent.has_color) {
+            LOG_WARN("Theme is missing core colors, applying safe defaults");
+            theme_.name = "Default Dark";
+            theme_.bg    = theme_color_from_hex("#1a1b26");
+            theme_.fg    = theme_color_from_hex("#c0caf5");
+            theme_.accent = theme_color_from_hex("#7aa2f7");
+            derive_colors();
+        }
+
         LOG_INFO("Theme loaded: '%s'  bg=%s fg=%s accent=%s accent_bg=%s muted=%s border=%s",
                  theme_.name.c_str(),
                  hex_bg.c_str(), hex_fg.c_str(), hex_accent.c_str(),
