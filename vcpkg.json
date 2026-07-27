@@ -8,5 +8,5 @@
     "libyaml",
     "pkgconf"
   ],
-  "builtin-baseline": "2024.07.12"
+  "builtin-baseline": "6d9d7df564a1ccdaa994e4ad39ccd4a32360867b"
 }

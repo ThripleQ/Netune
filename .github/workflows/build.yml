@@ -75,7 +75,9 @@ jobs:
 
       - name: Configure (vcpkg manifest mode auto-installs deps)
         run: |
-          cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release `
+          # Let cmake auto-detect the generator; windows-latest has
+          # Visual Studio installed and setup-msbuild adds it to PATH.
+          cmake -B build -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
 
       - name: Build netune

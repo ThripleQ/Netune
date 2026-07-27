@@ -1,0 +1,1355 @@
+diff --git a/.github/workflows/build.yml b/.github/workflows/build.yml
+index 5ce795d..8aaef27 100644
+--- a/.github/workflows/build.yml
++++ b/.github/workflows/build.yml
+@@ -3,7 +3,7 @@ name: Build
+ on:
+   push:
+     branches: [ master ]
+-    tags: [ "v*" ]
++    tags: [ "v*", "1.*", "2.*" ]
+   release:
+     types: [ published ]
+ 
+@@ -43,6 +43,8 @@ jobs:
+     defaults:
+       run:
+         shell: pwsh
++    env:
++      VCPKG_DEFAULT_TRIPLET: x64-windows
+ 
+     steps:
+       - uses: actions/checkout@v4
+@@ -55,30 +57,25 @@ jobs:
+ 
+       - name: Setup vcpkg
+         run: |
+-          git clone https://github.com/Microsoft/vcpkg.git vcpkg
+-          .\vcpkg\bootstrap-vcpkg.bat
+-          echo "VCPKG_ROOT=$pwd\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
++          git clone https://github.com/Microsoft/vcpkg.git "$env:GITHUB_WORKSPACE\vcpkg"
++          & "$env:GITHUB_WORKSPACE\vcpkg\bootstrap-vcpkg.bat"
++          echo "VCPKG_ROOT=$env:GITHUB_WORKSPACE\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+ 
+-      - name: Cache vcpkg
++      - name: Cache vcpkg binary packages
+         uses: actions/cache@v4
+         with:
+-          path: vcpkg
+-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg/.git/HEAD') }}
++          path: |
++            ${{ github.workspace }}/vcpkg/packages
++            ${{ github.workspace }}/vcpkg/buildtrees
++            ${{ github.workspace }}/vcpkg/downloads
++            ${{ github.workspace }}/build/vcpkg_installed
++          key: vcpkg-bin-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
+           restore-keys: |
+-            vcpkg-${{ runner.os }}-
++            vcpkg-bin-${{ runner.os }}-
+ 
+-      - name: Install deps
+-        run: |
+-          .\vcpkg\vcpkg install `
+-            ffmpeg:x64-windows `
+-            sdl2:x64-windows `
+-            yyjson:x64-windows `
+-            libyaml:x64-windows `
+-            pkgconf:x64-windows
+-
+-      - name: Configure
++      - name: Configure (vcpkg manifest mode auto-installs deps)
+         run: |
+-          cmake -B build -DCMAKE_BUILD_TYPE=Release `
++          cmake -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release `
+             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
+ 
+       - name: Build netune
+@@ -86,10 +83,23 @@ jobs:
+ 
+       - name: Collect DLLs
+         run: |
+-          $bin = "$env:VCPKG_ROOT\installed\x64-windows\bin"
+-          Copy-Item "$bin\avformat*.dll", "$bin\avcodec*.dll", "$bin\avutil*.dll",
+-            "$bin\swresample*.dll", "$bin\SDL2*.dll",
+-            "$bin\yyjson*.dll", "$bin\yaml*.dll" build\Release\
++          # Manifest mode installs to <build>/vcpkg_installed/<triplet>/bin
++          $bin = "$pwd\build\vcpkg_installed\x64-windows\bin"
++          if (-not (Test-Path $bin)) {
++            $bin = "$env:VCPKG_ROOT\installed\x64-windows\bin"
++          }
++          Write-Host "Collecting DLLs from: $bin"
++          $dlls = @()
++          foreach ($pattern in @("avformat*.dll","avcodec*.dll","avutil*.dll",
++                                  "swresample*.dll","SDL2*.dll","yyjson*.dll","yaml*.dll")) {
++            $found = Get-ChildItem -Path $bin -Filter $pattern -ErrorAction SilentlyContinue
++            if ($found) { $dlls += $found }
++          }
++          if ($dlls.Count -eq 0) {
++            Write-Host "WARNING: No DLLs found in $bin"
++            Get-ChildItem -Path $bin -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
++          }
++          Copy-Item $dlls -Destination build\Release\ -ErrorAction SilentlyContinue
+ 
+       - name: Build netease-cli
+         run: |
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index b9bc3d8..fbfd6e2 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -167,6 +167,13 @@ if(NETUNE_PREFER_SYSTEM_FFMPEG)
+ endif()
+ 
+ if(NOT NETUNE_FFMPEG_TARGET)
++  if(WIN32)
++    message(FATAL_ERROR
++      "FFmpeg: system FFmpeg not found or too old.\n"
++      "On Windows, install FFmpeg via vcpkg:\n"
++      "  vcpkg install ffmpeg:x64-windows\n"
++      "and pass -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake")
++  endif()
+   netune_build_ffmpeg_from_source(NETUNE_FFMPEG_TARGET)
+ endif()
+ 
+@@ -272,7 +279,9 @@ if(EXISTS "${CMAKE_BINARY_DIR}/netease-cli")
+ endif()
+ 
+ target_include_directories(netune PRIVATE src)
+-target_compile_definitions(netune PRIVATE _GNU_SOURCE)
++if(NOT WIN32)
++  target_compile_definitions(netune PRIVATE _GNU_SOURCE)
++endif()
+ if(ALSA_FOUND)
+   target_compile_definitions(netune PRIVATE HAS_ALSA)
+ endif()
+@@ -309,6 +318,7 @@ endif()
+ 
+ if(MSVC)
+   target_compile_definitions(netune PRIVATE _CRT_NONSTDC_NO_DEPRECATE)
++  target_compile_options(netune PRIVATE /utf-8)
+   target_include_directories(netune BEFORE PRIVATE src/compat)
+ endif()
+ 
+diff --git a/src/app.cpp b/src/app.cpp
+index 77b235e..d4a704e 100644
+--- a/src/app.cpp
++++ b/src/app.cpp
+@@ -14,9 +14,6 @@
+ #include <windows.h>
+ #include <io.h>
+ #include <direct.h>      /* _mkdir */
+-#define access _access
+-#define F_OK 0
+-#define mkdir(p,m) _mkdir(p)
+ #define PATH_SEP "\\"
+ #define PATH_SEP_CHR '\\'
+ #endif
+@@ -24,6 +21,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <cstring>
++#include "compat/utf8.h"   /* UTF-8 aware getenv/fopen/access/mkdir for Windows */
+ #include <vector>
+ #include <string>
+ #include <algorithm>
+@@ -499,13 +497,13 @@ static void ev_playlist_changed(const BusEvent *ev, void *data) {
+ 
+ /* ── XDG path helpers ────────────────────────────── */
+ static const char *xdg_dir(const char *env, const char *sub) {
+-    const char *d = getenv(env);
++    const char *d = getenv_utf8(env);
+     static char buf[1024];
+ #ifndef _WIN32
+     if (d && d[0]) {
+         snprintf(buf, sizeof(buf), "%s/netune/%s", d, sub ? sub : "");
+     } else {
+-        const char *home = getenv("HOME");
++        const char *home = getenv_utf8("HOME");
+         if (!home) home = "/tmp";
+         const char *prefix = strstr(env, "CONFIG") ? ".config" : ".cache";
+         snprintf(buf, sizeof(buf), "%s/%s/netune/%s", home, prefix, sub ? sub : "");
+@@ -517,11 +515,11 @@ static const char *xdg_dir(const char *env, const char *sub) {
+         win_env = "LOCALAPPDATA";
+     else if (strstr(env, "CONFIG"))
+         win_env = "APPDATA";
+-    if (win_env) d = getenv(win_env);
++    if (win_env) d = getenv_utf8(win_env);
+     if (d && d[0]) {
+         snprintf(buf, sizeof(buf), "%s\\netune\\%s", d, sub ? sub : "");
+     } else {
+-        const char *home = getenv("USERPROFILE");
++        const char *home = getenv_utf8("USERPROFILE");
+         if (!home) home = "C:\\";
+         const char *prefix = strstr(env, "CONFIG") ? ".config" : ".cache";
+         snprintf(buf, sizeof(buf), "%s\\%s\\netune\\%s", home, prefix, sub ? sub : "");
+@@ -546,20 +544,12 @@ static void ensure_dir(const char *filepath) {
+         if (*p == '/' || *p == '\\') {
+             char saved = *p;
+             *p = 0;
+-#ifndef _WIN32
+-            mkdir(tmp, 0755);
+-#else
+-            _mkdir(tmp);
+-#endif
++            mkdir_utf8(tmp);
+             *p = saved;
+         }
+     }
+     if (tmp[0]) {
+-#ifndef _WIN32
+-        mkdir(tmp, 0755);
+-#else
+-        _mkdir(tmp);
+-#endif
++        mkdir_utf8(tmp);
+     }
+     (void)sep_chr;
+ }
+@@ -572,21 +562,21 @@ static void ensure_dir(const char *filepath) {
+ static const char *xdg_data_root(void) {
+     static char buf[1024];
+ #ifndef _WIN32
+-    const char *d = getenv("XDG_CONFIG_HOME");
++    const char *d = getenv_utf8("XDG_CONFIG_HOME");
+     if (d && d[0]) {
+         snprintf(buf, sizeof(buf), "%s/netune/data", d);
+     } else {
+-        const char *home = getenv("HOME");
++        const char *home = getenv_utf8("HOME");
+         if (!home) home = "/tmp";
+         snprintf(buf, sizeof(buf), "%s/.config/netune/data", home);
+     }
+ #else
+     /* Windows: use APPDATA (same mapping as XDG_CONFIG_HOME) */
+-    const char *d = getenv("APPDATA");
++    const char *d = getenv_utf8("APPDATA");
+     if (d && d[0]) {
+         snprintf(buf, sizeof(buf), "%s\\netune\\data", d);
+     } else {
+-        const char *home = getenv("USERPROFILE");
++        const char *home = getenv_utf8("USERPROFILE");
+         if (!home) home = "C:\\";
+         snprintf(buf, sizeof(buf), "%s\\.config\\netune\\data", home);
+     }
+@@ -705,9 +695,9 @@ static void ensure_default_data_tree(void) {
+     auto ensure_file = [&](const char *rel, const char *content) {
+         char path[1024];
+         snprintf(path, sizeof(path), "%s" PATH_SEP "%s", root, rel);
+-        if (access(path, F_OK) == 0) return;  /* already there */
++        if (access_utf8(path, F_OK) == 0) return;  /* already there */
+         ensure_dir(path);
+-        FILE *f = fopen(path, "w");
++        FILE *f = fopen_utf8(path, "w");
+         if (f) {
+             fputs(content, f);
+             fclose(f);
+@@ -758,7 +748,7 @@ int run_app(int argc, char **argv) {
+     /* ── Cache (XDG_CACHE_HOME) ─────────────────────── */
+     const char *cache_dir = xdg_dir("XDG_CACHE_HOME", NULL);
+     ensure_dir(cache_dir);
+-    mkdir(cache_dir, 0755);
++    mkdir_utf8(cache_dir);
+     cache_init(cache_dir);
+     search_manager_init();
+ 
+@@ -835,10 +825,10 @@ int run_app(int argc, char **argv) {
+     const char *l_path;
+     if (l_name && strcmp(l_name, "default") != 0
+ #ifndef _WIN32
+-        && l_name[0] == '/' && access(l_name, F_OK) == 0) {
++        && l_name[0] == '/' && access_utf8(l_name, F_OK) == 0) {
+ #else
+         && (((l_name[0] && l_name[1] == ':') || l_name[0] == '/' || l_name[0] == '\\')
+-            && access(l_name, F_OK) == 0)) {
++            && access_utf8(l_name, F_OK) == 0)) {
+ #endif
+         l_path = l_name;  /* absolute path: use as-is */
+     } else {
+diff --git a/src/compat/dirent.h b/src/compat/dirent.h
+index 20d9b3e..39dab38 100644
+--- a/src/compat/dirent.h
++++ b/src/compat/dirent.h
+@@ -1,9 +1,13 @@
+ #pragma once
+ /*
+- * Minimal <dirent.h> for MSVC Windows, backed by FindFirstFile/FindNextFile.
++ * Minimal <dirent.h> for MSVC Windows, backed by FindFirstFileW/FindNextFileW.
+  *
+  * Provides: DIR, struct dirent, opendir, readdir, closedir.
+  * Skips "." and ".." entries automatically.
++ *
++ * Uses the wide-character (W) Win32 APIs so that Unicode / non-ASCII paths
++ * (e.g. Chinese directory names) work correctly. The caller passes and
++ * receives UTF-8 strings; conversion to/from UTF-16 is handled internally.
+  */
+ 
+ #ifdef _MSC_VER
+@@ -19,21 +23,61 @@ struct dirent {
+ };
+ 
+ typedef struct DIR {
+-    HANDLE          handle;
+-    WIN32_FIND_DATAA ffd;
+-    struct dirent   entry;
+-    int             first;
++    HANDLE           handle;
++    WIN32_FIND_DATAW ffd;
++    struct dirent    entry;
++    int              first;
+ } DIR;
+ 
++/* Convert a UTF-8 string to a newly allocated UTF-16 wide string.
++   Returns NULL on failure. Caller must free() the result. */
++static inline wchar_t *dirent_utf8_to_wide(const char *utf8)
++{
++    if (!utf8) return NULL;
++    int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
++    if (wlen <= 0) return NULL;
++    wchar_t *w = (wchar_t *)malloc((size_t)wlen * sizeof(wchar_t));
++    if (!w) return NULL;
++    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w, wlen);
++    return w;
++}
++
++/* Convert a UTF-16 wide string to UTF-8 in the provided buffer.
++   Returns 0 on success, -1 on failure or truncation. */
++static inline int dirent_wide_to_utf8(const wchar_t *w, char *buf, size_t buf_size)
++{
++    if (!w || !buf || buf_size == 0) return -1;
++    int len = WideCharToMultiByte(CP_UTF8, 0, w, -1, buf, (int)buf_size, NULL, NULL);
++    if (len <= 0) return -1;
++    /* WideCharToMultiByte writes the NUL terminator; ensure truncation safety */
++    buf[buf_size - 1] = '\0';
++    return 0;
++}
++
+ static inline DIR *opendir(const char *path)
+ {
+-    DIR *d = (DIR *)calloc(1, sizeof(DIR));
+-    if (!d) return NULL;
++    if (!path) return NULL;
++
++    /* Build "<path>\*" in UTF-16 */
++    wchar_t *wpath = dirent_utf8_to_wide(path);
++    if (!wpath) return NULL;
+ 
+-    char pattern[MAX_PATH];
+-    snprintf(pattern, sizeof(pattern), "%s\\*", path);
++    size_t wlen = wcslen(wpath);
++    wchar_t *pattern = (wchar_t *)malloc((wlen + 3) * sizeof(wchar_t));
++    if (!pattern) { free(wpath); return NULL; }
++    wcscpy(pattern, wpath);
++    /* Ensure exactly one backslash before '*' */
++    if (wlen > 0 && pattern[wlen - 1] != L'\\' && pattern[wlen - 1] != L'/')
++        pattern[wlen] = L'\\', pattern[wlen + 1] = L'*', pattern[wlen + 2] = L'\0';
++    else
++        pattern[wlen] = L'*', pattern[wlen + 1] = L'\0';
++    free(wpath);
+ 
+-    d->handle = FindFirstFileA(pattern, &d->ffd);
++    DIR *d = (DIR *)calloc(1, sizeof(DIR));
++    if (!d) { free(pattern); return NULL; }
++
++    d->handle = FindFirstFileW(pattern, &d->ffd);
++    free(pattern);
+     if (d->handle == INVALID_HANDLE_VALUE) {
+         free(d);
+         return NULL;
+@@ -50,15 +94,19 @@ static inline struct dirent *readdir(DIR *d)
+         if (d->first) {
+             d->first = 0;
+         } else {
+-            if (!FindNextFileA(d->handle, &d->ffd))
++            if (!FindNextFileW(d->handle, &d->ffd))
+                 return NULL;
+         }
+         /* skip . and .. */
+-        if (strcmp(d->ffd.cFileName, ".") == 0 ||
+-            strcmp(d->ffd.cFileName, "..") == 0)
++        if (wcscmp(d->ffd.cFileName, L".") == 0 ||
++            wcscmp(d->ffd.cFileName, L"..") == 0)
+             continue;
+-        strncpy(d->entry.d_name, d->ffd.cFileName, sizeof(d->entry.d_name) - 1);
+-        d->entry.d_name[sizeof(d->entry.d_name) - 1] = '\0';
++        /* Convert the wide filename to UTF-8 */
++        if (dirent_wide_to_utf8(d->ffd.cFileName, d->entry.d_name,
++                                sizeof(d->entry.d_name)) != 0) {
++            /* conversion failed — return an empty name rather than crashing */
++            d->entry.d_name[0] = '\0';
++        }
+         return &d->entry;
+     }
+ }
+@@ -66,7 +114,8 @@ static inline struct dirent *readdir(DIR *d)
+ static inline int closedir(DIR *d)
+ {
+     if (!d) return -1;
+-    FindClose(d->handle);
++    if (d->handle != INVALID_HANDLE_VALUE)
++        FindClose(d->handle);
+     free(d);
+     return 0;
+ }
+diff --git a/src/compat/pthread.h b/src/compat/pthread.h
+index 07f4207..1f24974 100644
+--- a/src/compat/pthread.h
++++ b/src/compat/pthread.h
+@@ -6,6 +6,10 @@
+  *           create/join/detach, mutex init/destroy/lock/unlock,
+  *           condvar init/destroy/wait/signal/broadcast.
+  *
++ * Uses SRWLOCK for mutexes (statically initialisable → PTHREAD_MUTEX_INITIALIZER
++ * works without a runtime Init call, matching POSIX semantics for static mutexes).
++ * Uses CONDITION_VARIABLE for condvars (Vista+, also zero-initialisable).
++ *
+  * Only compiled on MSVC; POSIX platforms use the real <pthread.h>.
+  */
+ 
+@@ -17,13 +21,36 @@
+ /* ── pthread_t ──────────────────────────────────────── */
+ typedef HANDLE pthread_t;
+ 
+-static inline int pthread_create(pthread_t *thread, void *attr,
++/* Wrapper that adapts the pthread start signature (void* fn(void*))
++   to the Win32 thread proc signature (DWORD fn(LPVOID)). This avoids
++   the undefined behaviour of casting an incompatible function pointer
++   to LPTHREAD_START_ROUTINE. */
++typedef struct {
++    void *(*start_routine)(void *);
++    void  *arg;
++} pthread_start_wrap;
++
++static DWORD WINAPI pthread_start_trampoline(LPVOID p)
++{
++    pthread_start_wrap *w = (pthread_start_wrap *)p;
++    void *(*fn)(void *) = w->start_routine;
++    void *arg = w->arg;
++    free(w);
++    fn(arg);
++    return 0;
++}
++
++static inline int pthread_create(pthread_t *thread, const void *attr,
+                                  void *(*start)(void *), void *arg)
+ {
+     (void)attr;
+-    *thread = CreateThread(NULL, 0,
+-        (LPTHREAD_START_ROUTINE)start, arg, 0, NULL);
+-    return *thread ? 0 : -1;
++    pthread_start_wrap *w = (pthread_start_wrap *)malloc(sizeof(*w));
++    if (!w) return -1;
++    w->start_routine = start;
++    w->arg = arg;
++    *thread = CreateThread(NULL, 0, pthread_start_trampoline, w, 0, NULL);
++    if (!*thread) { free(w); return -1; }
++    return 0;
+ }
+ 
+ static inline int pthread_join(pthread_t thread, void **retval)
+@@ -39,37 +66,50 @@ static inline int pthread_detach(pthread_t thread)
+     return CloseHandle(thread) ? 0 : -1;
+ }
+ 
+-/* ── pthread_mutex_t (CRITICAL_SECTION) ─────────────── */
+-typedef CRITICAL_SECTION pthread_mutex_t;
+-typedef void pthread_mutexattr_t;
++/* ── pthread_mutex_t (SRWLOCK — zero-initialisable) ──
++ * SRWLOCK is an exclusive/acquired lock that can be statically
++ * initialised to {0} (SRWLOCK_INIT), so PTHREAD_MUTEX_INITIALIZER
++ * just works without a runtime Init call. It is non-recursive, which
++ * matches the default PTHREAD_MUTEX_DEFAULT on most POSIX systems. */
++typedef SRWLOCK pthread_mutex_t;
++typedef void    pthread_mutexattr_t;
++
++/* SRWLOCK_INIT is {0} on all supported Windows versions; {0} is also a
++   valid zero-initialiser for the struct. This lets static mutex variables
++   work the same as POSIX PTHREAD_MUTEX_INITIALIZER. */
++#define PTHREAD_MUTEX_INITIALIZER { 0 }
+ 
+-static inline int pthread_mutex_init(pthread_mutex_t *m, void *attr)
++static inline int pthread_mutex_init(pthread_mutex_t *m, const void *attr)
+ {
+     (void)attr;
+-    InitializeCriticalSection(m);
++    InitializeSRWLock(m);
+     return 0;
+ }
+ static inline int pthread_mutex_destroy(pthread_mutex_t *m)
+ {
+-    DeleteCriticalSection(m);
+-    return 0;
++    (void)m;
++    return 0; /* SRWLOCK needs no explicit destroy */
+ }
+ static inline int pthread_mutex_lock(pthread_mutex_t *m)
+ {
+-    EnterCriticalSection(m);
++    AcquireSRWLockExclusive(m);
+     return 0;
+ }
+ static inline int pthread_mutex_unlock(pthread_mutex_t *m)
+ {
+-    LeaveCriticalSection(m);
++    ReleaseSRWLockExclusive(m);
+     return 0;
+ }
+ 
+-/* ── pthread_cond_t (Windows CONDITION_VARIABLE, Vista+) ── */
++/* ── pthread_cond_t (Windows CONDITION_VARIABLE, Vista+) ──
++ * CONDITION_VARIABLE is also zero-initialisable, so
++ * PTHREAD_COND_INITIALIZER works for static condvars too. */
+ typedef CONDITION_VARIABLE pthread_cond_t;
+-typedef void pthread_condattr_t;
++typedef void               pthread_condattr_t;
++
++#define PTHREAD_COND_INITIALIZER { 0 }
+ 
+-static inline int pthread_cond_init(pthread_cond_t *c, void *attr)
++static inline int pthread_cond_init(pthread_cond_t *c, const void *attr)
+ {
+     (void)attr;
+     InitializeConditionVariable(c);
+@@ -82,7 +122,7 @@ static inline int pthread_cond_destroy(pthread_cond_t *c)
+ }
+ static inline int pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m)
+ {
+-    return SleepConditionVariableCS(c, m, INFINITE) ? 0 : -1;
++    return SleepConditionVariableSRW(c, m, INFINITE, 0) ? 0 : -1;
+ }
+ static inline int pthread_cond_signal(pthread_cond_t *c)
+ {
+diff --git a/src/compat/strings.h b/src/compat/strings.h
+index 94bbe32..3728334 100644
+--- a/src/compat/strings.h
++++ b/src/compat/strings.h
+@@ -3,6 +3,27 @@
+ 
+ #ifdef _MSC_VER
+ #include <string.h>
++#include <ctype.h>
++#include <stddef.h>
++
+ #define strcasecmp  _stricmp
+ #define strncasecmp _strnicmp
++
++/* strcasestr: case-insensitive substring search (GNU extension, not in MSVC).
++   Returns pointer to first occurrence of needle in haystack (case-insensitive),
++   or NULL if not found. */
++static inline char *strcasestr(const char *haystack, const char *needle)
++{
++    if (!haystack || !needle) return NULL;
++    if (!*needle) return (char *)haystack;
++
++    const char *h = haystack;
++    size_t nlen = strlen(needle);
++
++    for (; *h; h++) {
++        if (_strnicmp(h, needle, nlen) == 0)
++            return (char *)h;
++    }
++    return NULL;
++}
+ #endif
+diff --git a/src/compat/utf8.h b/src/compat/utf8.h
+new file mode 100644
+index 0000000..1514b94
+--- /dev/null
++++ b/src/compat/utf8.h
+@@ -0,0 +1,174 @@
++#pragma once
++/*
++ * UTF-8 aware file I/O wrappers for MSVC Windows.
++ *
++ * Problem: On Windows, getenv() returns strings in the ANSI code page,
++ * and fopen()/mkdir()/access()/stat() also use the ANSI code page.
++ * However, the compat dirent.h shim converts paths using MultiByteToWideChar
++ * with CP_UTF8, expecting UTF-8 input. This mismatch causes failures when
++ * paths contain non-ASCII characters (e.g. Chinese usernames in APPDATA).
++ *
++ * Solution: These wrappers use _wgetenv() to get environment variables as
++ * UTF-16, convert to UTF-8 for internal use, and use the wide-character
++ * (_w*) Win32/CRT APIs for file operations. This ensures that all internal
++ * paths are UTF-8, and all system calls handle Unicode correctly.
++ *
++ * On POSIX, these are transparent aliases to the standard C library functions.
++ *
++ * Usage: Include "utf8.h" and replace:
++ *   getenv("X")     -> getenv_utf8("X")
++ *   fopen(p, m)     -> fopen_utf8(p, m)
++ *   mkdir(p, 0755)   -> mkdir_utf8(p)
++ *   _mkdir(p)        -> mkdir_utf8(p)
++ *   access(p, F_OK) -> access_utf8(p, F_OK)
++ *   _access(p, m)   -> access_utf8(p, m)
++ *   stat(p, &st)    -> stat_utf8(p, &st)
++ *   remove(p)        -> remove_utf8(p)
++ *
++ * F_OK, R_OK, W_OK are defined if not already available.
++ */
++
++#ifdef _MSC_VER
++
++#define WIN32_LEAN_AND_MEAN
++#include <windows.h>
++#include <io.h>
++#include <direct.h>
++#include <wchar.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++/* ── access() mode flags — not defined by MSVC ──────── */
++#ifndef F_OK
++#define F_OK 0
++#endif
++#ifndef R_OK
++#define R_OK 4
++#endif
++#ifndef W_OK
++#define W_OK 2
++#endif
++#ifndef X_OK
++#define X_OK 6
++#endif
++
++/* ── Internal conversion helpers ────────────────────── */
++
++/* Convert a UTF-8 string to a UTF-16 wide string.
++   Returns the number of wide chars written (including NUL), or 0 on failure.
++   The wpath buffer must be large enough (use MAX_PATH or 32768 for long paths). */
++static inline int utf8_to_wide(const char *utf8, wchar_t *wbuf, int wbuf_size)
++{
++    if (!utf8 || !wbuf || wbuf_size <= 0) return 0;
++    int len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wbuf, wbuf_size);
++    if (len <= 0) {
++        /* Fallback: treat input as ANSI if UTF-8 conversion fails.
++           This handles the case where getenv() (ANSI) is used instead
++           of getenv_utf8(). The fallback ensures backward compatibility
++           but may not support full Unicode. */
++        len = MultiByteToWideChar(CP_ACP, 0, utf8, -1, wbuf, wbuf_size);
++        if (len <= 0) return 0;
++    }
++    /* Ensure NUL termination even on truncation */
++    wbuf[wbuf_size - 1] = L'\0';
++    return len;
++}
++
++/* ── getenv_utf8 ──────────────────────────────────────
++ * Returns a UTF-8 string from an environment variable.
++ * Uses _wgetenv() to get the value as UTF-16, then converts to UTF-8.
++ * Returns pointer to thread-local static buffer (overwritten by next call).
++ * Returns NULL if the variable is not set or empty. */
++static inline const char* getenv_utf8(const char *name)
++{
++    if (!name) return NULL;
++    wchar_t wname[256];
++    if (MultiByteToWideChar(CP_UTF8, 0, name, -1, wname, 256) == 0)
++        return NULL;
++    const wchar_t *wval = _wgetenv(wname);
++    if (!wval || !wval[0]) return NULL;
++    /* Thread-local buffer: each thread gets its own copy.
++       32768 chars covers even the longest Windows paths. */
++    static __declspec(thread) char buf[32768];
++    if (WideCharToMultiByte(CP_UTF8, 0, wval, -1, buf, (int)sizeof(buf),
++                             NULL, NULL) == 0)
++        return NULL;
++    return buf;
++}
++
++/* ── fopen_utf8 ───────────────────────────────────────
++ * Opens a file using a UTF-8 path.
++ * Converts the path and mode to UTF-16 and calls _wfopen(). */
++static inline FILE* fopen_utf8(const char *path, const char *mode)
++{
++    if (!path || !mode) return NULL;
++    wchar_t wpath[32768];
++    wchar_t wmode[16];
++    if (utf8_to_wide(path, wpath, 32768) == 0) return NULL;
++    if (MultiByteToWideChar(CP_UTF8, 0, mode, -1, wmode, 16) == 0)
++        return NULL;
++    return _wfopen(wpath, wmode);
++}
++
++/* ── mkdir_utf8 ───────────────────────────────────────
++ * Creates a directory using a UTF-8 path.
++ * Converts the path to UTF-16 and calls _wmkdir(). */
++static inline int mkdir_utf8(const char *path)
++{
++    if (!path) return -1;
++    wchar_t wpath[32768];
++    if (utf8_to_wide(path, wpath, 32768) == 0) return -1;
++    return _wmkdir(wpath);
++}
++
++/* ── access_utf8 ──────────────────────────────────────
++ * Checks file access permissions using a UTF-8 path.
++ * Converts the path to UTF-16 and calls _waccess(). */
++static inline int access_utf8(const char *path, int mode)
++{
++    if (!path) return -1;
++    wchar_t wpath[32768];
++    if (utf8_to_wide(path, wpath, 32768) == 0) return -1;
++    return _waccess(wpath, mode);
++}
++
++/* ── stat_utf8 ────────────────────────────────────────
++ * Gets file status using a UTF-8 path.
++ * Converts the path to UTF-16 and calls _wstat().
++ * Note: struct _stat and struct stat are the same type on MSVC. */
++static inline int stat_utf8(const char *path, struct stat *buf)
++{
++    if (!path || !buf) return -1;
++    wchar_t wpath[32768];
++    if (utf8_to_wide(path, wpath, 32768) == 0) return -1;
++    return _wstat(wpath, (struct _stat*)buf);
++}
++
++/* ── remove_utf8 ──────────────────────────────────────
++ * Removes/deletes a file using a UTF-8 path.
++ * Converts the path to UTF-16 and calls _wremove(). */
++static inline int remove_utf8(const char *path)
++{
++    if (!path) return -1;
++    wchar_t wpath[32768];
++    if (utf8_to_wide(path, wpath, 32768) == 0) return -1;
++    return _wremove(wpath);
++}
++
++#else /* !_MSC_VER — POSIX: transparent aliases */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#define getenv_utf8  getenv
++#define fopen_utf8   fopen
++#define mkdir_utf8(p) mkdir((p), 0755)
++#define access_utf8  access
++#define stat_utf8    stat
++#define remove_utf8  remove
++
++#endif /* _MSC_VER */
+diff --git a/src/compat/wordexp.h b/src/compat/wordexp.h
+new file mode 100644
+index 0000000..56c08b2
+--- /dev/null
++++ b/src/compat/wordexp.h
+@@ -0,0 +1,158 @@
++#pragma once
++/*
++ * Minimal <wordexp.h> for MSVC Windows.
++ *
++ * POSIX wordexp() performs shell-style word expansion. This shim implements
++ * just enough for netune's path_expand():
++ *   - ~           → USERPROFILE (or HOMEDRIVE+HOMEPATH)
++ *   - ~user       → USERPROFILE (other users not supported)
++ *   - $VAR        → getenv("VAR")
++ *   - ${VAR}      → getenv("VAR")
++ *
++ * Shell metacharacters (|, &, ;, <, >, (, ), `, quotes) are NOT expanded —
++ * if present, the original string is returned unchanged.
++ *
++ * Only compiled on MSVC; POSIX platforms use the real <wordexp.h>.
++ */
++
++#ifdef _MSC_VER
++
++#include <stdlib.h>
++#include <string.h>
++#include <ctype.h>
++#include <windows.h>
++#include "utf8.h"
++
++#define WRDE_NOCMD 0
++
++typedef struct {
++    size_t  we_wordc;   /* count of words */
++    char  **we_wordv;   /* array of words */
++    size_t  we_offs;    /* reserved slots at start of we_wordv */
++} wordexp_t;
++
++static inline int wordexp(const char *words, wordexp_t *p, int flags)
++{
++    (void)flags;
++    if (!words || !p) return -1;
++
++    /* If the string contains shell metacharacters we don't handle, bail out */
++    if (strpbrk(words, "|&;<>()`'\"\\"))
++        return -1;
++
++    /* Allocate a single result word */
++    char *result = (char *)malloc(strlen(words) + 1);
++    if (!result) return -1;
++
++    const char *src = words;
++    char *dst = result;
++    size_t cap = strlen(words) + 1;
++    size_t used = 0;
++
++    while (*src) {
++        /* Need room for at least 1 char + NUL */
++        if (used + 2 > cap) {
++            cap *= 2;
++            char *t = (char *)realloc(result, cap);
++            if (!t) { free(result); return -1; }
++            result = t;
++            dst = result + used;
++        }
++
++        if (*src == '~') {
++            /* Expand ~ to the user's home directory */
++            const char *home = getenv_utf8("USERPROFILE");
++            if (!home || !home[0]) {
++                /* Fallback: HOMEDRIVE + HOMEPATH */
++                const char *hd = getenv_utf8("HOMEDRIVE");
++                const char *hp = getenv_utf8("HOMEPATH");
++                if (hd && hp) {
++                    size_t hl = strlen(hd) + strlen(hp) + 1;
++                    while (used + hl + 1 > cap) {
++                        cap *= 2;
++                        char *t = (char *)realloc(result, cap);
++                        if (!t) { free(result); return -1; }
++                        result = t;
++                        dst = result + used;
++                    }
++                    size_t dl = strlen(hd);
++                    memcpy(dst, hd, dl);
++                    memcpy(dst + dl, hp, strlen(hp));
++                    used += dl + strlen(hp);
++                    dst = result + used;
++                    src++;
++                    continue;
++                }
++                home = "\\";
++            }
++            size_t hl = strlen(home);
++            while (used + hl + 1 > cap) {
++                cap *= 2;
++                char *t = (char *)realloc(result, cap);
++                if (!t) { free(result); return -1; }
++                result = t;
++                dst = result + used;
++            }
++            memcpy(dst, home, hl);
++            used += hl;
++            dst = result + used;
++            src++;
++        } else if (*src == '$') {
++            /* Expand $VAR or ${VAR} */
++            src++;
++            char varname[256];
++            size_t vi = 0;
++            int braced = 0;
++            if (*src == '{') { braced = 1; src++; }
++            while (*src && (isalnum((unsigned char)*src) || *src == '_') &&
++                   vi < sizeof(varname) - 1) {
++                varname[vi++] = *src++;
++            }
++            varname[vi] = '\0';
++            if (braced && *src == '}') src++;
++
++            const char *val = varname[0] ? getenv_utf8(varname) : NULL;
++            if (val) {
++                size_t vl = strlen(val);
++                while (used + vl + 1 > cap) {
++                    cap *= 2;
++                    char *t = (char *)realloc(result, cap);
++                    if (!t) { free(result); return -1; }
++                    result = t;
++                    dst = result + used;
++                }
++                memcpy(dst, val, vl);
++                used += vl;
++                dst = result + used;
++            }
++            /* If var not found, expand to empty string */
++        } else {
++            *dst++ = *src++;
++            used++;
++        }
++    }
++
++    *dst = '\0';
++
++    p->we_wordv = (char **)malloc(sizeof(char *) * 2);
++    if (!p->we_wordv) { free(result); return -1; }
++    p->we_wordv[0] = result;
++    p->we_wordv[1] = NULL;
++    p->we_wordc = 1;
++    p->we_offs = 0;
++    return 0;
++}
++
++static inline void wordfree(wordexp_t *p)
++{
++    if (!p) return;
++    if (p->we_wordv) {
++        for (size_t i = 0; i < p->we_wordc; i++)
++            free(p->we_wordv[i]);
++        free(p->we_wordv);
++        p->we_wordv = NULL;
++    }
++    p->we_wordc = 0;
++}
++
++#endif /* _MSC_VER */
+diff --git a/src/core/audio_output_mgr.c b/src/core/audio_output_mgr.c
+index d5ba111..52b2fd7 100644
+--- a/src/core/audio_output_mgr.c
++++ b/src/core/audio_output_mgr.c
+@@ -19,17 +19,32 @@ int audio_output_register_backend(AudioOutputBackend *backend) {
+     return 0;
+ }
+ 
+-/* built-in backends */
++/* built-in backends — guarded by HAS_* macros so that platforms without a
++   given backend (e.g. Windows without ALSA/PulseAudio) don't get unresolved
++   linker symbols. CMakeLists.txt defines these when the corresponding
++   pkg-config library is found. */
++#ifdef HAS_ALSA
+ extern AudioOutputBackend g_alsa_backend;
++#endif
++#ifdef HAS_PULSE
+ extern AudioOutputBackend g_pulse_backend;
++#endif
++#ifdef HAS_SDL
+ extern AudioOutputBackend g_sdl_backend;
++#endif
+ 
+ static void register_builtins(void) {
+     static int done = 0;
+     if (done) return;
++#ifdef HAS_ALSA
+     audio_output_register_backend(&g_alsa_backend);
++#endif
++#ifdef HAS_PULSE
+     audio_output_register_backend(&g_pulse_backend);
++#endif
++#ifdef HAS_SDL
+     audio_output_register_backend(&g_sdl_backend);
++#endif
+     done = 1;
+ }
+ 
+diff --git a/src/core/cache_manager.c b/src/core/cache_manager.c
+index 05288c1..3eb2dc5 100644
+--- a/src/core/cache_manager.c
++++ b/src/core/cache_manager.c
+@@ -3,13 +3,11 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+-#include <sys/stat.h>
++#include "compat/utf8.h"   /* UTF-8 aware stat/mkdir/fopen/remove for Windows */
+ #include <sys/types.h>
+ #ifdef _WIN32
+-#include <direct.h>
+ #define PATH_SEP "\\"
+ #else
+-#include <unistd.h>
+ #define PATH_SEP "/"
+ #endif
+ #include <dirent.h>
+@@ -26,12 +24,8 @@ static char  g_cache_path[1100] = {0};
+ /* ── Helpers ────────────────────────────────────────── */
+ static void ensure_dir(const char *dir) {
+     struct stat st = {0};
+-    if (stat(dir, &st) == -1) {
+-#ifdef _WIN32
+-        _mkdir(dir);
+-#else
+-        mkdir(dir, 0755);
+-#endif
++    if (stat_utf8(dir, &st) == -1) {
++        mkdir_utf8(dir);
+     }
+ }
+ 
+@@ -48,7 +42,7 @@ int cache_init(const char *cache_dir) {
+ 
+ /* ── JSON load / save ───────────────────────────────── */
+ static yyjson_mut_doc* load_doc(void) {
+-    FILE *fp = fopen(g_cache_path, "rb");
++    FILE *fp = fopen_utf8(g_cache_path, "rb");
+     if (!fp) return NULL;
+     yyjson_read_err err;
+     yyjson_doc *doc = yyjson_read_fp(fp, 0, NULL, &err);
+@@ -61,7 +55,7 @@ static yyjson_mut_doc* load_doc(void) {
+ 
+ static int save_doc(yyjson_mut_doc *doc) {
+     yyjson_write_err err;
+-    FILE *fp = fopen(g_cache_path, "wb");
++    FILE *fp = fopen_utf8(g_cache_path, "wb");
+     if (!fp) return -1;
+     bool ok = yyjson_mut_write_fp(fp, doc, YYJSON_WRITE_PRETTY, NULL, &err);
+     fclose(fp);
+@@ -310,7 +304,7 @@ void cache_cleanup(void) {
+ }
+ 
+ void cache_clear(void) {
+-    remove(g_cache_path);
++    remove_utf8(g_cache_path);
+     LOG_INFO("Cache cleared");
+ }
+ 
+diff --git a/src/core/cover.c b/src/core/cover.c
+index ab87f45..3fc2089 100644
+--- a/src/core/cover.c
++++ b/src/core/cover.c
+@@ -4,6 +4,12 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <ctype.h>
++
++#ifdef _WIN32
++#define popen  _popen
++#define pclose _pclose
++#endif
++
+ #define STB_IMAGE_IMPLEMENTATION
+ #include "stb_image.h"
+ 
+diff --git a/src/core/playback_coordinator.c b/src/core/playback_coordinator.c
+index fe6b06c..a5ddb05 100644
+--- a/src/core/playback_coordinator.c
++++ b/src/core/playback_coordinator.c
+@@ -15,9 +15,11 @@
+ #include <stdatomic.h>
+ #ifndef _WIN32
+ #include <unistd.h>
+-#endif
+ #include <sys/stat.h>
+ #include <sys/wait.h>
++#else
++#include <sys/stat.h>
++#endif
+ #include <signal.h>
+ 
+ 
+@@ -206,7 +208,12 @@ static void* playback_thread(void *arg) {
+                 if (audio)   { audio_output_destroy(audio); audio = NULL; }
+ 
+                 const char *play_path = cmd.path;
++                /* Detect whether the path is a local file (not a URL).
++                   Unix: /path, ~/path, ./file
++                   Windows: C:\path, C:/path, \path */
+                 int is_local = (cmd.path[0] == '/' || cmd.path[0] == '~'
++                                || cmd.path[0] == '\\'
++                                || (cmd.path[0] && cmd.path[1] == ':')
+                                 || strchr(cmd.path, '.'));
+                 int is_ff = 0;  /* using FFmpeg stream */
+ 
+diff --git a/src/infra/config.c b/src/infra/config.c
+index e11349c..3dfdf9d 100644
+--- a/src/infra/config.c
++++ b/src/infra/config.c
+@@ -4,6 +4,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include "compat/utf8.h"
+ 
+ 
+ /* ── Global singleton ──────────────────────────────── */
+@@ -18,7 +19,7 @@ struct Config {
+ };
+ 
+ Config* config_load(const char *path) {
+-    FILE *fp = fopen(path, "rb");
++    FILE *fp = fopen_utf8(path, "rb");
+     if (!fp) {
+         LOG_WARN("Cannot open config file: %s", path);
+         return NULL;
+diff --git a/src/infra/log.c b/src/infra/log.c
+index f89afae..5f2a9da 100644
+--- a/src/infra/log.c
++++ b/src/infra/log.c
+@@ -4,6 +4,7 @@
+ #include <stdarg.h>
+ #include <time.h>
+ #include <pthread.h>
++#include "compat/utf8.h"
+ 
+ static FILE      *g_log_file = NULL;
+ static pthread_mutex_t g_log_mutex = PTHREAD_MUTEX_INITIALIZER;
+@@ -20,7 +21,7 @@ static const char *level_str(LogLevel level) {
+ 
+ void log_init(const char *path) {
+     if (path) {
+-        g_log_file = fopen(path, "a");
++        g_log_file = fopen_utf8(path, "a");
+         if (!g_log_file) {
+             fprintf(stderr, "[LOG] cannot open log file: %s\n", path);
+         }
+@@ -43,7 +44,11 @@ void log_write(LogLevel level, const char *file, int line,
+     /* timestamp */
+     time_t now = time(NULL);
+     struct tm tm_buf;
++#ifndef _WIN32
+     localtime_r(&now, &tm_buf);
++#else
++    localtime_s(&tm_buf, &now);
++#endif
+     char ts[32];
+     strftime(ts, sizeof(ts), "%H:%M:%S", &tm_buf);
+ 
+diff --git a/src/plugins/decoders/dr_mp3/mp3_decoder.c b/src/plugins/decoders/dr_mp3/mp3_decoder.c
+index f98ef80..cb17991 100644
+--- a/src/plugins/decoders/dr_mp3/mp3_decoder.c
++++ b/src/plugins/decoders/dr_mp3/mp3_decoder.c
+@@ -2,6 +2,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include "compat/utf8.h"   /* UTF-8 aware fopen for Windows */
+ 
+ #define DR_MP3_IMPLEMENTATION
+ #include "dr_mp3.h"
+@@ -41,7 +42,7 @@ static void* mp3_open(const char *path) {
+     Mp3Handle *h = (Mp3Handle*)calloc(1, sizeof(Mp3Handle));
+     if (!h) return NULL;
+ 
+-    h->io.fp = fopen(path, "rb");
++    h->io.fp = fopen_utf8(path, "rb");
+     if (!h->io.fp) { free(h); return NULL; }
+ 
+     /* Pass NULL for onSeek — dr_mp3 will use read+discard for ID3 tags
+diff --git a/src/plugins/lyrics/lrc/lrc_parser.c b/src/plugins/lyrics/lrc/lrc_parser.c
+index b53ec63..be61589 100644
+--- a/src/plugins/lyrics/lrc/lrc_parser.c
++++ b/src/plugins/lyrics/lrc/lrc_parser.c
+@@ -3,6 +3,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <ctype.h>
++#include "compat/utf8.h"   /* UTF-8 aware fopen for Windows */
+ 
+ /* ── Parse a single LRC timestamp line ──────────────── */
+ /* Returns number of lines parsed from this one string. */
+@@ -132,7 +133,7 @@ int lyric_find_line(const Lyrics *ly, int time_ms) {
+ /* ── Load LRC from file ──────────────────────────── */
+ Lyrics* lrc_load_file(const char *path) {
+     if (!path) return NULL;
+-    FILE *f = fopen(path, "rb");
++    FILE *f = fopen_utf8(path, "rb");
+     if (!f) return NULL;
+ 
+     fseek(f, 0, SEEK_END);
+diff --git a/src/plugins/music_sources/local/local_source.c b/src/plugins/music_sources/local/local_source.c
+index 4094a5c..9f9c630 100644
+--- a/src/plugins/music_sources/local/local_source.c
++++ b/src/plugins/music_sources/local/local_source.c
+@@ -7,9 +7,9 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include "compat/utf8.h"
+ #include <strings.h>
+ #include <dirent.h>
+-#include <sys/stat.h>
+ 
+ /* ── Dynamic array helpers ──────────────────────────── */
+ typedef struct {
+@@ -48,6 +48,18 @@ static bool has_music_ext(const char *name) {
+     return decoder_supports_ext(dot + 1);
+ }
+ 
++/* Find the filename portion of a path, handling both / and \ separators. */
++static const char *path_basename(const char *path) {
++    if (!path) return NULL;
++    const char *base = path;
++    const char *slash = strrchr(path, '/');
++    const char *bslash = strrchr(path, '\\');
++    const char *last = (slash && bslash) ? (slash > bslash ? slash : bslash)
++                     : slash ? slash : bslash;
++    if (last) base = last + 1;
++    return base;
++}
++
+ static void scan_dir(const char *dir_path, SongArray *arr) {
+     DIR *dir = opendir(dir_path);
+     if (!dir) return;
+@@ -62,7 +74,7 @@ static void scan_dir(const char *dir_path, SongArray *arr) {
+         snprintf(full, sizeof(full), "%s/%s", dir_path, entry->d_name);
+ 
+         struct stat st;
+-        if (stat(full, &st) != 0) continue;
++        if (stat_utf8(full, &st) != 0) continue;
+ 
+         if (S_ISDIR(st.st_mode)) {
+             scan_dir(full, arr);
+@@ -101,8 +113,8 @@ static bool song_matches(const SongInfo *s, const char *keyword) {
+     const char *title  = s->title  ? s->title  : "";
+     const char *artist = s->artist ? s->artist : "";
+     const char *album  = s->album  ? s->album  : "";
+-    const char *fname  = s->id ? strrchr(s->id, '/') : NULL;
+-    fname = fname ? fname + 1 : (s->id ? s->id : "");
++    const char *fname  = s->id ? path_basename(s->id) : NULL;
++    fname = fname ? fname : (s->id ? s->id : "");
+     return strcasestr(title, keyword)  ||
+            strcasestr(artist, keyword) ||
+            strcasestr(album, keyword)  ||
+@@ -192,8 +204,8 @@ static int local_get_song_detail(const char *song_id, SongInfo *out) {
+     DecoderInfo info;
+     decoder_get_info(d, &info);
+ 
+-    const char *fname = strrchr(song_id, '/');
+-    fname = fname ? fname + 1 : song_id;
++    const char *fname = path_basename(song_id);
++    fname = fname ? fname : song_id;
+ 
+     out->id     = strdup(song_id);
+     out->source = strdup("local");
+diff --git a/src/plugins/music_sources/netease/netease_api.c b/src/plugins/music_sources/netease/netease_api.c
+index 7a7cf18..5139eb0 100644
+--- a/src/plugins/music_sources/netease/netease_api.c
++++ b/src/plugins/music_sources/netease/netease_api.c
+@@ -3,6 +3,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
++#include "compat/utf8.h"
+ #ifndef _WIN32
+ #include <unistd.h>
+ #else
+@@ -356,10 +357,23 @@ int netease_lyric(const char *song_id, char **buf) {
+ }
+ 
+ char* netease_download(const char *id, const char *url) {
+-    char path[256]; snprintf(path,sizeof(path),"/tmp/netune_%s.mp3",id);
+-    unlink(path);
++    /* Use the platform temp directory: $TMPDIR / $TEMP / $TMP on Windows,
++       /tmp on POSIX. */
++    const char *tmpdir = getenv_utf8("TMPDIR");
++#ifndef _WIN32
++    if (!tmpdir || !tmpdir[0]) tmpdir = "/tmp";
++#else
++    if (!tmpdir || !tmpdir[0]) tmpdir = getenv_utf8("TEMP");
++    if (!tmpdir || !tmpdir[0]) tmpdir = getenv_utf8("TMP");
++    if (!tmpdir || !tmpdir[0]) tmpdir = ".";
++#endif
++    char path[512];
++    const char *sep = (tmpdir[strlen(tmpdir)-1] == '/' || tmpdir[strlen(tmpdir)-1] == '\\')
++                      ? "" : "/";
++    snprintf(path, sizeof(path), "%s%snetune_%s.mp3", tmpdir, sep, id);
++    remove_utf8(path);
+     char cmd[3072]; snprintf(cmd,sizeof(cmd),"curl -sL --max-time 60 \"%s\" -o \"%s\"",url,path);
+     int rc = system(cmd);
+-    if (rc != 0) { unlink(path); return NULL; }
++    if (rc != 0) { remove_utf8(path); return NULL; }
+     return strdup(path);
+ }
+diff --git a/src/ui/keybindings.cpp b/src/ui/keybindings.cpp
+index c8b50a2..f999d4f 100644
+--- a/src/ui/keybindings.cpp
++++ b/src/ui/keybindings.cpp
+@@ -4,6 +4,7 @@
+ #include <cstring>
+ #include <unordered_map>
+ #include <cassert>
++#include "compat/utf8.h"   /* UTF-8 aware fopen for Windows */
+ 
+ /* ── Internal implementation ────────────────────────── */
+ struct KeybindingManager::Impl {
+@@ -52,7 +53,7 @@ static const char *yaml_scalar(yaml_event_t *ev) {
+ }
+ 
+ bool KeybindingManager::load(const std::string &yaml_path) {
+-    FILE *fp = fopen(yaml_path.c_str(), "rb");
++    FILE *fp = fopen_utf8(yaml_path.c_str(), "rb");
+     if (!fp) {
+         LOG_WARN("Cannot open keybindings: %s", yaml_path.c_str());
+         return false;
+diff --git a/src/ui/layout_engine.cpp b/src/ui/layout_engine.cpp
+index 5d40512..e85330e 100644
+--- a/src/ui/layout_engine.cpp
++++ b/src/ui/layout_engine.cpp
+@@ -4,6 +4,7 @@
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
++#include "compat/utf8.h"   /* UTF-8 aware fopen for Windows */
+ using namespace ftxui;
+ 
+ LayoutEngine::LayoutEngine() = default;
+@@ -99,7 +100,7 @@ static std::unique_ptr<LayoutNode> parse_node(yaml_parser_t *parser) {
+ }
+ 
+ bool LayoutEngine::load(const std::string &yaml_path) {
+-    FILE *fp = fopen(yaml_path.c_str(), "rb");
++    FILE *fp = fopen_utf8(yaml_path.c_str(), "rb");
+     if (!fp) { LOG_WARN("Cannot open layout: %s", yaml_path.c_str()); return false; }
+ 
+     yaml_parser_t parser;
+diff --git a/src/ui/theme.cpp b/src/ui/theme.cpp
+index e4b9790..e5a12f5 100644
+--- a/src/ui/theme.cpp
++++ b/src/ui/theme.cpp
+@@ -4,18 +4,29 @@
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
+-#include <unistd.h>
++#include "compat/utf8.h"   /* UTF-8 aware getenv/fopen/access for Windows */
+ #include <algorithm>
+ 
+ /* ── XDG path helper (local copy, avoids dependency on app.cpp) ── */
+ static std::string xdg_config_path(const std::string &sub) {
+-    const char *d = getenv("XDG_CONFIG_HOME");
++#ifndef _WIN32
++    const char *d = getenv_utf8("XDG_CONFIG_HOME");
+     if (d && d[0]) {
+         return std::string(d) + "/netune/" + sub;
+     }
+-    const char *home = getenv("HOME");
++    const char *home = getenv_utf8("HOME");
+     if (!home) home = "/tmp";
+     return std::string(home) + "/.config/netune/" + sub;
++#else
++    /* Windows: use APPDATA as the config directory */
++    const char *d = getenv_utf8("APPDATA");
++    if (!d || !d[0]) {
++        const char *home = getenv_utf8("USERPROFILE");
++        if (!home) home = "C:\\";
++        return std::string(home) + "\\.config\\netune\\" + sub;
++    }
++    return std::string(d) + "\\netune\\" + sub;
++#endif
+ }
+ 
+ /* ── Hex ↔ ThemeColor ─────────────────────────────── */
+@@ -137,14 +148,14 @@ std::vector<std::string> ThemeManager::list_builtin_themes() {
+                            "netease_dark", "netease_light"};
+     for (const char *n : known) {
+         std::string p = xdg_config_path(std::string("data/themes/") + n + ".yaml");
+-        if (access(p.c_str(), R_OK) == 0)
++        if (access_utf8(p.c_str(), R_OK) == 0)
+             names.push_back(n);
+     }
+     return names;
+ }
+ 
+ bool ThemeManager::load(const std::string &yaml_path) {
+-    FILE *fp = fopen(yaml_path.c_str(), "rb");
++    FILE *fp = fopen_utf8(yaml_path.c_str(), "rb");
+     if (fp) {
+         yaml_parser_t parser;
+         yaml_event_t  event;
+diff --git a/vcpkg.json b/vcpkg.json
+new file mode 100644
+index 0000000..421df9a
+--- /dev/null
++++ b/vcpkg.json
+@@ -0,0 +1,12 @@
++{
++  "name": "netune",
++  "version-string": "2.0.0",
++  "dependencies": [
++    "ffmpeg",
++    "sdl2",
++    "yyjson",
++    "libyaml",
++    "pkgconf"
++  ],
++  "builtin-baseline": "2024.07.12"
++}
