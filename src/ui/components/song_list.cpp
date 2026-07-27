@@ -214,9 +214,8 @@ Element render_song_list(const AppState &s) {
             const int logo_rows = (int)(sizeof(logo)/sizeof(logo[0]));
 
             Elements logo_els;
-            auto brand_red = Color::RGB(227, 50, 45);
             for (int i = 0; i < logo_rows; i++)
-                logo_els.push_back(color(brand_red, text(logo[i])));
+                logo_els.push_back(theme_accent(text(logo[i])));
 
             /* Center horizontally (adapts to actual panel width) and vertically */
             els.push_back(filler());
