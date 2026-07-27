@@ -60,10 +60,10 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
             for (int j = 0; j < bar_len; j++) bar_str += "\u2501";
 
             lines.push_back(
-                vbox({
-                    centered(text(raw) | bold),
-                    centered(theme_accent(text(bar_str))),
-                }) | focus
+                centered(vbox({
+                    text(raw) | bold,
+                    theme_accent(text(bar_str)),
+                })) | focus
             );
         } else {
             lines.push_back(centered(theme_fg(text(raw)) | dim));
