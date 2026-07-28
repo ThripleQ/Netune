@@ -14,3 +14,6 @@ Element theme_accent(Element e);
 /* ── Extended semantic colors ──────────────────────── */
 /* Selection: sets bgcolor (accent_bg) and text color (fg) */
 Element theme_selection(Element e);
+
+/* Spectrum bar color */
+Element theme_spectrum(Element e);

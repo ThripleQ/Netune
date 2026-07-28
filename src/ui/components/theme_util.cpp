@@ -8,6 +8,7 @@ static const Color kDefaultFg     = Color::RGB(192, 202, 245);
 static const Color kDefaultAccent = Color::RGB(122, 162, 247);
 static const Color kDefaultMuted  = Color::RGB( 86,  95, 137);
 static const Color kDefaultBorder = Color::RGB( 41,  46,  66);
+static const Color kDefaultSpectrum = kDefaultAccent;
 static const Color kDefaultSuccess= Color::RGB(158, 206, 106);
 static const Color kDefaultWarning= Color::RGB(224, 175, 104);
 static const Color kDefaultError  = Color::RGB(247, 118, 142);
@@ -18,6 +19,9 @@ static Color pick_fg(const Theme &t) {
 }
 static Color pick_accent(const Theme &t) {
     return t.accent.has_color ? Color::RGB(t.accent.r, t.accent.g, t.accent.b) : kDefaultAccent;
+}
+static Color pick_spectrum(const Theme &t) {
+    return t.spectrum.has_color ? Color::RGB(t.spectrum.r, t.spectrum.g, t.spectrum.b) : kDefaultSpectrum;
 }
 
 /* ── Core theme colors ─────────────────────────────── */
@@ -35,6 +39,10 @@ Element theme_bg(Element e) {
 
 Element theme_accent(Element e) {
     return e | color(pick_accent(ThemeManager::instance().current()));
+}
+
+Element theme_spectrum(Element e) {
+    return e | color(pick_spectrum(ThemeManager::instance().current()));
 }
 
 /* ── Extended semantic colors ──────────────────────── */

@@ -30,6 +30,7 @@ struct Theme {
     ThemeColor warning;       /* warning / VIP badge        */
     ThemeColor error;         /* error / important          */
     ThemeColor overlay_bg;    /* overlay/popup background   */
+    ThemeColor spectrum;      /* spectrum visualization     */
 };
 
 /* ── Theme manager (singleton) ──────────────────────── */

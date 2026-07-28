@@ -216,8 +216,8 @@ Element render_spectrum_bar(const AppState &s) {
         });
     } else {
         bars = vbox({
-            theme_accent(text(row1)),
-            theme_accent(text(row2)),
+            theme_spectrum(text(row1)),
+            theme_spectrum(text(row2)),
         });
     }
 

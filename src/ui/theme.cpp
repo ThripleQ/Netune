@@ -122,6 +122,10 @@ void ThemeManager::derive_colors() {
     /* overlay_bg: slightly lighter than bg */
     if (!theme_.overlay_bg.has_color && theme_.bg.has_color)
         theme_.overlay_bg = lighten(theme_.bg, 0.06f);
+
+    /* spectrum: defaults to accent if not set */
+    if (!theme_.spectrum.has_color && theme_.accent.has_color)
+        theme_.spectrum = theme_.accent;
 }
 
 /* Resolve a theme name to a file path.
@@ -166,7 +170,7 @@ bool ThemeManager::load(const std::string &yaml_path) {
         bool in_colors = false;
         std::string hex_bg, hex_fg, hex_accent;
         std::string hex_accent_bg, hex_muted, hex_border;
-        std::string hex_success, hex_warning, hex_error, hex_overlay_bg;
+        std::string hex_success, hex_warning, hex_error, hex_overlay_bg, hex_spectrum;
         std::string current_field;
 
         while (yaml_parser_parse(&parser, &event)) {
@@ -190,6 +194,7 @@ bool ThemeManager::load(const std::string &yaml_path) {
                         else if (current_field == "warning")     hex_warning     = val;
                         else if (current_field == "error")       hex_error       = val;
                         else if (current_field == "overlay_bg")  hex_overlay_bg  = val;
+                        else if (current_field == "spectrum")    hex_spectrum    = val;
                         current_field.clear();
                     }
                 } else if (strcmp(val, "name") == 0) {
@@ -218,6 +223,7 @@ bool ThemeManager::load(const std::string &yaml_path) {
         if (!hex_warning.empty())     theme_.warning     = theme_color_from_hex(hex_warning);
         if (!hex_error.empty())       theme_.error       = theme_color_from_hex(hex_error);
         if (!hex_overlay_bg.empty())  theme_.overlay_bg  = theme_color_from_hex(hex_overlay_bg);
+        if (!hex_spectrum.empty())    theme_.spectrum    = theme_color_from_hex(hex_spectrum);
 
         /* Derive any unset extended colors */
         derive_colors();
