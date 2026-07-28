@@ -317,6 +317,12 @@ void StateStore::set_song_panel_width(int cols) {
     state_.song_panel_width = cols;
 }
 
+void StateStore::set_spectrum(const float *bands) {
+    /* dispatched on main thread via event_bus_poll */
+    if (bands)
+        memcpy(state_.spectrum, bands, sizeof(state_.spectrum));
+}
+
 void StateStore::set_lyrics(Lyrics *ly) {
     state_.lyrics = ly;
 }

@@ -43,6 +43,9 @@ typedef enum {
     EV_CONFIG_CHANGED,
     EV_THEME_CHANGED,
 
+    /* spectrum */
+    EV_SPECTRUM_UPDATE,
+
     /* cover art */
     EV_COVER_LOADED,
 

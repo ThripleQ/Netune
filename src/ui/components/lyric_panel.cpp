@@ -3,8 +3,10 @@
 #include "ui/components/spinner.h"
 #include "ui/state_store.h"
 #include "core/lyric.h"
+#include "core/spectrum.h"
 #include <ftxui/screen/string.hpp>
 #include <string>
+#include <algorithm>
 using namespace ftxui;
 
 static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
@@ -23,7 +25,7 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
         if (kprog > 1.0f) kprog = 1.0f;
     }
 
-    const int max_text = col_w - 1;  /* 1-char safety margin */
+    const int max_text = col_w - 1;
     if (max_text < 4) return text("") | size(HEIGHT, EQUAL, 20);
 
     auto centered = [](Element e) {
@@ -35,7 +37,6 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
         std::string raw = ly->lines[i].text ? ly->lines[i].text : "";
         if (raw.empty()) raw = " ";
 
-        /* Truncate if too long (by display width, UTF-8 safe) */
         if (string_width(raw) > max_text) {
             std::string out;
             int w = 0;
@@ -51,7 +52,6 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
         }
 
         if (i == base) {
-            /* Current line: centered text + centered progress bar below */
             int text_w = string_width(raw);
             int bar_len = (int)(kprog * (float)text_w);
             if (bar_len < 0) bar_len = 0;
@@ -136,4 +136,95 @@ Element render_lyric_panel(const AppState &s) {
         render_cover_only(s) | size(WIDTH, EQUAL, cw),
         render_lyrics_only(s) | size(WIDTH, EQUAL, lw) | center,
     }));
+}
+
+/* ── Spectrum bar (2 rows, 16-level bars) ──────────── */
+Element render_spectrum_bar(const AppState &s) {
+    /* UTF-8 bytes for each level: 0=space, 1-8=▁▂▃▄▅▆▇█ */
+    static const char LEVEL_BYTES[9][4] = {
+        {0x20, 0, 0, 0},
+        {'\xe2','\x96','\x81', 0},
+        {'\xe2','\x96','\x82', 0},
+        {'\xe2','\x96','\x83', 0},
+        {'\xe2','\x96','\x84', 0},
+        {'\xe2','\x96','\x85', 0},
+        {'\xe2','\x96','\x86', 0},
+        {'\xe2','\x96','\x87', 0},
+        {'\xe2','\x96','\x88', 0},
+    };
+
+    /* Full terminal width for this panel view */
+    int total_w = s.song_panel_width + 29;
+    if (total_w < 8) total_w = 8;
+    if (total_w > SPECTRUM_BANDS) total_w = SPECTRUM_BANDS;
+
+    /* Show real bands: one column per band, no stretching,
+       at most as many as the terminal width allows */
+    int bands = SPECTRUM_BANDS;
+    if (bands > total_w) bands = total_w;
+
+    /* ── Envelope follower + emphasis ────────────────── */
+    /* Replaces the peak-normalization approach with a simple
+       envelope that rises instantly and falls quickly.
+       Pre-emphasis boosts high frequencies so they're visible
+       despite music's natural HF roll-off. */
+    static float s_env[SPECTRUM_BANDS] = {0};
+    const float ENV_RELEASE = 0.92f;  /* ~150ms to fall 50% at 60fps */
+    const float GAIN = 3.5f;
+    const float FLOOR = 0.05f;
+
+    std::string row1, row2;
+    for (int i = 0; i < bands; i++) {
+        float v = s.spectrum[i];
+        if (v < 0.0f) v = 0.0f;
+
+        /* Pre-emphasis: 0.8 + 12*(i/128)^2
+           Band 0: 0.8x  Band 64: 3.8x  Band 127: 12.8x */
+        float emphasis = 0.8f + 12.0f * (float)i * (float)i
+                          / ((float)SPECTRUM_BANDS * (float)SPECTRUM_BANDS);
+        v *= emphasis;
+
+        /* Envelope follower: instant attack, fast release */
+        if (v > s_env[i]) {
+            s_env[i] = v;       /* instant rise */
+        } else {
+            s_env[i] *= ENV_RELEASE;  /* fast fall */
+            if (s_env[i] < 0.001f) s_env[i] = 0.0f;
+        }
+        v = s_env[i];
+
+        /* Gain + floor → visible bar */
+        v = v * GAIN + FLOOR;
+        if (v > 1.0f) v = 1.0f;
+
+        /* Map to 2-row bar (16 levels) */
+        int total = (int)(v * 16.0f + 0.5f);
+        if (total > 16) total = 16;
+        int bot = (total > 8) ? 8 : total;
+        int top = (total > 8) ? (total - 8) : 0;
+        row2.append(LEVEL_BYTES[bot], bot == 0 ? 1 : 3);
+        row1.append(LEVEL_BYTES[top], top == 0 ? 1 : 3);
+    }
+
+    /* Build bar: always exactly 2 rows high, centered */
+    Element bars;
+    bool dimmed = (s.playback_state != PlaybackState::Playing);
+    if (dimmed) {
+        bars = vbox({
+            text(row1) | dim,
+            text(row2) | dim,
+        });
+    } else {
+        bars = vbox({
+            theme_accent(text(row1)),
+            theme_accent(text(row2)),
+        });
+    }
+
+    /* Center in available space */
+    return hbox({
+        filler(),
+        bars,
+        filler(),
+    }) | size(HEIGHT, EQUAL, 2);
 }

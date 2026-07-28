@@ -188,6 +188,7 @@ set(CORE_SOURCES
   src/core/playback_coordinator.c
   src/core/cache_manager.c
   src/core/search_manager.c
+  src/core/spectrum.c
 )
 
 set(INFRA_SOURCES

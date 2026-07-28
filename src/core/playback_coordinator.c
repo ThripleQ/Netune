@@ -6,6 +6,7 @@
 #include "plugins/decoders/ffmpeg/ffmpeg_stream.h"
 #include "infra/config.h"
 #include "core/event_bus.h"
+#include "core/spectrum.h"
 #include "infra/log.h"
 
 #include <stdio.h>
@@ -171,9 +172,21 @@ static void* playback_thread(void *arg) {
         return NULL;
     }
 
-
-    
-
+    /* ── Spectrum analysis buffer ──────────────────── */
+    int16_t *spectrum_buf = (int16_t*)calloc(
+        (size_t)SPECTRUM_FFT_SIZE, sizeof(int16_t));
+    /* Overlapping window: FFT_SIZE=1024, HOP=512.
+       Every 512 new samples we shift the buffer and run FFT.
+       Gives 43 Hz/bin resolution at ~86 Hz update rate. */
+    #define SPECTRUM_HOP (SPECTRUM_FFT_SIZE / 2)
+    int spectrum_pending = 0;
+    int16_t spectrum_tmp[SPECTRUM_HOP];
+    if (!spectrum_buf) {
+        LOG_ERROR("OOM for spectrum buffer");
+        free(pcm_buf);
+        return NULL;
+    }
+    float spectrum_bands[SPECTRUM_BANDS];
     FFStream *ffstream = NULL;
 
     while (g_running) {
@@ -395,6 +408,47 @@ static void* playback_thread(void *arg) {
             if (written > 0)
                 current_frame += written;
 
+            /* ── Spectrum capture (overlapping window) ── */
+            {
+                int to_copy = (frames > written) ? written : frames;
+                if (to_copy > 0) {
+                    /* Mix stereo to mono, batch into temp buffer */
+                    int need = SPECTRUM_HOP - spectrum_pending;
+                    if (need > to_copy) need = to_copy;
+                    int dst = spectrum_pending;
+                    for (int i = 0; i < need; i++, dst++) {
+                        int s = (int)pcm_buf[i * 2];
+                        if (channels >= 2)
+                            s = (s + (int)pcm_buf[i * 2 + 1]) / 2;
+                        if (s > 32767) s = 32767;
+                        if (s < -32768) s = -32768;
+                        spectrum_tmp[dst] = (int16_t)s;
+                    }
+                    spectrum_pending += need;
+                }
+
+                /* Every HOP new samples slide the window and run FFT */
+                if (spectrum_pending >= SPECTRUM_HOP) {
+                    spectrum_pending = 0;
+
+                    /* Shift out oldest HOP samples */
+                    memmove(spectrum_buf,
+                            spectrum_buf + SPECTRUM_HOP,
+                            (SPECTRUM_FFT_SIZE - SPECTRUM_HOP)
+                            * sizeof(int16_t));
+                    /* Copy HOP new samples to end */
+                    memcpy(spectrum_buf + (SPECTRUM_FFT_SIZE - SPECTRUM_HOP),
+                           spectrum_tmp,
+                           SPECTRUM_HOP * sizeof(int16_t));
+
+                    spectrum_process(spectrum_buf, spectrum_bands,
+                                     SPECTRUM_BANDS);
+                    event_bus_publish(EV_SPECTRUM_UPDATE,
+                                      spectrum_bands,
+                                      sizeof(spectrum_bands));
+                }
+            }
+
             /* Progress event */
             int64_t now_ms = (int64_t)((double)current_frame / samplerate * 1000);
             if (now_ms - last_progress_ms >= PROGRESS_INTERVAL_MS) {
@@ -421,6 +475,7 @@ cleanup:
     }
     if (decoder) decoder_close(decoder);
     if (audio)   audio_output_destroy(audio);
+    free(spectrum_buf);
     free(pcm_buf);
     LOG_INFO("Playback thread ended");
     return NULL;

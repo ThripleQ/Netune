@@ -7,6 +7,7 @@ extern "C" {
 #include "core/music_source.h"
 #include "core/lyric.h"
 #include "core/cover.h"
+#include "core/spectrum.h"
 }
 
 /* ── Playback state ────────────────────────────────── */
@@ -88,6 +89,9 @@ struct AppState {
     /* help screen */
     bool show_help = false;
 
+    /* spectrum */
+    float spectrum[SPECTRUM_BANDS] = {0};
+
     /* lyrics & cover */
     Lyrics    *lyrics      = nullptr;
     bool       lyric_mode  = false;     /* full-screen lyrics view */
@@ -145,6 +149,9 @@ public:
     void set_netease_menu(const std::vector<NeteaseMenuItem> &items);
     void set_netease_selected(int idx);
     void set_login_state(int state, const std::string &status, const std::string &qr);
+
+    /* spectrum */
+    void set_spectrum(const float *bands);
 
     /* lyrics & cover */
     void set_lyrics(Lyrics *ly);
