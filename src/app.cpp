@@ -286,12 +286,20 @@ static void ev_progress(const BusEvent *ev, void *data) {
         double prog = (p[1] > 0) ? (double)p[0] / p[1] : 0.0;
         int tot = (p[2] > 0 && p[1] > 0) ? p[1] / p[2] : 0;
         int cur_ms = (p[2] > 0) ? (int)((long long)p[0] * 1000LL / p[2]) : 0;
-        StateStore::instance().set_progress_ms(prog, cur_ms, tot);
         /* Clear seek target once progress is within 1s of the target (seek executed) */
         int seek_dist = cur_ms / 1000 - g_seek_target;
         if (g_seek_target >= 0 && seek_dist >= -1 && seek_dist <= 1) {
             g_seek_target = -1;
             StateStore::instance().set_seek_target_progress(0.0f);
+            /* Progress caught up — fall through to update */
+        }
+        if (g_seek_target < 0) {
+            /* No pending seek: normal progress update.
+               Skip when seek is pending but playback hasn't caught up
+               yet — prevents stale EV_PROGRESS_UPDATE (sent before the
+               playback thread processed CMD_SEEK) from overwriting the
+               already-correct progress set by consume_seek(). */
+            StateStore::instance().set_progress_ms(prog, cur_ms, tot);
         }
     }
 }
@@ -943,6 +951,10 @@ int run_app(int argc, char **argv) {
                 event_bus_publish(EV_BUFFERING_UPDATE, &target, sizeof(target));
                 g_seek_target = target;
                 state.set_seek_target_progress((float)target / st.total_time_sec);
+                /* Immediately sync progress so the gauge doesn't fall back
+                   to the old s.progress value when seek_target_progress is
+                   0.0f (target=0 → 0/total → 0.0f, and > 0.0f is false). */
+                state.set_progress((double)target / st.total_time_sec, target, st.total_time_sec);
             }
         }
         g_seek_accum = 0;
