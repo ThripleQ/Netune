@@ -1528,6 +1528,11 @@ int run_app(int argc, char **argv) {
         case Action::SeekBackward:
             if (cur.playback_state != PlaybackState::Stopped && cur.total_time_sec > 0) {
                 g_seek_accum -= config_get_int(config_global(), "playback.seek_step_sec", 5);
+                /* Clamp so seek target never goes below 0.
+                   Prevents rapid seek-to-0 loops when holding left
+                   at the beginning of a track, which can crash. */
+                if (cur.current_time_sec + g_seek_accum < 0)
+                    g_seek_accum = -cur.current_time_sec;
                 g_last_seek_tp = std::chrono::steady_clock::now();
                 state.set_seek_indicator(g_seek_accum);
             }
