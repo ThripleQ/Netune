@@ -3,21 +3,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
+#include "compat/utf8.h"   /* UTF-8 aware stat/mkdir/fopen/remove for Windows */
 #include <sys/types.h>
 #ifdef _WIN32
-#include <direct.h>
 #define PATH_SEP "\\"
 #else
-#include <unistd.h>
 #define PATH_SEP "/"
 #endif
-#include <dirent.h>
 #include <strings.h>
 #include <yyjson.h>
 
 /* ── Internals ──────────────────────────────────────── */
-#define MAX_CACHE_ENTRIES 8192
 #define CACHE_FILE_NAME "cache.json"
 
 static char  g_cache_dir[1024] = {0};
@@ -26,12 +22,8 @@ static char  g_cache_path[1100] = {0};
 /* ── Helpers ────────────────────────────────────────── */
 static void ensure_dir(const char *dir) {
     struct stat st = {0};
-    if (stat(dir, &st) == -1) {
-#ifdef _WIN32
-        _mkdir(dir);
-#else
-        mkdir(dir, 0755);
-#endif
+    if (stat_utf8(dir, &st) == -1) {
+        mkdir_utf8(dir);
     }
 }
 
@@ -48,7 +40,7 @@ int cache_init(const char *cache_dir) {
 
 /* ── JSON load / save ───────────────────────────────── */
 static yyjson_mut_doc* load_doc(void) {
-    FILE *fp = fopen(g_cache_path, "rb");
+    FILE *fp = fopen_utf8(g_cache_path, "rb");
     if (!fp) return NULL;
     yyjson_read_err err;
     yyjson_doc *doc = yyjson_read_fp(fp, 0, NULL, &err);
@@ -61,7 +53,7 @@ static yyjson_mut_doc* load_doc(void) {
 
 static int save_doc(yyjson_mut_doc *doc) {
     yyjson_write_err err;
-    FILE *fp = fopen(g_cache_path, "wb");
+    FILE *fp = fopen_utf8(g_cache_path, "wb");
     if (!fp) return -1;
     bool ok = yyjson_mut_write_fp(fp, doc, YYJSON_WRITE_PRETTY, NULL, &err);
     fclose(fp);
@@ -310,7 +302,7 @@ void cache_cleanup(void) {
 }
 
 void cache_clear(void) {
-    remove(g_cache_path);
+    remove_utf8(g_cache_path);
     LOG_INFO("Cache cleared");
 }
 

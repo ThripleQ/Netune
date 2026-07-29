@@ -75,8 +75,12 @@ Element render_status_bar(const AppState &s) {
         if (merged > s.total_time_sec) merged = s.total_time_sec;
         gv = (float)merged / s.total_time_sec;
     }
+    /* Two-tone progress bar: gauge with accent-colored progress on lighter track bg */
+    auto gv_clamped = std::min(std::max(gv, 0.0f), 1.0f);
+    auto gauge_elt = gauge(gv_clamped) | theme_accent | theme_progress_track;
+
     return theme_bg(vbox(Elements{
         theme_fg(text(top_line)) | dim,
-        gauge(gv) | theme_accent,
+        gauge_elt,
     }));
 }

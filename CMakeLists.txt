@@ -167,6 +167,13 @@ if(NETUNE_PREFER_SYSTEM_FFMPEG)
 endif()
 
 if(NOT NETUNE_FFMPEG_TARGET)
+  if(WIN32)
+    message(FATAL_ERROR
+      "FFmpeg: system FFmpeg not found or too old.\n"
+      "On Windows, install FFmpeg via vcpkg:\n"
+      "  vcpkg install ffmpeg:x64-windows\n"
+      "and pass -DCMAKE_TOOLCHAIN_FILE=<vcpkg>/scripts/buildsystems/vcpkg.cmake")
+  endif()
   netune_build_ffmpeg_from_source(NETUNE_FFMPEG_TARGET)
 endif()
 
@@ -181,6 +188,7 @@ set(CORE_SOURCES
   src/core/playback_coordinator.c
   src/core/cache_manager.c
   src/core/search_manager.c
+  src/core/spectrum.c
 )
 
 set(INFRA_SOURCES
@@ -272,7 +280,9 @@ if(EXISTS "${CMAKE_BINARY_DIR}/netease-cli")
 endif()
 
 target_include_directories(netune PRIVATE src)
-target_compile_definitions(netune PRIVATE _GNU_SOURCE)
+if(NOT WIN32)
+  target_compile_definitions(netune PRIVATE _GNU_SOURCE)
+endif()
 if(ALSA_FOUND)
   target_compile_definitions(netune PRIVATE HAS_ALSA)
 endif()
@@ -307,9 +317,17 @@ if(NOT WIN32)
   target_link_libraries(netune PRIVATE dl m)
 endif()
 
-if(MSVC)
-  target_compile_definitions(netune PRIVATE _CRT_NONSTDC_NO_DEPRECATE)
+if(WIN32)
+  # Both MSVC and MinGW-w64 need the compat headers to shadow POSIX names
+  # (dirent.h, strings.h, utf8.h, wcwidth_compat.h, wordexp.h)
   target_include_directories(netune BEFORE PRIVATE src/compat)
+endif()
+
+if(MSVC)
+  # MSVC also needs the pthread shim (MinGW-w64 provides its own <pthread.h>)
+  target_include_directories(netune BEFORE PRIVATE src/compat/msvc)
+  target_compile_definitions(netune PRIVATE _CRT_NONSTDC_NO_DEPRECATE)
+  target_compile_options(netune PRIVATE /utf-8)
 endif()
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
@@ -323,7 +341,11 @@ endif()
 find_program(GO_EXECUTABLE go)
 if(GO_EXECUTABLE)
   set(NETEASE_CLI_DIR "${CMAKE_SOURCE_DIR}/src/plugins/music_sources/netease/netease-cli")
-  set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/netease-cli")
+  if(WIN32)
+    set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/netease-cli.exe")
+  else()
+    set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/netease-cli")
+  endif()
 
   add_custom_command(
     OUTPUT  "${NETEASE_CLI_OUT}"

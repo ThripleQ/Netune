@@ -1,7 +1,7 @@
 #include "core/decoder.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include "compat/utf8.h"   /* UTF-8 aware fopen for Windows */
 
 #define DR_MP3_IMPLEMENTATION
 #include "dr_mp3.h"
@@ -41,7 +41,7 @@ static void* mp3_open(const char *path) {
     Mp3Handle *h = (Mp3Handle*)calloc(1, sizeof(Mp3Handle));
     if (!h) return NULL;
 
-    h->io.fp = fopen(path, "rb");
+    h->io.fp = fopen_utf8(path, "rb");
     if (!h->io.fp) { free(h); return NULL; }
 
     /* Pass NULL for onSeek — dr_mp3 will use read+discard for ID3 tags

@@ -4,6 +4,7 @@
 #include <stdarg.h>
 #include <time.h>
 #include <pthread.h>
+#include "compat/utf8.h"
 
 static FILE      *g_log_file = NULL;
 static pthread_mutex_t g_log_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -20,7 +21,7 @@ static const char *level_str(LogLevel level) {
 
 void log_init(const char *path) {
     if (path) {
-        g_log_file = fopen(path, "a");
+        g_log_file = fopen_utf8(path, "a");
         if (!g_log_file) {
             fprintf(stderr, "[LOG] cannot open log file: %s\n", path);
         }
@@ -43,7 +44,11 @@ void log_write(LogLevel level, const char *file, int line,
     /* timestamp */
     time_t now = time(NULL);
     struct tm tm_buf;
+#ifdef _WIN32
+    localtime_s(&tm_buf, &now);
+#else
     localtime_r(&now, &tm_buf);
+#endif
     char ts[32];
     strftime(ts, sizeof(ts), "%H:%M:%S", &tm_buf);
 

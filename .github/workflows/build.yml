@@ -2,8 +2,8 @@ name: Build
 
 on:
   push:
-    branches: [ master ]
-    tags: [ "v*" ]
+    branches: [ master, outer ]
+    tags: [ "v*", "1.*", "2.*" ]
   release:
     types: [ published ]
 
@@ -43,6 +43,8 @@ jobs:
     defaults:
       run:
         shell: pwsh
+    env:
+      VCPKG_DEFAULT_TRIPLET: x64-windows
 
     steps:
       - uses: actions/checkout@v4
@@ -55,29 +57,26 @@ jobs:
 
       - name: Setup vcpkg
         run: |
-          git clone https://github.com/Microsoft/vcpkg.git vcpkg
-          .\vcpkg\bootstrap-vcpkg.bat
-          echo "VCPKG_ROOT=$pwd\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          git clone https://github.com/Microsoft/vcpkg.git "$env:GITHUB_WORKSPACE\vcpkg"
+          & "$env:GITHUB_WORKSPACE\vcpkg\bootstrap-vcpkg.bat"
+          echo "VCPKG_ROOT=$env:GITHUB_WORKSPACE\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Cache vcpkg
+      - name: Cache vcpkg binary packages
         uses: actions/cache@v4
         with:
-          path: vcpkg
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('vcpkg/.git/HEAD') }}
+          path: |
+            ${{ github.workspace }}/vcpkg/packages
+            ${{ github.workspace }}/vcpkg/buildtrees
+            ${{ github.workspace }}/vcpkg/downloads
+            ${{ github.workspace }}/build/vcpkg_installed
+          key: vcpkg-bin-${{ runner.os }}-${{ hashFiles('vcpkg.json') }}
           restore-keys: |
-            vcpkg-${{ runner.os }}-
+            vcpkg-bin-${{ runner.os }}-
 
-      - name: Install deps
+      - name: Configure (vcpkg manifest mode auto-installs deps)
         run: |
-          .\vcpkg\vcpkg install `
-            ffmpeg:x64-windows `
-            sdl2:x64-windows `
-            yyjson:x64-windows `
-            libyaml:x64-windows `
-            pkgconf:x64-windows
-
-      - name: Configure
-        run: |
+          # Let cmake auto-detect the generator; windows-latest has
+          # Visual Studio installed and setup-msbuild adds it to PATH.
           cmake -B build -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT\scripts\buildsystems\vcpkg.cmake"
 
@@ -86,16 +85,23 @@ jobs:
 
       - name: Collect DLLs
         run: |
-          $bin = "$env:VCPKG_ROOT\installed\x64-windows\bin"
-          Copy-Item "$bin\avformat*.dll", "$bin\avcodec*.dll", "$bin\avutil*.dll",
-            "$bin\swresample*.dll", "$bin\SDL2*.dll",
-            "$bin\yyjson*.dll", "$bin\yaml*.dll" build\Release\
-
-      - name: Build netease-cli
-        run: |
-          cd src\plugins\music_sources\netease\netease-cli
-          go build -ldflags="-s -w" -o netease-cli.exe .
-          move netease-cli.exe ..\..\..\..\build\Release\
+          # Manifest mode installs to <build>/vcpkg_installed/<triplet>/bin
+          $bin = "$pwd\build\vcpkg_installed\x64-windows\bin"
+          if (-not (Test-Path $bin)) {
+            $bin = "$env:VCPKG_ROOT\installed\x64-windows\bin"
+          }
+          Write-Host "Collecting DLLs from: $bin"
+          $dlls = @()
+          foreach ($pattern in @("avformat*.dll","avcodec*.dll","avutil*.dll",
+                                  "swresample*.dll","SDL2*.dll","yyjson*.dll","yaml*.dll")) {
+            $found = Get-ChildItem -Path $bin -Filter $pattern -ErrorAction SilentlyContinue
+            if ($found) { $dlls += $found }
+          }
+          if ($dlls.Count -eq 0) {
+            Write-Host "WARNING: No DLLs found in $bin"
+            Get-ChildItem -Path $bin -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
+          }
+          Copy-Item $dlls -Destination build\Release\ -ErrorAction SilentlyContinue
 
       - name: Upload
         uses: actions/upload-artifact@v4

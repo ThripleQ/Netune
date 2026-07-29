@@ -6,19 +6,13 @@
 #include "plugins/decoders/ffmpeg/ffmpeg_stream.h"
 #include "infra/config.h"
 #include "core/event_bus.h"
+#include "core/spectrum.h"
 #include "infra/log.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
-#include <stdatomic.h>
-#ifndef _WIN32
-#include <unistd.h>
-#endif
-#include <sys/stat.h>
-#include <sys/wait.h>
-#include <signal.h>
 
 
 /* ── Constants ──────────────────────────────────────── */
@@ -85,11 +79,7 @@ static pthread_t       g_thread;
 static CmdQueue        g_cmd_queue;
 static volatile bool   g_running = false;
 
-/* ── Netease streaming temp file cleanup ────────────── */
-
-
 /* ── Event bus handlers ────────────────────────────── */
-static void on_app_startup(const BusEvent *ev, void *ud) { (void)ev; (void)ud; }
 static void on_app_shutdown(const BusEvent *ev, void *ud) {
     (void)ev; (void)ud;
     Command cmd = {.type = CMD_QUIT};
@@ -166,9 +156,21 @@ static void* playback_thread(void *arg) {
         return NULL;
     }
 
-
-    
-
+    /* ── Spectrum analysis buffer ──────────────────── */
+    int16_t *spectrum_buf = (int16_t*)calloc(
+        (size_t)SPECTRUM_FFT_SIZE, sizeof(int16_t));
+    /* Overlapping window: FFT_SIZE=1024, HOP=512.
+       Every 512 new samples we shift the buffer and run FFT.
+       Gives 43 Hz/bin resolution at ~86 Hz update rate. */
+    #define SPECTRUM_HOP (SPECTRUM_FFT_SIZE / 2)
+    int spectrum_pending = 0;
+    int16_t spectrum_tmp[SPECTRUM_HOP];
+    if (!spectrum_buf) {
+        LOG_ERROR("OOM for spectrum buffer");
+        free(pcm_buf);
+        return NULL;
+    }
+    float spectrum_bands[SPECTRUM_BANDS];
     FFStream *ffstream = NULL;
 
     while (g_running) {
@@ -206,8 +208,29 @@ static void* playback_thread(void *arg) {
                 if (audio)   { audio_output_destroy(audio); audio = NULL; }
 
                 const char *play_path = cmd.path;
-                int is_local = (cmd.path[0] == '/' || cmd.path[0] == '~'
-                                || strchr(cmd.path, '.'));
+
+                /* Determine if path points to a local file (vs. a streaming
+                   source ID such as a netease song ID).  Checks, in order:
+                   1. file:// URL prefix
+                   2. POSIX absolute path (starts with '/')
+                   3. User home directory (starts with '~')
+                   4. Windows drive-letter absolute path (e.g. C:\ or C:/)
+                   5. Contains a path separator AND a dot — likely a
+                      relative file path with an extension */
+                int is_local = 0;
+                if (strncmp(cmd.path, "file://", 7) == 0) {
+                    is_local = 1;
+                } else if (cmd.path[0] == '/' || cmd.path[0] == '~') {
+                    is_local = 1;
+                } else if (((cmd.path[0] >= 'A' && cmd.path[0] <= 'Z') ||
+                            (cmd.path[0] >= 'a' && cmd.path[0] <= 'z')) &&
+                           cmd.path[1] == ':') {
+                    is_local = 1;
+                } else if ((strchr(cmd.path, '/') || strchr(cmd.path, '\\')) &&
+                           strchr(cmd.path, '.')) {
+                    is_local = 1;
+                }
+
                 int is_ff = 0;  /* using FFmpeg stream */
 
                 if (!is_local) {
@@ -369,8 +392,49 @@ static void* playback_thread(void *arg) {
             if (written > 0)
                 current_frame += written;
 
-            /* Progress event */
-            int64_t now_ms = (int64_t)((double)current_frame / samplerate * 1000);
+            /* ── Spectrum capture (overlapping window) ── */
+            {
+                int to_copy = (frames > written) ? written : frames;
+                if (to_copy > 0) {
+                    /* Mix stereo to mono, batch into temp buffer */
+                    int need = SPECTRUM_HOP - spectrum_pending;
+                    if (need > to_copy) need = to_copy;
+                    int dst = spectrum_pending;
+                    for (int i = 0; i < need; i++, dst++) {
+                        int s = (int)pcm_buf[i * 2];
+                        if (channels >= 2)
+                            s = (s + (int)pcm_buf[i * 2 + 1]) / 2;
+                        /* Average of two int16 samples stays within int16
+                           range, so no clamping is needed here. */
+                        spectrum_tmp[dst] = (int16_t)s;
+                    }
+                    spectrum_pending += need;
+                }
+
+                /* Every HOP new samples slide the window and run FFT */
+                if (spectrum_pending >= SPECTRUM_HOP) {
+                    spectrum_pending = 0;
+
+                    /* Shift out oldest HOP samples */
+                    memmove(spectrum_buf,
+                            spectrum_buf + SPECTRUM_HOP,
+                            (SPECTRUM_FFT_SIZE - SPECTRUM_HOP)
+                            * sizeof(int16_t));
+                    /* Copy HOP new samples to end */
+                    memcpy(spectrum_buf + (SPECTRUM_FFT_SIZE - SPECTRUM_HOP),
+                           spectrum_tmp,
+                           SPECTRUM_HOP * sizeof(int16_t));
+
+                    spectrum_process(spectrum_buf, spectrum_bands,
+                                     SPECTRUM_BANDS);
+                    event_bus_publish(EV_SPECTRUM_UPDATE,
+                                      spectrum_bands,
+                                      sizeof(spectrum_bands));
+                }
+            }
+
+            /* Progress event — integer math avoids per-chunk float division. */
+            int64_t now_ms = (int64_t)current_frame * 1000 / samplerate;
             if (now_ms - last_progress_ms >= PROGRESS_INTERVAL_MS) {
                 last_progress_ms = now_ms;
                 /* Send exact frames for smooth progress bar */
@@ -395,6 +459,7 @@ cleanup:
     }
     if (decoder) decoder_close(decoder);
     if (audio)   audio_output_destroy(audio);
+    free(spectrum_buf);
     free(pcm_buf);
     LOG_INFO("Playback thread ended");
     return NULL;
@@ -406,7 +471,6 @@ int playback_coordinator_init(void) {
     cmd_queue_init(&g_cmd_queue);
 
     /* subscribe to events */
-    event_bus_subscribe(EV_APP_STARTUP, on_app_startup, NULL);
     event_bus_subscribe(EV_APP_SHUTDOWN, on_app_shutdown, NULL);
     event_bus_subscribe(EV_PLAYBACK_START, on_play_start, NULL);
     event_bus_subscribe(EV_PLAYBACK_PAUSE, on_play_pause, NULL);
@@ -414,7 +478,11 @@ int playback_coordinator_init(void) {
     event_bus_subscribe(EV_PLAYBACK_STOP, on_play_stop, NULL);
     event_bus_subscribe(EV_BUFFERING_UPDATE, on_seek, NULL); /* reuse for seek */
 
-    pthread_create(&g_thread, NULL, playback_thread, NULL);
+    if (pthread_create(&g_thread, NULL, playback_thread, NULL) != 0) {
+        LOG_ERROR("Failed to create playback thread");
+        g_running = false;
+        return -1;
+    }
     LOG_INFO("Playback coordinator initialized");
     return 0;
 }

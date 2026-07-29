@@ -4,6 +4,7 @@
 #include <cstring>
 #include <unordered_map>
 #include <cassert>
+#include "compat/utf8.h"   /* UTF-8 aware fopen for Windows */
 
 /* ── Internal implementation ────────────────────────── */
 struct KeybindingManager::Impl {
@@ -52,7 +53,7 @@ static const char *yaml_scalar(yaml_event_t *ev) {
 }
 
 bool KeybindingManager::load(const std::string &yaml_path) {
-    FILE *fp = fopen(yaml_path.c_str(), "rb");
+    FILE *fp = fopen_utf8(yaml_path.c_str(), "rb");
     if (!fp) {
         LOG_WARN("Cannot open keybindings: %s", yaml_path.c_str());
         return false;

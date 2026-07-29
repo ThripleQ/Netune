@@ -3,11 +3,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "compat/utf8.h"
 #ifndef _WIN32
 #include <unistd.h>
+#define STDERR_REDIRECT " 2>/dev/null"
 #else
+#include <windows.h>
 #define popen  _popen
 #define pclose _pclose
+#define STDERR_REDIRECT " 2>NUL"
 #endif
 #include <stdarg.h>
 #include <yyjson.h>
@@ -15,9 +19,56 @@
 #define CLI "netease-cli"
 static char g_name[128] = "";
 
+/* ── shell escaping (prevents command injection) ────
+   Wraps user/API-provided strings so they are safe to embed in a popen()
+   command line.  Returns a malloc'd string the caller must free(). */
+static char *shell_escape(const char *s) {
+    if (!s) s = "";
+    size_t len = strlen(s);
+    /* POSIX: wrap in single quotes, escape embedded quotes as '\'' */
+#ifndef _WIN32
+    size_t cap = len * 4 + 3;
+    char *out = malloc(cap);
+    if (!out) return NULL;
+    size_t j = 0;
+    out[j++] = '\'';
+    for (size_t i = 0; i < len; i++) {
+        if (s[i] == '\'') {
+            out[j++] = '\''; out[j++] = '\\'; out[j++] = '\''; out[j++] = '\'';
+        } else {
+            out[j++] = s[i];
+        }
+    }
+    out[j++] = '\'';
+    out[j] = '\0';
+    return out;
+#else
+    /* Windows: wrap in double quotes, escape embedded double quotes and
+       carets.  Backslashes before quotes are doubled. */
+    size_t cap = len * 2 + 3;
+    char *out = malloc(cap);
+    if (!out) return NULL;
+    size_t j = 0;
+    out[j++] = '"';
+    for (size_t i = 0; i < len; i++) {
+        if (s[i] == '"') {
+            out[j++] = '\\'; out[j++] = '"';
+        } else if (s[i] == '^' || s[i] == '&' || s[i] == '|' ||
+                   s[i] == '<' || s[i] == '>' || s[i] == '%') {
+            out[j++] = '^'; out[j++] = s[i];
+        } else {
+            out[j++] = s[i];
+        }
+    }
+    out[j++] = '"';
+    out[j] = '\0';
+    return out;
+#endif
+}
+
 /* ── popen helper ─────────────────────────────────── */
 static char *run(const char *fmt, ...) {
-    char cmd[2048]; va_list ap;
+    char cmd[4096]; va_list ap;
     va_start(ap, fmt); vsnprintf(cmd, sizeof(cmd), fmt, ap); va_end(ap);
     FILE *fp = popen(cmd, "r"); if (!fp) return NULL;
     size_t cap = 8192, len = 0; char *b = malloc(cap); if (!b) { pclose(fp); return NULL; }
@@ -63,12 +114,7 @@ static yyjson_val *jget_arr(yyjson_val *obj, const char *key) {
     yyjson_val *v = yyjson_obj_get(obj, key);
     return (v && yyjson_is_arr(v)) ? v : NULL;
 }
-/* Get first object from an array (for arrays of objects). */
-static yyjson_val *jfirst_obj(yyjson_val *arr) {
-    if (!arr || !yyjson_is_arr(arr)) return NULL;
-    yyjson_val *v = yyjson_arr_get_first(arr);
-    return (v && yyjson_is_obj(v)) ? v : NULL;
-}
+/* jfirst_obj removed — use yyjson_arr_get_first() directly */
 
 /* ── parse one song from a yyjson_val object ──────── */
 static void fill(SongInfo *s, yyjson_val *song) {
@@ -77,7 +123,7 @@ static void fill(SongInfo *s, yyjson_val *song) {
     s->aux_label         = strdup("");
 
     int64_t sid = jget_sint64(song, "id");
-    char idbuf[32]; snprintf(idbuf, sizeof(idbuf), "%lld", (long long)sid);
+    char idbuf[32]; snprintf(idbuf, sizeof(idbuf), "%ld", (long)sid);
     s->id = strdup(idbuf);
     const char *name = jget_str(song, "name"); s->title = name ? strdup(name) : strdup("");
 
@@ -123,7 +169,7 @@ static int parselist(const char *json, const char *loc, SongInfo **out, int *cnt
     if (n == 0) { yyjson_doc_free(doc); return -1; }
 
     *out = (SongInfo*)calloc(n, sizeof(SongInfo));
-    size_t idx; yyjson_val *v;
+    yyjson_val *v;
     yyjson_arr_iter iter = yyjson_arr_iter_with(songs);
     int oi = 0;
     while ((v = yyjson_arr_iter_next(&iter)) && oi < (int)n) {
@@ -137,7 +183,7 @@ static int parselist(const char *json, const char *loc, SongInfo **out, int *cnt
 
 /* ── Init ──────────────────────────────────────────── */
 int netease_init(void) {
-    char *n=run("%s account-name 2>/dev/null",CLI);
+    char *n=run("%s account-name%s",CLI,STDERR_REDIRECT);
     if(!n){LOG_WARN("netease-cli not found");return -1;}
     if(n[0]&&strcmp(n,"未登录\n")!=0&&strcmp(n,"error\n")!=0){size_t l=strlen(n);if(l>0&&n[l-1]=='\n')n[l-1]=0;snprintf(g_name,sizeof(g_name),"%s",n);}
     free(n);LOG_INFO("netease ready");return 0;
@@ -149,7 +195,10 @@ const char* netease_account_name(void) { return g_name[0]?g_name:NULL; }
 int netease_search(const char *kw, int l, int o, NSSearchResult *out) {
     (void)o;
     memset(out,0,sizeof(*out)); if(!kw)return -1;
-    char *j=run("%s search \"%s\" 2>/dev/null",CLI,kw); if(!j)return -1;
+    char *esc = shell_escape(kw);
+    char *j=run("%s search %s%s",CLI,esc,STDERR_REDIRECT);
+    free(esc);
+    if(!j)return -1;
 
     yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
     free(j);
@@ -175,7 +224,7 @@ int netease_search(const char *kw, int l, int o, NSSearchResult *out) {
         if (!yyjson_is_obj(v)) continue;
         NSSong *r = &out->songs[oi]; oi++;
 
-        int64_t sid = jget_sint64(v, "id"); char bid[32]; snprintf(bid, sizeof(bid), "%lld", (long long)sid); r->id = strdup(bid);
+        int64_t sid = jget_sint64(v, "id"); char bid[32]; snprintf(bid, sizeof(bid), "%ld", (long)sid); r->id = strdup(bid);
         const char *nm  = jget_str(v, "name"); r->title = nm ? strdup(nm) : strdup("");
 
         /* artist from ar[0].name */
@@ -221,21 +270,28 @@ int netease_qr_key(char *u, size_t usz, char *url, size_t usz2) {
     if (uk && url2 && uk[0] && url2[0]) { snprintf(u, usz, "%s", uk); snprintf(url, usz2, "%s", url2); rv = 0; }
     else LOG_ERROR("qr-key failed");
     yyjson_doc_free(doc);
-    if (rv != 0) LOG_ERROR("qr-key failed"); /* re-log outside the if-else to keep msg after doc free (or not, just a LOG) */
     return rv;
 }
 
-char* netease_qr_render(const char *url) { return run("%s qr-render \"%s\" 2>/dev/null",CLI,url); }
+char* netease_qr_render(const char *url) {
+    char *esc = shell_escape(url);
+    char *r = run("%s qr-render %s%s",CLI,esc,STDERR_REDIRECT);
+    free(esc);
+    return r;
+}
 
 int netease_qr_poll(const char *uk) {
-    char *j=run("%s qr-check \"%s\" 2>/dev/null",CLI,uk); if(!j)return -1;
+    char *esc = shell_escape(uk);
+    char *j=run("%s qr-check %s%s",CLI,esc,STDERR_REDIRECT);
+    free(esc);
+    if(!j)return -1;
     yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
     free(j);
     if (!doc) return -1;
     yyjson_val *root = yyjson_doc_get_root(doc);
     long long c = root ? jget_int(root, "code") : 0;
     yyjson_doc_free(doc);
-    if(c==803){char*n=run("%s account-name 2>/dev/null",CLI);if(n){size_t l=strlen(n);if(l>0&&n[l-1]=='\n')n[l-1]=0;if(strcmp(n,"error")!=0&&strcmp(n,"未登录")!=0)snprintf(g_name,sizeof(g_name),"%s",n);free(n);}return 0;}
+    if(c==803){char*n=run("%s account-name%s",CLI,STDERR_REDIRECT);if(n){size_t l=strlen(n);if(l>0&&n[l-1]=='\n')n[l-1]=0;if(strcmp(n,"error")!=0&&strcmp(n,"未登录")!=0)snprintf(g_name,sizeof(g_name),"%s",n);free(n);}return 0;}
     if(c==800)return 2;
     if(c==802)return 3;
     return 1;
@@ -244,7 +300,7 @@ bool netease_is_logged_in(void) { return g_name[0]!=0; }
 
 /* ── Playlists ────────────────────────────────────── */
 int netease_playlists(bool favorited, SongInfo **out, int *count) {
-    char *j=run("%s playlists 2>/dev/null",CLI); if(!j)return -1;
+    char *j=run("%s playlists%s",CLI,STDERR_REDIRECT); if(!j)return -1;
     yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
     free(j);
     if (!doc) { *out=NULL; *count=0; return -1; }
@@ -270,7 +326,7 @@ int netease_playlists(bool favorited, SongInfo **out, int *count) {
         s->aux_label = strdup("歌单");
         int64_t sid = jget_sint64(v, "id");
         char id_str[32];
-        snprintf(id_str, sizeof(id_str), "%lld", sid);
+        snprintf(id_str, sizeof(id_str), "%ld", (long)sid);
         s->id = strdup(id_str);
         const char *nm  = jget_str(v, "name"); s->title = nm  ? strdup(nm)  : strdup("");
         oi++;
@@ -281,13 +337,16 @@ int netease_playlists(bool favorited, SongInfo **out, int *count) {
 }
 
 int netease_playlist_songs(const char *id, SongInfo **out, int *count) {
-    char *j=run("%s playlist-tracks \"%s\" 2>/dev/null",CLI,id); if(!j)return -1;
+    char *esc = shell_escape(id);
+    char *j=run("%s playlist-tracks %s%s",CLI,esc,STDERR_REDIRECT);
+    free(esc);
+    if(!j)return -1;
     int r = parselist(j, "songs", out, count);
     free(j); return r;
 }
 
 int netease_liked_songs(SongInfo **out, int *count) {
-    char *j=run("%s liked 2>/dev/null",CLI); if(!j)return -1;
+    char *j=run("%s liked%s",CLI,STDERR_REDIRECT); if(!j)return -1;
     int r = parselist(j, "songs", out, count);
     free(j); return r;
 }
@@ -295,7 +354,7 @@ int netease_liked_songs(SongInfo **out, int *count) {
 int netease_menu_songs(int type, int limit, SongInfo **out, int *count) {
     (void)limit;
     if (type == 0) {
-        char *j = run("%s recommend-songs 2>/dev/null",CLI); if(!j) return -1;
+        char *j = run("%s recommend-songs%s",CLI,STDERR_REDIRECT); if(!j) return -1;
         int r = parselist(j, "songs", out, count);
         free(j); return r;
     }
@@ -305,7 +364,10 @@ int netease_menu_songs(int type, int limit, SongInfo **out, int *count) {
 /* ── Play URL ──────────────────────────────────────── */
 int netease_play_url(const char *id, char *url, size_t sz) {
     const char *lvl = "standard";
-    char *j = run("%s song-url \"%s\" %s 2>/dev/null",CLI,id,lvl); if(!j)return -1;
+    char *esc = shell_escape(id);
+    char *j = run("%s song-url %s %s%s",CLI,esc,lvl,STDERR_REDIRECT);
+    free(esc);
+    if(!j)return -1;
     yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
     free(j);
     if (!doc) { if(sz>0)url[0]=0; return -1; }
@@ -327,7 +389,9 @@ int netease_play_url(const char *id, char *url, size_t sz) {
 /* ── Lyrics ──────────────────────────────────────────── */
 int netease_lyric(const char *song_id, char **buf) {
     if (!song_id || !buf) return -1;
-    char *j = run("%s lyric \"%s\"", CLI, song_id);
+    char *esc = shell_escape(song_id);
+    char *j = run("%s lyric %s", CLI, esc);
+    free(esc);
     if (!j) return -1;
     yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
     free(j);
@@ -356,10 +420,26 @@ int netease_lyric(const char *song_id, char **buf) {
 }
 
 char* netease_download(const char *id, const char *url) {
-    char path[256]; snprintf(path,sizeof(path),"/tmp/netune_%s.mp3",id);
-    unlink(path);
-    char cmd[3072]; snprintf(cmd,sizeof(cmd),"curl -sL --max-time 60 \"%s\" -o \"%s\"",url,path);
+    /* Use the platform temp directory: $TMPDIR / $TEMP / $TMP on Windows,
+       /tmp on POSIX. */
+    const char *tmpdir = getenv_utf8("TMPDIR");
+#ifndef _WIN32
+    if (!tmpdir || !tmpdir[0]) tmpdir = "/tmp";
+#else
+    if (!tmpdir || !tmpdir[0]) tmpdir = getenv_utf8("TEMP");
+    if (!tmpdir || !tmpdir[0]) tmpdir = getenv_utf8("TMP");
+    if (!tmpdir || !tmpdir[0]) tmpdir = ".";
+#endif
+    char path[512];
+    const char *sep = (tmpdir[strlen(tmpdir)-1] == '/' || tmpdir[strlen(tmpdir)-1] == '\\')
+                      ? "" : "/";
+    snprintf(path, sizeof(path), "%s%snetune_%s.mp3", tmpdir, sep, id);
+    remove_utf8(path);
+    char *esc_url = shell_escape(url);
+    char *esc_path = shell_escape(path);
+    char cmd[4096]; snprintf(cmd,sizeof(cmd),"curl -sL --max-time 60 %s -o %s",esc_url,esc_path);
+    free(esc_url); free(esc_path);
     int rc = system(cmd);
-    if (rc != 0) { unlink(path); return NULL; }
+    if (rc != 0) { remove_utf8(path); return NULL; }
     return strdup(path);
 }

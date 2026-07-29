@@ -1,0 +1,12 @@
+{
+  "name": "netune",
+  "version-string": "2.0.0",
+  "dependencies": [
+    "ffmpeg",
+    "sdl2",
+    "yyjson",
+    "libyaml",
+    "pkgconf"
+  ],
+  "builtin-baseline": "6d9d7df564a1ccdaa994e4ad39ccd4a32360867b"
+}

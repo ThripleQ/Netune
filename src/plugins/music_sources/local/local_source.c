@@ -7,9 +7,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "compat/utf8.h"
 #include <strings.h>
 #include <dirent.h>
-#include <sys/stat.h>
+
+/* ── Cross-platform path helpers ────────────────────── */
+#ifdef _WIN32
+#define PATH_SEP "\\"
+#else
+#define PATH_SEP "/"
+#endif
 
 /* ── Dynamic array helpers ──────────────────────────── */
 typedef struct {
@@ -26,19 +33,16 @@ static void song_array_init(SongArray *a) {
 
 static void song_array_push(SongArray *a, const SongInfo *s) {
     if (a->count >= a->capacity) {
-        a->capacity = a->capacity ? a->capacity * 2 : 64;
-        a->items = (SongInfo*)realloc(a->items,
-                      (size_t)a->capacity * sizeof(SongInfo));
+        int newcap = a->capacity ? a->capacity * 2 : 64;
+        SongInfo *items = (SongInfo*)realloc(a->items,
+                          (size_t)newcap * sizeof(SongInfo));
+        if (!items) return;  /* keep existing array; skip this entry */
+        a->items    = items;
+        a->capacity = newcap;
     }
-    int idx = a->count++;
-    a->items[idx] = *s;
-    a->items[idx].id        = strdup(s->id);
-    a->items[idx].source    = strdup(s->source);
-    a->items[idx].title     = strdup(s->title);
-    a->items[idx].artist    = strdup(s->artist);
-    a->items[idx].album     = strdup(s->album);
-    a->items[idx].cover_url = strdup(s->cover_url);
-    a->items[idx].aux_label = strdup(s->aux_label);
+    /* Deep copy via the NULL-safe helper — raw strdup(s->cover_url) would
+       crash on the NULL cover_url/aux_label fields produced by scan_dir. */
+    song_info_copy(&a->items[a->count++], s);
 }
 
 /* ── File scanning ──────────────────────────────────── */
@@ -46,6 +50,18 @@ static bool has_music_ext(const char *name) {
     const char *dot = strrchr(name, '.');
     if (!dot) return false;
     return decoder_supports_ext(dot + 1);
+}
+
+/* Find the filename portion of a path, handling both / and \ separators. */
+static const char *path_basename(const char *path) {
+    if (!path) return NULL;
+    const char *base = path;
+    const char *slash = strrchr(path, '/');
+    const char *bslash = strrchr(path, '\\');
+    const char *last = (slash && bslash) ? (slash > bslash ? slash : bslash)
+                     : slash ? slash : bslash;
+    if (last) base = last + 1;
+    return base;
 }
 
 static void scan_dir(const char *dir_path, SongArray *arr) {
@@ -59,10 +75,10 @@ static void scan_dir(const char *dir_path, SongArray *arr) {
             continue;
 
         char full[2048];
-        snprintf(full, sizeof(full), "%s/%s", dir_path, entry->d_name);
+        snprintf(full, sizeof(full), "%s" PATH_SEP "%s", dir_path, entry->d_name);
 
         struct stat st;
-        if (stat(full, &st) != 0) continue;
+        if (stat_utf8(full, &st) != 0) continue;
 
         if (S_ISDIR(st.st_mode)) {
             scan_dir(full, arr);
@@ -84,6 +100,7 @@ static void scan_dir(const char *dir_path, SongArray *arr) {
             }
 
             song_array_push(arr, &s);
+            song_info_free(&s);  /* push deep-copied s; free its scratch strings */
         }
     }
     closedir(dir);
@@ -101,8 +118,7 @@ static bool song_matches(const SongInfo *s, const char *keyword) {
     const char *title  = s->title  ? s->title  : "";
     const char *artist = s->artist ? s->artist : "";
     const char *album  = s->album  ? s->album  : "";
-    const char *fname  = s->id ? strrchr(s->id, '/') : NULL;
-    fname = fname ? fname + 1 : (s->id ? s->id : "");
+    const char *fname  = s->id ? path_basename(s->id) : "";
     return strcasestr(title, keyword)  ||
            strcasestr(artist, keyword) ||
            strcasestr(album, keyword)  ||
@@ -192,8 +208,7 @@ static int local_get_song_detail(const char *song_id, SongInfo *out) {
     DecoderInfo info;
     decoder_get_info(d, &info);
 
-    const char *fname = strrchr(song_id, '/');
-    fname = fname ? fname + 1 : song_id;
+    const char *fname = path_basename(song_id);
 
     out->id     = strdup(song_id);
     out->source = strdup("local");

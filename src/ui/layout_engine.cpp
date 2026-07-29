@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include "compat/utf8.h"   /* UTF-8 aware fopen for Windows */
 using namespace ftxui;
 
 LayoutEngine::LayoutEngine() = default;
@@ -99,7 +100,7 @@ static std::unique_ptr<LayoutNode> parse_node(yaml_parser_t *parser) {
 }
 
 bool LayoutEngine::load(const std::string &yaml_path) {
-    FILE *fp = fopen(yaml_path.c_str(), "rb");
+    FILE *fp = fopen_utf8(yaml_path.c_str(), "rb");
     if (!fp) { LOG_WARN("Cannot open layout: %s", yaml_path.c_str()); return false; }
 
     yaml_parser_t parser;

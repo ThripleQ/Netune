@@ -18,7 +18,7 @@ static int ns_search(const char *kw, int p, int ps, SearchResult *out) {
     netease_search_free(&nr);return 0;
 }
 static int ns_detail(const char *id, SongInfo *out) {memset(out,0,sizeof(*out));out->id=strdup(id);out->source=strdup("netease");out->title=strdup("");out->artist=strdup("");out->album=strdup("");out->cover_url=strdup("");out->aux_label=strdup("");return 0;}
-static int ns_url(const char *id, int q, char *url, size_t sz) {return netease_play_url(id,url,sz);}
+static int ns_url(const char *id, int q, char *url, size_t sz) {(void)q; return netease_play_url(id,url,sz);}
 static int ns_lyric(const char *id, char *b, size_t sz) {(void)id;if(sz)b[0]=0;return-1;}
 static int ns_cover(const char *id, char *b, size_t sz) {(void)id;if(sz)b[0]=0;return-1;}
 static bool ns_avail(void) {return true;}

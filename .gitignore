@@ -25,6 +25,10 @@ Thumbs.db
 netease-cli
 netease-cli-*
 
+# but track the source directory
+!src/plugins/music_sources/netease/netease-cli/
+!src/plugins/music_sources/netease/netease-cli/**
+
 # Misc trash
 2_windows.txt
 文本文件.txt
@@ -33,3 +37,9 @@ images.png
 # Keep pre-built binaries
 !bin/
 !bin/*
+
+# External patches (not part of source)
+外部/
+外部2/
+外部3/
+actions/

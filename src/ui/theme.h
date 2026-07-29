@@ -23,6 +23,7 @@ struct Theme {
     ThemeColor accent;        /* accent (primary)    */
 
     /* Extended semantic colors (optional, derived if unset) */
+    ThemeColor progress_track;/* progress bar unfilled track */
     ThemeColor accent_bg;     /* selection background       */
     ThemeColor muted;         /* dimmed/secondary text      */
     ThemeColor border;        /* border / divider lines     */
@@ -30,6 +31,7 @@ struct Theme {
     ThemeColor warning;       /* warning / VIP badge        */
     ThemeColor error;         /* error / important          */
     ThemeColor overlay_bg;    /* overlay/popup background   */
+    ThemeColor spectrum;      /* spectrum visualization     */
 };
 
 /* ── Theme manager (singleton) ──────────────────────── */

@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "compat/utf8.h"
+
 
 
 /* ── Global singleton ──────────────────────────────── */
@@ -18,7 +20,7 @@ struct Config {
 };
 
 Config* config_load(const char *path) {
-    FILE *fp = fopen(path, "rb");
+    FILE *fp = fopen_utf8(path, "rb");
     if (!fp) {
         LOG_WARN("Cannot open config file: %s", path);
         return NULL;
@@ -64,6 +66,7 @@ static yyjson_val* resolve(Config *cfg, const char *key) {
     yyjson_val *v = cfg->root;
 
     char *k = strdup(key);
+    if (!k) return NULL;
     char *tok = strtok(k, ".");
     while (tok && v) {
         /* check for array index: key[idx] */

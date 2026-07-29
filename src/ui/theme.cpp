@@ -4,18 +4,36 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <unistd.h>
-#include <algorithm>
+#include "compat/utf8.h"
 
-/* ── XDG path helper (local copy, avoids dependency on app.cpp) ── */
+/* ── Path separator helper ────────────────────────── */
+#ifdef _WIN32
+static const char PATH_SEP = '\\';
+#else
+static const char PATH_SEP = '/';
+#endif
+
+/* ── XDG / Windows config path helper ─────────────── */
 static std::string xdg_config_path(const std::string &sub) {
-    const char *d = getenv("XDG_CONFIG_HOME");
+#ifdef _WIN32
+    /* Use getenv_utf8 so non-ASCII user names (e.g. Chinese) survive the
+       ANSI→UTF-8 boundary. Plain getenv() returns the ANSI code page. */
+    const char *d = getenv_utf8("APPDATA");
+    if (d && d[0]) {
+        return std::string(d) + "\\netune\\" + sub;
+    }
+    const char *home = getenv_utf8("USERPROFILE");
+    if (!home) home = "C:\\";
+    return std::string(home) + "\\AppData\\Roaming\\netune\\" + sub;
+#else
+    const char *d = getenv_utf8("XDG_CONFIG_HOME");
     if (d && d[0]) {
         return std::string(d) + "/netune/" + sub;
     }
-    const char *home = getenv("HOME");
+    const char *home = getenv_utf8("HOME");
     if (!home) home = "/tmp";
     return std::string(home) + "/.config/netune/" + sub;
+#endif
 }
 
 /* ── Hex ↔ ThemeColor ─────────────────────────────── */
@@ -62,11 +80,6 @@ static ThemeColor blend(const ThemeColor &a, const ThemeColor &b, float t) {
     return r;
 }
 
-static ThemeColor darken(const ThemeColor &c, float t) {
-    ThemeColor black = {0, 0, 0, true};
-    return blend(c, black, t);
-}
-
 static ThemeColor lighten(const ThemeColor &c, float t) {
     ThemeColor white = {255, 255, 255, true};
     return blend(c, white, t);
@@ -110,6 +123,14 @@ void ThemeManager::derive_colors() {
     /* overlay_bg: slightly lighter than bg */
     if (!theme_.overlay_bg.has_color && theme_.bg.has_color)
         theme_.overlay_bg = lighten(theme_.bg, 0.06f);
+
+    /* progress_track: lighter version of accent */
+    if (!theme_.progress_track.has_color && theme_.accent.has_color)
+        theme_.progress_track = lighten(theme_.accent, 0.65f);
+
+    /* spectrum: defaults to accent if not set */
+    if (!theme_.spectrum.has_color && theme_.accent.has_color)
+        theme_.spectrum = theme_.accent;
 }
 
 /* Resolve a theme name to a file path.
@@ -117,16 +138,16 @@ void ThemeManager::derive_colors() {
    No external scanning or fallback lookup is performed. */
 std::string ThemeManager::resolve_path(const std::string &name) {
     if (name.empty() || name == "default") {
-        return xdg_config_path("data/themes/default.yaml");
+        return xdg_config_path(std::string("data/themes") + PATH_SEP + "default.yaml");
     }
 
-    /* If it looks like a path (contains /), use directly */
-    if (name.find('/') != std::string::npos) {
+    /* If it looks like a path (contains / or \), use directly */
+    if (name.find('/') != std::string::npos || name.find('\\') != std::string::npos) {
         return name;
     }
 
-    /* Bare name → data/themes/<name>.yaml under the XDG config dir */
-    return xdg_config_path("data/themes/" + name + ".yaml");
+    /* Bare name → data/themes/<name>.yaml under the config dir */
+    return xdg_config_path(std::string("data/themes") + PATH_SEP + name + ".yaml");
 }
 
 /* List available built-in theme names from data/themes/ under XDG config dir */
@@ -136,15 +157,15 @@ std::vector<std::string> ThemeManager::list_builtin_themes() {
     const char *known[] = {"default", "dracula", "catppuccin",
                            "netease_dark", "netease_light"};
     for (const char *n : known) {
-        std::string p = xdg_config_path(std::string("data/themes/") + n + ".yaml");
-        if (access(p.c_str(), R_OK) == 0)
+        std::string p = xdg_config_path(std::string("data/themes") + PATH_SEP + n + ".yaml");
+        if (access_utf8(p.c_str(), R_OK) == 0)
             names.push_back(n);
     }
     return names;
 }
 
 bool ThemeManager::load(const std::string &yaml_path) {
-    FILE *fp = fopen(yaml_path.c_str(), "rb");
+    FILE *fp = fopen_utf8(yaml_path.c_str(), "rb");
     if (fp) {
         yaml_parser_t parser;
         yaml_event_t  event;
@@ -154,7 +175,8 @@ bool ThemeManager::load(const std::string &yaml_path) {
         bool in_colors = false;
         std::string hex_bg, hex_fg, hex_accent;
         std::string hex_accent_bg, hex_muted, hex_border;
-        std::string hex_success, hex_warning, hex_error, hex_overlay_bg;
+        std::string hex_success, hex_warning, hex_error, hex_overlay_bg, hex_spectrum;
+        std::string hex_progress_track;
         std::string current_field;
 
         while (yaml_parser_parse(&parser, &event)) {
@@ -178,6 +200,8 @@ bool ThemeManager::load(const std::string &yaml_path) {
                         else if (current_field == "warning")     hex_warning     = val;
                         else if (current_field == "error")       hex_error       = val;
                         else if (current_field == "overlay_bg")  hex_overlay_bg  = val;
+                        else if (current_field == "progress_track") hex_progress_track = val;
+                        else if (current_field == "spectrum")    hex_spectrum    = val;
                         current_field.clear();
                     }
                 } else if (strcmp(val, "name") == 0) {
@@ -206,21 +230,34 @@ bool ThemeManager::load(const std::string &yaml_path) {
         if (!hex_warning.empty())     theme_.warning     = theme_color_from_hex(hex_warning);
         if (!hex_error.empty())       theme_.error       = theme_color_from_hex(hex_error);
         if (!hex_overlay_bg.empty())  theme_.overlay_bg  = theme_color_from_hex(hex_overlay_bg);
+        if (!hex_progress_track.empty()) theme_.progress_track = theme_color_from_hex(hex_progress_track);
+        if (!hex_spectrum.empty())    theme_.spectrum    = theme_color_from_hex(hex_spectrum);
 
         /* Derive any unset extended colors */
         derive_colors();
 
-        LOG_INFO("Theme loaded: '%s'  bg=%s fg=%s accent=%s accent_bg=%s muted=%s border=%s",
+        /* Safety net: if fg or accent are still unset (empty/malformed YAML),
+           fall back to hardcoded defaults. bg is intentionally excluded —
+           leaving it unset lets the terminal's own background show through. */
+        if (!theme_.fg.has_color || !theme_.accent.has_color) {
+            LOG_WARN("Theme is missing fg or accent, applying safe defaults");
+            theme_.fg    = theme_color_from_hex("#c0caf5");
+            theme_.accent = theme_color_from_hex("#7aa2f7");
+            derive_colors();
+        }
+
+        LOG_INFO("Theme loaded: '%s'  bg=%s fg=%s accent=%s accent_bg=%s muted=%s border=%s progress_track=%s",
                  theme_.name.c_str(),
                  hex_bg.c_str(), hex_fg.c_str(), hex_accent.c_str(),
-                 hex_accent_bg.c_str(), hex_muted.c_str(), hex_border.c_str());
+                 hex_accent_bg.c_str(), hex_muted.c_str(), hex_border.c_str(),
+                 hex_progress_track.c_str());
         return true;
     }
 
-    /* File not found — fallback to safe hardcoded defaults */
+    /* File not found — fallback to safe hardcoded defaults.
+       bg intentionally omitted to let terminal bg show through. */
     LOG_WARN("Cannot open theme: %s, using safe defaults", yaml_path.c_str());
     theme_.name = "Default Dark";
-    theme_.bg = theme_color_from_hex("#1a1b26");
     theme_.fg = theme_color_from_hex("#c0caf5");
     theme_.accent = theme_color_from_hex("#7aa2f7");
     derive_colors();
