@@ -140,6 +140,41 @@ Element render_lyric_panel(const AppState &s) {
     }));
 }
 
+/* ── Pre-computed gradient LUT (indexed by band i) ── */
+struct GradientRGB { uint8_t r, g, b; };
+static GradientRGB s_bot_lut[SPECTRUM_BANDS];
+static GradientRGB s_top_lut[SPECTRUM_BANDS];
+
+static void init_gradient_lut(void) {
+    const auto &theme = ThemeManager::instance().current();
+    uint8_t base_r = theme.spectrum.has_color ? theme.spectrum.r : theme.accent.r;
+    uint8_t base_g = theme.spectrum.has_color ? theme.spectrum.g : theme.accent.g;
+    uint8_t base_b = theme.spectrum.has_color ? theme.spectrum.b : theme.accent.b;
+
+    const float MAX_HBLEND = 0.45f;
+    float mid = (float)(SPECTRUM_BANDS - 1) * 0.5f;
+    const float vblend = 0.25f;
+
+    for (int i = 0; i < SPECTRUM_BANDS; i++) {
+        float norm_dist = fabsf((float)i - mid) / mid;
+        float hblend = MAX_HBLEND * (norm_dist * norm_dist);
+
+        /* Bottom row color */
+        s_bot_lut[i].r = (uint8_t)(base_r + (255 - base_r) * hblend);
+        s_bot_lut[i].g = (uint8_t)(base_g + (255 - base_g) * hblend);
+        s_bot_lut[i].b = (uint8_t)(base_b + (255 - base_b) * hblend);
+
+        /* Top row color */
+        float target_t = 1.0f - hblend / MAX_HBLEND;
+        uint8_t trg_r = (uint8_t)(base_r + (255.0f - base_r) * target_t);
+        uint8_t trg_g = (uint8_t)(base_g + (255.0f - base_g) * target_t);
+        uint8_t trg_b = (uint8_t)(base_b + (255.0f - base_b) * target_t);
+        s_top_lut[i].r = (uint8_t)(s_bot_lut[i].r + (trg_r - (float)s_bot_lut[i].r) * vblend);
+        s_top_lut[i].g = (uint8_t)(s_bot_lut[i].g + (trg_g - (float)s_bot_lut[i].g) * vblend);
+        s_top_lut[i].b = (uint8_t)(s_bot_lut[i].b + (trg_b - (float)s_bot_lut[i].b) * vblend);
+    }
+}
+
 /* ── Spectrum bar (2 rows, 16-level bars, gradient) ── */
 Element render_spectrum_bar(const AppState &s) {
     /* UTF-8 bytes for each level: 0=space, 1-8=▁▂▃▄▅▆▇█ */
@@ -155,70 +190,30 @@ Element render_spectrum_bar(const AppState &s) {
         {'\xe2','\x96','\x88', 0},
     };
 
-    /* Full terminal width for this panel view */
+    init_gradient_lut();
+
     int total_w = s.song_panel_width + 29;
     if (total_w < 8) total_w = 8;
-
-    /* Always process all 128 FFT bands, then downsample to fit terminal width */
     int bands = SPECTRUM_BANDS;
     int cols = (total_w < bands) ? total_w : bands;
-
-    /* ── Envelope follower + emphasis ────────────────── */
-    static float s_env[SPECTRUM_BANDS] = {0};
-    const float ENV_RELEASE = 0.92f;
-    const float GAIN = 3.5f;
-    const float FLOOR = 0.05f;
-
-    /* Gradient base color: use spectrum slot if set, else accent */
-    const auto &theme = ThemeManager::instance().current();
-    uint8_t base_r = theme.spectrum.has_color ? theme.spectrum.r : theme.accent.r;
-    uint8_t base_g = theme.spectrum.has_color ? theme.spectrum.g : theme.accent.g;
-    uint8_t base_b = theme.spectrum.has_color ? theme.spectrum.b : theme.accent.b;
-
     bool dimmed = (s.playback_state != PlaybackState::Playing);
 
-    /* ── Process emphasis + envelope on all 128 bands ── */
-    float processed[SPECTRUM_BANDS];
-    for (int i = 0; i < bands; i++) {
-        float v = s.spectrum[i];
-        if (v < 0.0f) v = 0.0f;
-
-        /* Pre-emphasis: 0.8 + 12*(i/128)^2 */
-        float emphasis = 0.8f + 12.0f * (float)i * (float)i
-                          / ((float)SPECTRUM_BANDS * (float)SPECTRUM_BANDS);
-        v *= emphasis;
-
-        /* Envelope follower */
-        if (v > s_env[i]) {
-            s_env[i] = v;
-        } else {
-            s_env[i] *= ENV_RELEASE;
-            if (s_env[i] < 0.001f) s_env[i] = 0.0f;
-        }
-        processed[i] = s_env[i];
-    }
-
-    /* ── Downsample to columns and render ────────────── */
+    /* ── Downsample pre-processed spectrum to columns and render ── */
     Elements columns;
     for (int ci = 0; ci < cols; ci++) {
-        /* Map column ci to a group of adjacent bands */
         int start = ci * bands / cols;
         int end = (ci + 1) * bands / cols;
         if (end > bands) end = bands;
         int count = end - start;
         if (count <= 0) continue;
 
-        /* Average the band values in this group */
+        /* Average pre-processed band values (already emph+env+gain, 0~1) */
         float sum = 0.0f;
-        for (int j = start; j < end; j++) sum += processed[j];
+        for (int j = start; j < end; j++) sum += s.spectrum[j];
         float v = sum / (float)count;
-
-        /* Use center band index for gradient calculation */
-        int i = (start + end) / 2;
-
-        /* Gain + floor */
-        v = v * GAIN + FLOOR;
         if (v > 1.0f) v = 1.0f;
+
+        int i = (start + end) / 2;
 
         /* Map to 2-row bar */
         int total = (int)(v * 16.0f + 0.5f);
@@ -226,7 +221,6 @@ Element render_spectrum_bar(const AppState &s) {
         int bot = (total > 8) ? 8 : total;
         int top = (total > 8) ? (total - 8) : 0;
 
-        /* Build top and bottom chars */
         char top_str[4], bot_str[4];
         int top_len = LEVEL_BYTES[top][0] == 0x20 ? 1 : 3;
         int bot_len = LEVEL_BYTES[bot][0] == 0x20 ? 1 : 3;
@@ -234,29 +228,6 @@ Element render_spectrum_bar(const AppState &s) {
         top_str[top_len] = '\0';
         memcpy(bot_str, LEVEL_BYTES[bot], (size_t)bot_len);
         bot_str[bot_len] = '\0';
-
-        /* Horizontal gradient: pure base at center, fade toward white at both ends */
-        const float MAX_HBLEND = 0.45f;
-        float mid = (float)(SPECTRUM_BANDS - 1) * 0.5f;
-        float norm_dist = fabsf((float)i - mid) / mid;  /* 0 at center, 1 at edges */
-        float hblend = MAX_HBLEND * (norm_dist * norm_dist);
-        uint8_t bot_r = (uint8_t)(base_r + (255 - base_r) * hblend);
-        uint8_t bot_g = (uint8_t)(base_g + (255 - base_g) * hblend);
-        uint8_t bot_b = (uint8_t)(base_b + (255 - base_b) * hblend);
-
-        /* Vertical gradient: blend target transitions smoothly with position
-           Low freq  (hblend≈0  , bot≈base):       target→white  → top brighter
-           Mid freq  (hblend≈0.22, bot≈mid):       target→mid    → top brighter
-           High freq (hblend≈0.45, bot≈white-ish): target→base   → top darker
-           No hard threshold — always visible contrast. */
-        float vblend = 0.25f;
-        float target_t = 1.0f - hblend / MAX_HBLEND;   /* 1 → 0 across the band range */
-        uint8_t trg_r = (uint8_t)(base_r + (255.0f - base_r) * target_t);
-        uint8_t trg_g = (uint8_t)(base_g + (255.0f - base_g) * target_t);
-        uint8_t trg_b = (uint8_t)(base_b + (255.0f - base_b) * target_t);
-        uint8_t top_r = (uint8_t)(bot_r + (trg_r - (float)bot_r) * vblend);
-        uint8_t top_g = (uint8_t)(bot_g + (trg_g - (float)bot_g) * vblend);
-        uint8_t top_b = (uint8_t)(bot_b + (trg_b - (float)bot_b) * vblend);
 
         Element col_elem;
         if (dimmed) {
@@ -266,9 +237,9 @@ Element render_spectrum_bar(const AppState &s) {
             });
         } else {
             col_elem = vbox({
-                color(Color::RGB(top_r, top_g, top_b),
+                color(Color::RGB(s_top_lut[i].r, s_top_lut[i].g, s_top_lut[i].b),
                       text(std::string(top_str))),
-                color(Color::RGB(bot_r, bot_g, bot_b),
+                color(Color::RGB(s_bot_lut[i].r, s_bot_lut[i].g, s_bot_lut[i].b),
                       text(std::string(bot_str))),
             });
         }
