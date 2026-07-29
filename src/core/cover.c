@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #ifdef _WIN32
   #define POPEN  _popen
@@ -53,63 +54,19 @@ static char *popen_read(const char *cmd, size_t *out_size) {
     return buf;
 }
 
-/* ── shell-escape a string for safe popen embedding ── */
-static char *shell_escape(const char *s) {
-    if (!s) s = "";
-    size_t len = strlen(s);
-#ifndef _WIN32
-    /* POSIX: wrap in single quotes, escape embedded quotes as '\'' */
-    char *out = (char*)malloc(len * 4 + 3);
-    if (!out) return NULL;
-    size_t j = 0;
-    out[j++] = '\'';
-    for (size_t i = 0; i < len; i++) {
-        if (s[i] == '\'') {
-            out[j++] = '\''; out[j++] = '\\'; out[j++] = '\''; out[j++] = '\'';
-        } else {
-            out[j++] = s[i];
-        }
-    }
-    out[j++] = '\'';
-    out[j] = '\0';
-    return out;
-#else
-    /* Windows: wrap in double quotes, escape embedded double quotes */
-    char *out = (char*)malloc(len * 2 + 3);
-    if (!out) return NULL;
-    size_t j = 0;
-    out[j++] = '"';
-    for (size_t i = 0; i < len; i++) {
-        if (s[i] == '"') { out[j++] = '\\'; out[j++] = '"'; }
-        else if (s[i] == '^' || s[i] == '&' || s[i] == '|' ||
-                 s[i] == '<' || s[i] == '>' || s[i] == '%') {
-            out[j++] = '^'; out[j++] = s[i];
-        } else {
-            out[j++] = s[i];
-        }
-    }
-    out[j++] = '"';
-    out[j] = '\0';
-    return out;
-#endif
-}
-
 /* ── Load cover from URL ─────────────────────────── */
 int cover_load(const char *url, CoverData *out) {
     if (!url || !out) return -1;
 
     memset(out, 0, sizeof(*out));
 
-    /* Download image data — shell-escape the URL to prevent injection */
-    char *esc = shell_escape(url);
-    if (!esc) return -1;
-    char cmd[4096];
+    /* Download image data */
+    char cmd[2048];
 #ifdef _WIN32
-    snprintf(cmd, sizeof(cmd), "curl -sL --max-time 10 %s 2>NUL", esc);
+    snprintf(cmd, sizeof(cmd), "curl -sL --max-time 10 \"%s\" 2>NUL", url);
 #else
-    snprintf(cmd, sizeof(cmd), "curl -sL --max-time 10 %s 2>/dev/null", esc);
+    snprintf(cmd, sizeof(cmd), "curl -sL --max-time 10 '%s' 2>/dev/null", url);
 #endif
-    free(esc);
     size_t img_size = 0;
     char *img_data = popen_read(cmd, &img_size);
     if (!img_data || img_size == 0) {

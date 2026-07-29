@@ -24,8 +24,6 @@ void song_info_free(SongInfo *info) {
 
 void song_info_copy(SongInfo *dst, const SongInfo *src) {
     if (!dst || !src) return;
-    /* Free old strings to avoid leak when dst already holds data */
-    song_info_free(dst);
     *dst = *src;
     dst->id        = sdup(src->id);
     dst->source    = sdup(src->source);

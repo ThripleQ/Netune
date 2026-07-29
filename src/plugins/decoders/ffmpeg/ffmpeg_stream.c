@@ -1,6 +1,7 @@
 #include "ffmpeg_stream.h"
 #include "infra/log.h"
 #include <stdlib.h>
+#include <string.h>
 #include <libavcodec/version.h>
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>

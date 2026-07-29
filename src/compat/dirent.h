@@ -10,7 +10,7 @@
  * receives UTF-8 strings; conversion to/from UTF-16 is handled internally.
  */
 
-#ifdef _WIN32
+#ifdef _MSC_VER
 
 #include <stdlib.h>
 #include <string.h>
@@ -120,4 +120,4 @@ static inline int closedir(DIR *d)
     return 0;
 }
 
-#endif /* _WIN32 */
+#endif /* _MSC_VER */

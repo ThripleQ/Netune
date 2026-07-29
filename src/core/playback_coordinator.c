@@ -13,6 +13,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <stdatomic.h>
+#ifndef _WIN32
+#include <unistd.h>
+#include <sys/wait.h>
+#endif
+#include <sys/stat.h>
+/* NOTE: Windows has <signal.h> but with a limited signal set (SIGABRT, SIGFPE,
+   SIGILL, SIGINT, SIGSEGV, SIGTERM). This file does not currently use any
+   signal functions, so the header is included only for potential indirect use.
+   If POSIX-specific signals (e.g. SIGCHLD, SIGPIPE) are added later, wrap
+   them in #ifndef _WIN32. */
+#include <signal.h>
 
 
 /* ── Constants ──────────────────────────────────────── */
@@ -79,7 +91,11 @@ static pthread_t       g_thread;
 static CmdQueue        g_cmd_queue;
 static volatile bool   g_running = false;
 
+/* ── Netease streaming temp file cleanup ────────────── */
+
+
 /* ── Event bus handlers ────────────────────────────── */
+static void on_app_startup(const BusEvent *ev, void *ud) { (void)ev; (void)ud; }
 static void on_app_shutdown(const BusEvent *ev, void *ud) {
     (void)ev; (void)ud;
     Command cmd = {.type = CMD_QUIT};
@@ -404,8 +420,8 @@ static void* playback_thread(void *arg) {
                         int s = (int)pcm_buf[i * 2];
                         if (channels >= 2)
                             s = (s + (int)pcm_buf[i * 2 + 1]) / 2;
-                        /* Average of two int16 samples stays within int16
-                           range, so no clamping is needed here. */
+                        if (s > 32767) s = 32767;
+                        if (s < -32768) s = -32768;
                         spectrum_tmp[dst] = (int16_t)s;
                     }
                     spectrum_pending += need;
@@ -433,8 +449,8 @@ static void* playback_thread(void *arg) {
                 }
             }
 
-            /* Progress event — integer math avoids per-chunk float division. */
-            int64_t now_ms = (int64_t)current_frame * 1000 / samplerate;
+            /* Progress event */
+            int64_t now_ms = (int64_t)((double)current_frame / samplerate * 1000);
             if (now_ms - last_progress_ms >= PROGRESS_INTERVAL_MS) {
                 last_progress_ms = now_ms;
                 /* Send exact frames for smooth progress bar */
@@ -471,6 +487,7 @@ int playback_coordinator_init(void) {
     cmd_queue_init(&g_cmd_queue);
 
     /* subscribe to events */
+    event_bus_subscribe(EV_APP_STARTUP, on_app_startup, NULL);
     event_bus_subscribe(EV_APP_SHUTDOWN, on_app_shutdown, NULL);
     event_bus_subscribe(EV_PLAYBACK_START, on_play_start, NULL);
     event_bus_subscribe(EV_PLAYBACK_PAUSE, on_play_pause, NULL);
@@ -478,11 +495,7 @@ int playback_coordinator_init(void) {
     event_bus_subscribe(EV_PLAYBACK_STOP, on_play_stop, NULL);
     event_bus_subscribe(EV_BUFFERING_UPDATE, on_seek, NULL); /* reuse for seek */
 
-    if (pthread_create(&g_thread, NULL, playback_thread, NULL) != 0) {
-        LOG_ERROR("Failed to create playback thread");
-        g_running = false;
-        return -1;
-    }
+    pthread_create(&g_thread, NULL, playback_thread, NULL);
     LOG_INFO("Playback coordinator initialized");
     return 0;
 }

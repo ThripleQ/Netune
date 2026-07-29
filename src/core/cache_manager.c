@@ -10,10 +10,12 @@
 #else
 #define PATH_SEP "/"
 #endif
+#include <dirent.h>
 #include <strings.h>
 #include <yyjson.h>
 
 /* ── Internals ──────────────────────────────────────── */
+#define MAX_CACHE_ENTRIES 8192
 #define CACHE_FILE_NAME "cache.json"
 
 static char  g_cache_dir[1024] = {0};

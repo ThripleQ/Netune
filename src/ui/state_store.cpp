@@ -6,8 +6,32 @@ extern "C" {
 #include "plugins/music_sources/netease/netease_api.h"
 }
 
-/* Use the C API's song_info_copy/song_info_free (from core/music_source.h,
-   included via state_store.h) instead of a local duplicate. */
+/* helper: copy SongInfo (C struct → C++ member) */
+static void copy_song_info(SongInfo &dst, const SongInfo &src) {
+    /* free old */
+    free(dst.id);
+    free(dst.source);
+    free(dst.title);
+    free(dst.artist);
+    free(dst.album);
+    free(dst.cover_url);
+    free(dst.aux_label);
+
+    auto dup = [](const char *s) -> char* {
+        return s ? strdup(s) : nullptr;
+    };
+
+    dst = SongInfo{};
+    dst.id           = dup(src.id);
+    dst.source       = dup(src.source);
+    dst.title        = dup(src.title);
+    dst.artist       = dup(src.artist);
+    dst.album        = dup(src.album);
+    dst.duration_sec = src.duration_sec;
+    dst.fee          = src.fee;
+    dst.cover_url    = dup(src.cover_url);
+    dst.aux_label    = dup(src.aux_label);
+}
 
 StateStore& StateStore::instance() {
     static StateStore s;
@@ -44,11 +68,14 @@ void StateStore::set_playback_state(PlaybackState s) {
 }
 
 void StateStore::set_current_song(const SongInfo &song) {
-    song_info_copy(&state_.current_song, &song);
+    copy_song_info(state_.current_song, song);
 }
 
 void StateStore::set_progress(double pos, int cur_sec, int total_sec) {
-    set_progress_ms(pos, cur_sec * 1000, total_sec);
+    state_.progress         = pos;
+    state_.current_time_sec = cur_sec;
+    state_.current_time_ms  = cur_sec * 1000;
+    state_.total_time_sec  = total_sec;
 }
 
 void StateStore::set_progress_ms(double pos, int cur_ms, int total_sec) {
@@ -90,7 +117,7 @@ void StateStore::set_playlist(const std::vector<SongInfo> &list, int index) {
     /* copy new */
     for (auto &s : list) {
         SongInfo copy = {};
-        song_info_copy(&copy, &s);
+        copy_song_info(copy, s);
         state_.playlist.push_back(copy);
     }
     state_.selected_index = index;
@@ -180,7 +207,7 @@ void StateStore::set_search_results(const std::vector<SongInfo> &results, int to
 
     for (auto &s : results) {
         SongInfo copy = {};
-        song_info_copy(&copy, &s);
+        copy_song_info(copy, s);
         state_.search_results.push_back(copy);
     }
 }
@@ -207,7 +234,7 @@ void StateStore::set_groups(const std::vector<SongGroup> &grps) {
         copy.name = g.name;
         for (auto &s : g.songs) {
             SongInfo si = {};
-            song_info_copy(&si, &s);
+            copy_song_info(si, s);
             copy.songs.push_back(si);
         }
         state_.groups.push_back(std::move(copy));
@@ -237,7 +264,7 @@ void StateStore::nav_push(void) {
     NavState ns;
     for (auto &s : state_.playlist) {
         SongInfo copy = {};
-        song_info_copy(&copy, &s);
+        copy_song_info(copy, s);
         ns.playlist.push_back(copy);
     }
     ns.selected_index   = state_.selected_index;

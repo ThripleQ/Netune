@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include "compat/utf8.h"   /* UTF-8 aware fopen for Windows */
 
 /* ── Parse a single LRC timestamp line ──────────────── */

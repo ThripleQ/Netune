@@ -1,6 +1,6 @@
 #include "core/decoder.h"
 #include <stdlib.h>
-#include "compat/utf8.h"   /* UTF-8 → UTF-16 path conversion for Windows */
+#include <string.h>
 
 #define DR_FLAC_IMPLEMENTATION
 #include "dr_flac.h"
@@ -15,16 +15,7 @@ typedef struct {
 static void* flac_open(const char *path) {
     FlacHandle *h = (FlacHandle*)calloc(1, sizeof(FlacHandle));
     if (!h) return NULL;
-#ifdef _MSC_VER
-    /* drflac_open_file() calls fopen() with the ANSI code page and fails for
-       paths containing non-ASCII characters (e.g. Chinese user names). Convert
-       the UTF-8 path to UTF-16 and use the wide variant instead. */
-    wchar_t wpath[32768];
-    if (utf8_to_wide(path, wpath, 32768) == 0) { free(h); return NULL; }
-    h->flac = drflac_open_file_w(wpath, NULL);
-#else
     h->flac = drflac_open_file(path, NULL);
-#endif
     if (!h->flac) { free(h); return NULL; }
     h->sample_rate   = (int)h->flac->sampleRate;
     h->channels      = h->flac->channels;
