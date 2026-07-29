@@ -421,11 +421,9 @@ static void* playback_thread(void *arg) {
                     spectrum_pending += need;
                 }
 
-                /* Every HOP new samples slide the window.
-                   Only run FFT + publish every 4th hop (~21.5 Hz at 44100 Hz).
-                   This saves ~75% of spectrum CPU. The envelope follower in
-                   ev_spectrum maintains smooth decay between updates. */
-                static int spectrum_skip = 0;
+                /* Every HOP new samples slide the window and run FFT.
+                   ~86 Hz at 44100 Hz sample rate, enough for smooth 60 fps
+                   visual updates.  Shared buffer write avoids event overhead. */
                 if (spectrum_pending >= SPECTRUM_HOP) {
                     spectrum_pending = 0;
 
@@ -437,35 +435,30 @@ static void* playback_thread(void *arg) {
                            spectrum_tmp,
                            SPECTRUM_HOP * sizeof(int16_t));
 
-                    spectrum_skip++;
-                    if (spectrum_skip >= 4) {
-                        spectrum_skip = 0;
+                    spectrum_process(spectrum_buf, spectrum_bands,
+                                     SPECTRUM_BANDS);
 
-                        spectrum_process(spectrum_buf, spectrum_bands,
-                                         SPECTRUM_BANDS);
-
-                        /* Emphasis + envelope + gain (formerly in app.cpp ev_spectrum) */
-                        float processed[SPECTRUM_BANDS];
-                        const float ENV_RELEASE = 0.92f;
-                        const float GAIN = 3.5f;
-                        const float FLOOR = 0.05f;
-                        for (int i = 0; i < SPECTRUM_BANDS; i++) {
-                            float v = spectrum_bands[i];
-                            if (v < 0.0f) v = 0.0f;
-                            v *= spectrum_emphasis[i];
-                            if (v > spectrum_env[i])
-                                spectrum_env[i] = v;
-                            else
-                                spectrum_env[i] *= ENV_RELEASE;
-                            if (spectrum_env[i] < 0.001f) spectrum_env[i] = 0.0f;
-                            v = spectrum_env[i] * GAIN + FLOOR;
-                            if (v > 1.0f) v = 1.0f;
-                            processed[i] = v;
-                        }
-
-                        /* Write to shared buffer (no event → no thread sync overhead) */
-                        spectrum_set_latest(processed);
+                    /* Emphasis + envelope + gain */
+                    float processed[SPECTRUM_BANDS];
+                    const float ENV_RELEASE = 0.92f;
+                    const float GAIN = 3.5f;
+                    const float FLOOR = 0.05f;
+                    for (int i = 0; i < SPECTRUM_BANDS; i++) {
+                        float v = spectrum_bands[i];
+                        if (v < 0.0f) v = 0.0f;
+                        v *= spectrum_emphasis[i];
+                        if (v > spectrum_env[i])
+                            spectrum_env[i] = v;
+                        else
+                            spectrum_env[i] *= ENV_RELEASE;
+                        if (spectrum_env[i] < 0.001f) spectrum_env[i] = 0.0f;
+                        v = spectrum_env[i] * GAIN + FLOOR;
+                        if (v > 1.0f) v = 1.0f;
+                        processed[i] = v;
                     }
+
+                    /* Write to shared buffer (no event → no thread sync overhead) */
+                    spectrum_set_latest(processed);
                 }
             }
 
