@@ -7,7 +7,7 @@ extern "C" {
 #include <stdint.h>
 
 /* ── Constants ──────────────────────────────────────── */
-#define SPECTRUM_FFT_SIZE  1024  /* FFT window (must be power of 2) */
+#define SPECTRUM_FFT_SIZE  2048  /* FFT window (must be power of 2) */
 #define SPECTRUM_BANDS     128   /* output frequency bands */
 
 /* ── Process PCM samples into frequency band magnitudes

@@ -43,38 +43,32 @@ static void init_tables(void) {
         s_twiddle_im[i] = sinf(ang);
     }
 
-    /* Band boundaries: hybrid mapping.
-       Bands 0-24 each cover exactly 1 FFT bin (~43 Hz each).
-       This gives high resolution in the low end where music
-       has the most harmonic detail.
-       Bands 25-127 use ^2.5 progressive spacing over the
-       remaining frequency range up to ~15 kHz. */
+    /* Hybrid: low end linear (1 bin each), then logarithmic.
+       FFT 2048 @ 44100 Hz → ~21.5 Hz/bin.
+       Bands 0-24: linear, bins 1-26 (25 bands, 22-560 Hz)
+       Bands 25-127: log spacing, bin 26 ~ 20000 Hz */
     int sample_rate = 44100;
-    int min_bin = (int)(40.0f * SPECTRUM_FFT_SIZE / sample_rate + 0.5f);
-    int max_bin = (int)(15000.0f * SPECTRUM_FFT_SIZE / sample_rate + 0.5f);
-    if (min_bin < 1) min_bin = 1;
+    int linear = 25;  /* bands 0-24 */
+    int max_bin = (int)(20000.0 * SPECTRUM_FFT_SIZE / sample_rate);
     if (max_bin > SPECTRUM_FFT_SIZE / 2) max_bin = SPECTRUM_FFT_SIZE / 2;
 
-    int tight_bands = 25;  /* bands 0-24 inclusive */
-    int tight_bins  = tight_bands;  /* 1 bin each */
+    /* Linear section: one bin per band */
+    for (int i = 0; i <= linear; i++)
+        s_band_start[i] = 1 + i;
 
-    /* Ensure monotonic: each band advances at least 1 bin */
-    int prev_start = min_bin - 1;
-    for (int i = 0; i <= SPECTRUM_BANDS; i++) {
-        int start;
-        if (i <= tight_bands) {
-            start = min_bin + i;
-        } else {
-            int remain_bands = SPECTRUM_BANDS - tight_bands;
-            int remain_bins  = max_bin - (min_bin + tight_bins);
-            float sub = (float)(i - tight_bands) / remain_bands;
-            start = (min_bin + tight_bins)
-                  + (int)(powf(sub, 2.5f) * remain_bins + 0.5f);
-        }
-        if (start > max_bin) start = max_bin;
-        if (start <= prev_start) start = prev_start + 1;
-        s_band_start[i] = start;
-        prev_start = start;
+    /* Logarithmic section from bin 26 upward */
+    int log_bands = SPECTRUM_BANDS - linear;  /* 103 bands */
+    double f_start = (double)s_band_start[linear] * sample_rate / SPECTRUM_FFT_SIZE;
+    double log_step = log(20000.0 / f_start) / log_bands;
+    for (int i = 0; i <= log_bands; i++) {
+        double f = f_start * exp(i * log_step);
+        int bin = (int)(f * SPECTRUM_FFT_SIZE / sample_rate);
+        if (bin > max_bin) bin = max_bin;
+        /* Ensure at least 1 bin from previous */
+        int prev = s_band_start[linear + i - 1];
+        if (i > 0 && bin <= prev) bin = prev + 1;
+        if (bin < s_band_start[linear]) bin = s_band_start[linear];
+        s_band_start[linear + i] = bin;
     }
     s_band_start[SPECTRUM_BANDS] = max_bin;
 
