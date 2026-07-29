@@ -1,0 +1,10 @@
+--- /data/user/work/netune_extracted/Netune-beta/src/plugins/decoders/ffmpeg/ffmpeg_stream.c	2026-07-28 16:23:54.000000000 +0000
++++ /workspace/Netune-beta/src/plugins/decoders/ffmpeg/ffmpeg_stream.c	2026-07-29 09:03:29.721689348 +0000
+@@ -1,7 +1,6 @@
+ #include "ffmpeg_stream.h"
+ #include "infra/log.h"
+ #include <stdlib.h>
+-#include <string.h>
+ #include <libavcodec/version.h>
+ #include <libavformat/avformat.h>
+ #include <libavcodec/avcodec.h>

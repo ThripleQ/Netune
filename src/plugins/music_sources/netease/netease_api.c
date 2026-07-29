@@ -19,9 +19,56 @@
 #define CLI "netease-cli"
 static char g_name[128] = "";
 
+/* ── shell escaping (prevents command injection) ────
+   Wraps user/API-provided strings so they are safe to embed in a popen()
+   command line.  Returns a malloc'd string the caller must free(). */
+static char *shell_escape(const char *s) {
+    if (!s) s = "";
+    size_t len = strlen(s);
+    /* POSIX: wrap in single quotes, escape embedded quotes as '\'' */
+#ifndef _WIN32
+    size_t cap = len * 4 + 3;
+    char *out = malloc(cap);
+    if (!out) return NULL;
+    size_t j = 0;
+    out[j++] = '\'';
+    for (size_t i = 0; i < len; i++) {
+        if (s[i] == '\'') {
+            out[j++] = '\''; out[j++] = '\\'; out[j++] = '\''; out[j++] = '\'';
+        } else {
+            out[j++] = s[i];
+        }
+    }
+    out[j++] = '\'';
+    out[j] = '\0';
+    return out;
+#else
+    /* Windows: wrap in double quotes, escape embedded double quotes and
+       carets.  Backslashes before quotes are doubled. */
+    size_t cap = len * 2 + 3;
+    char *out = malloc(cap);
+    if (!out) return NULL;
+    size_t j = 0;
+    out[j++] = '"';
+    for (size_t i = 0; i < len; i++) {
+        if (s[i] == '"') {
+            out[j++] = '\\'; out[j++] = '"';
+        } else if (s[i] == '^' || s[i] == '&' || s[i] == '|' ||
+                   s[i] == '<' || s[i] == '>' || s[i] == '%') {
+            out[j++] = '^'; out[j++] = s[i];
+        } else {
+            out[j++] = s[i];
+        }
+    }
+    out[j++] = '"';
+    out[j] = '\0';
+    return out;
+#endif
+}
+
 /* ── popen helper ─────────────────────────────────── */
 static char *run(const char *fmt, ...) {
-    char cmd[2048]; va_list ap;
+    char cmd[4096]; va_list ap;
     va_start(ap, fmt); vsnprintf(cmd, sizeof(cmd), fmt, ap); va_end(ap);
     FILE *fp = popen(cmd, "r"); if (!fp) return NULL;
     size_t cap = 8192, len = 0; char *b = malloc(cap); if (!b) { pclose(fp); return NULL; }
@@ -148,7 +195,10 @@ const char* netease_account_name(void) { return g_name[0]?g_name:NULL; }
 int netease_search(const char *kw, int l, int o, NSSearchResult *out) {
     (void)o;
     memset(out,0,sizeof(*out)); if(!kw)return -1;
-    char *j=run("%s search \"%s\"%s",CLI,kw,STDERR_REDIRECT); if(!j)return -1;
+    char *esc = shell_escape(kw);
+    char *j=run("%s search %s%s",CLI,esc,STDERR_REDIRECT);
+    free(esc);
+    if(!j)return -1;
 
     yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
     free(j);
@@ -220,14 +270,21 @@ int netease_qr_key(char *u, size_t usz, char *url, size_t usz2) {
     if (uk && url2 && uk[0] && url2[0]) { snprintf(u, usz, "%s", uk); snprintf(url, usz2, "%s", url2); rv = 0; }
     else LOG_ERROR("qr-key failed");
     yyjson_doc_free(doc);
-    if (rv != 0) LOG_ERROR("qr-key failed"); /* re-log outside the if-else to keep msg after doc free (or not, just a LOG) */
     return rv;
 }
 
-char* netease_qr_render(const char *url) { return run("%s qr-render \"%s\"%s",CLI,url,STDERR_REDIRECT); }
+char* netease_qr_render(const char *url) {
+    char *esc = shell_escape(url);
+    char *r = run("%s qr-render %s%s",CLI,esc,STDERR_REDIRECT);
+    free(esc);
+    return r;
+}
 
 int netease_qr_poll(const char *uk) {
-    char *j=run("%s qr-check \"%s\"%s",CLI,uk,STDERR_REDIRECT); if(!j)return -1;
+    char *esc = shell_escape(uk);
+    char *j=run("%s qr-check %s%s",CLI,esc,STDERR_REDIRECT);
+    free(esc);
+    if(!j)return -1;
     yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
     free(j);
     if (!doc) return -1;
@@ -280,7 +337,10 @@ int netease_playlists(bool favorited, SongInfo **out, int *count) {
 }
 
 int netease_playlist_songs(const char *id, SongInfo **out, int *count) {
-    char *j=run("%s playlist-tracks \"%s\"%s",CLI,id,STDERR_REDIRECT); if(!j)return -1;
+    char *esc = shell_escape(id);
+    char *j=run("%s playlist-tracks %s%s",CLI,esc,STDERR_REDIRECT);
+    free(esc);
+    if(!j)return -1;
     int r = parselist(j, "songs", out, count);
     free(j); return r;
 }
@@ -304,7 +364,10 @@ int netease_menu_songs(int type, int limit, SongInfo **out, int *count) {
 /* ── Play URL ──────────────────────────────────────── */
 int netease_play_url(const char *id, char *url, size_t sz) {
     const char *lvl = "standard";
-    char *j = run("%s song-url \"%s\" %s%s",CLI,id,lvl,STDERR_REDIRECT); if(!j)return -1;
+    char *esc = shell_escape(id);
+    char *j = run("%s song-url %s %s%s",CLI,esc,lvl,STDERR_REDIRECT);
+    free(esc);
+    if(!j)return -1;
     yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
     free(j);
     if (!doc) { if(sz>0)url[0]=0; return -1; }
@@ -326,7 +389,9 @@ int netease_play_url(const char *id, char *url, size_t sz) {
 /* ── Lyrics ──────────────────────────────────────────── */
 int netease_lyric(const char *song_id, char **buf) {
     if (!song_id || !buf) return -1;
-    char *j = run("%s lyric \"%s\"", CLI, song_id);
+    char *esc = shell_escape(song_id);
+    char *j = run("%s lyric %s", CLI, esc);
+    free(esc);
     if (!j) return -1;
     yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
     free(j);
@@ -370,7 +435,10 @@ char* netease_download(const char *id, const char *url) {
                       ? "" : "/";
     snprintf(path, sizeof(path), "%s%snetune_%s.mp3", tmpdir, sep, id);
     remove_utf8(path);
-    char cmd[3072]; snprintf(cmd,sizeof(cmd),"curl -sL --max-time 60 \"%s\" -o \"%s\"",url,path);
+    char *esc_url = shell_escape(url);
+    char *esc_path = shell_escape(path);
+    char cmd[4096]; snprintf(cmd,sizeof(cmd),"curl -sL --max-time 60 %s -o %s",esc_url,esc_path);
+    free(esc_url); free(esc_path);
     int rc = system(cmd);
     if (rc != 0) { remove_utf8(path); return NULL; }
     return strdup(path);

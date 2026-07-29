@@ -13,7 +13,7 @@
  * Only compiled on MSVC; POSIX platforms use the real <pthread.h>.
  */
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 
 #include <stdlib.h>
 #include <windows.h>
@@ -135,4 +135,4 @@ static inline int pthread_cond_broadcast(pthread_cond_t *c)
     return 0;
 }
 
-#endif /* _MSC_VER */
+#endif /* _WIN32 */

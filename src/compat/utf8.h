@@ -28,7 +28,7 @@
  * F_OK, R_OK, W_OK are defined if not already available.
  */
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -91,7 +91,11 @@ static inline const char* getenv_utf8(const char *name)
     if (!wval || !wval[0]) return NULL;
     /* Thread-local buffer: each thread gets its own copy.
        32768 chars covers even the longest Windows paths. */
+#if defined(_MSC_VER)
     static __declspec(thread) char buf[32768];
+#else
+    static __thread char buf[32768];
+#endif
     if (WideCharToMultiByte(CP_UTF8, 0, wval, -1, buf, (int)sizeof(buf),
                              NULL, NULL) == 0)
         return NULL;
@@ -157,7 +161,7 @@ static inline int remove_utf8(const char *path)
     return _wremove(wpath);
 }
 
-#else /* !_MSC_VER — POSIX: transparent aliases */
+#else /* !_WIN32 — POSIX: transparent aliases */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -171,4 +175,4 @@ static inline int remove_utf8(const char *path)
 #define stat_utf8    stat
 #define remove_utf8  remove
 
-#endif /* _MSC_VER */
+#endif /* !_WIN32 */

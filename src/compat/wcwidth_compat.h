@@ -13,7 +13,7 @@
 
 #include <wchar.h>
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 
 static int compat_wcwidth(wchar_t wc)
 {

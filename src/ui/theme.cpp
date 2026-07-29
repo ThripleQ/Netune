@@ -5,7 +5,6 @@
 #include <cstdlib>
 #include <cstring>
 #include "compat/utf8.h"
-#include <algorithm>
 
 /* ── Path separator helper ────────────────────────── */
 #ifdef _WIN32
@@ -17,11 +16,13 @@ static const char PATH_SEP = '/';
 /* ── XDG / Windows config path helper ─────────────── */
 static std::string xdg_config_path(const std::string &sub) {
 #ifdef _WIN32
-    const char *d = getenv("APPDATA");
+    /* Use getenv_utf8 so non-ASCII user names (e.g. Chinese) survive the
+       ANSI→UTF-8 boundary. Plain getenv() returns the ANSI code page. */
+    const char *d = getenv_utf8("APPDATA");
     if (d && d[0]) {
         return std::string(d) + "\\netune\\" + sub;
     }
-    const char *home = getenv("USERPROFILE");
+    const char *home = getenv_utf8("USERPROFILE");
     if (!home) home = "C:\\";
     return std::string(home) + "\\AppData\\Roaming\\netune\\" + sub;
 #else
