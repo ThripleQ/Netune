@@ -21,14 +21,6 @@ extern "C" {
  * merges bins into logarithmically-spaced bands, normalizes. */
 void spectrum_process(const int16_t *samples, float *bands, int band_count);
 
-/* ── Thread-safe shared spectrum buffer
- *
- * Playback thread calls spectrum_set_latest() after FFT + processing.
- * UI thread calls spectrum_get_latest() during render.
- * Avoids event pub/sub overhead (~86 events/sec). */
-void spectrum_set_latest(const float *bands);
-void spectrum_get_latest(float *out);
-
 #ifdef __cplusplus
 }
 #endif

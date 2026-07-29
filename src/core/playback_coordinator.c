@@ -171,16 +171,6 @@ static void* playback_thread(void *arg) {
         return NULL;
     }
     float spectrum_bands[SPECTRUM_BANDS];
-    float spectrum_emphasis[SPECTRUM_BANDS];
-    static int emph_inited = 0;
-    if (!emph_inited) {
-        for (int i = 0; i < SPECTRUM_BANDS; i++)
-            spectrum_emphasis[i] = 0.8f + 12.0f * (float)i * (float)i
-                                   / ((float)SPECTRUM_BANDS * (float)SPECTRUM_BANDS);
-        emph_inited = 1;
-    }
-    float spectrum_env[SPECTRUM_BANDS];
-    memset(spectrum_env, 0, sizeof(spectrum_env));
     FFStream *ffstream = NULL;
 
     while (g_running) {
@@ -443,28 +433,9 @@ static void* playback_thread(void *arg) {
 
                         spectrum_process(spectrum_buf, spectrum_bands,
                                          SPECTRUM_BANDS);
-
-                        /* Emphasis + envelope + gain (formerly in app.cpp ev_spectrum) */
-                        float processed[SPECTRUM_BANDS];
-                        const float ENV_RELEASE = 0.92f;
-                        const float GAIN = 3.5f;
-                        const float FLOOR = 0.05f;
-                        for (int i = 0; i < SPECTRUM_BANDS; i++) {
-                            float v = spectrum_bands[i];
-                            if (v < 0.0f) v = 0.0f;
-                            v *= spectrum_emphasis[i];
-                            if (v > spectrum_env[i])
-                                spectrum_env[i] = v;
-                            else
-                                spectrum_env[i] *= ENV_RELEASE;
-                            if (spectrum_env[i] < 0.001f) spectrum_env[i] = 0.0f;
-                            v = spectrum_env[i] * GAIN + FLOOR;
-                            if (v > 1.0f) v = 1.0f;
-                            processed[i] = v;
-                        }
-
-                        /* Write to shared buffer (no event → no thread sync overhead) */
-                        spectrum_set_latest(processed);
+                        event_bus_publish(EV_SPECTRUM_UPDATE,
+                                          spectrum_bands,
+                                          sizeof(spectrum_bands));
                     }
                 }
             }
