@@ -12,6 +12,8 @@ static const Color kDefaultSpectrum = kDefaultAccent;
 static const Color kDefaultSuccess= Color::RGB(158, 206, 106);
 static const Color kDefaultWarning= Color::RGB(224, 175, 104);
 static const Color kDefaultError  = Color::RGB(247, 118, 142);
+/* lighten(kDefaultAccent, 0.65f) pre-computed: RGB(122*0.35+255*0.65, 162*0.35+255*0.65, 247*0.35+255*0.65) */
+static const Color kDefaultProgressTrack = Color::RGB(208, 222, 252);
 
 /* ── Helpers ────────────────────────────────────────── */
 static Color pick_fg(const Theme &t) {
@@ -20,6 +22,12 @@ static Color pick_fg(const Theme &t) {
 static Color pick_accent(const Theme &t) {
     return t.accent.has_color ? Color::RGB(t.accent.r, t.accent.g, t.accent.b) : kDefaultAccent;
 }
+static Color pick_progress_track(const Theme &t) {
+    return t.progress_track.has_color
+        ? Color::RGB(t.progress_track.r, t.progress_track.g, t.progress_track.b)
+        : kDefaultProgressTrack;
+}
+
 static Color pick_spectrum(const Theme &t) {
     return t.spectrum.has_color ? Color::RGB(t.spectrum.r, t.spectrum.g, t.spectrum.b) : kDefaultSpectrum;
 }
@@ -43,6 +51,10 @@ Element theme_accent(Element e) {
 
 Element theme_spectrum(Element e) {
     return e | color(pick_spectrum(ThemeManager::instance().current()));
+}
+
+Element theme_progress_track(Element e) {
+    return e | bgcolor(pick_progress_track(ThemeManager::instance().current()));
 }
 
 /* ── Extended semantic colors ──────────────────────── */

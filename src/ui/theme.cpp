@@ -123,6 +123,10 @@ void ThemeManager::derive_colors() {
     if (!theme_.overlay_bg.has_color && theme_.bg.has_color)
         theme_.overlay_bg = lighten(theme_.bg, 0.06f);
 
+    /* progress_track: lighter version of accent */
+    if (!theme_.progress_track.has_color && theme_.accent.has_color)
+        theme_.progress_track = lighten(theme_.accent, 0.65f);
+
     /* spectrum: defaults to accent if not set */
     if (!theme_.spectrum.has_color && theme_.accent.has_color)
         theme_.spectrum = theme_.accent;
@@ -171,6 +175,7 @@ bool ThemeManager::load(const std::string &yaml_path) {
         std::string hex_bg, hex_fg, hex_accent;
         std::string hex_accent_bg, hex_muted, hex_border;
         std::string hex_success, hex_warning, hex_error, hex_overlay_bg, hex_spectrum;
+        std::string hex_progress_track;
         std::string current_field;
 
         while (yaml_parser_parse(&parser, &event)) {
@@ -194,6 +199,7 @@ bool ThemeManager::load(const std::string &yaml_path) {
                         else if (current_field == "warning")     hex_warning     = val;
                         else if (current_field == "error")       hex_error       = val;
                         else if (current_field == "overlay_bg")  hex_overlay_bg  = val;
+                        else if (current_field == "progress_track") hex_progress_track = val;
                         else if (current_field == "spectrum")    hex_spectrum    = val;
                         current_field.clear();
                     }
@@ -223,6 +229,7 @@ bool ThemeManager::load(const std::string &yaml_path) {
         if (!hex_warning.empty())     theme_.warning     = theme_color_from_hex(hex_warning);
         if (!hex_error.empty())       theme_.error       = theme_color_from_hex(hex_error);
         if (!hex_overlay_bg.empty())  theme_.overlay_bg  = theme_color_from_hex(hex_overlay_bg);
+        if (!hex_progress_track.empty()) theme_.progress_track = theme_color_from_hex(hex_progress_track);
         if (!hex_spectrum.empty())    theme_.spectrum    = theme_color_from_hex(hex_spectrum);
 
         /* Derive any unset extended colors */
@@ -238,10 +245,11 @@ bool ThemeManager::load(const std::string &yaml_path) {
             derive_colors();
         }
 
-        LOG_INFO("Theme loaded: '%s'  bg=%s fg=%s accent=%s accent_bg=%s muted=%s border=%s",
+        LOG_INFO("Theme loaded: '%s'  bg=%s fg=%s accent=%s accent_bg=%s muted=%s border=%s progress_track=%s",
                  theme_.name.c_str(),
                  hex_bg.c_str(), hex_fg.c_str(), hex_accent.c_str(),
-                 hex_accent_bg.c_str(), hex_muted.c_str(), hex_border.c_str());
+                 hex_accent_bg.c_str(), hex_muted.c_str(), hex_border.c_str(),
+                 hex_progress_track.c_str());
         return true;
     }
 

@@ -15,5 +15,8 @@ Element theme_accent(Element e);
 /* Selection: sets bgcolor (accent_bg) and text color (fg) */
 Element theme_selection(Element e);
 
+/* Progress bar unfilled track background */
+Element theme_progress_track(Element e);
+
 /* Spectrum bar color */
 Element theme_spectrum(Element e);
