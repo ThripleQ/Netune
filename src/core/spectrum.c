@@ -168,3 +168,14 @@ void spectrum_process(const int16_t *samples, float *bands, int band_count) {
         bands[b] = avg;
     }
 }
+
+/* ── Thread-safe shared spectrum buffer ────────────── */
+static float s_spectrum_latest[SPECTRUM_BANDS];
+
+void spectrum_set_latest(const float *bands) {
+    memcpy(s_spectrum_latest, bands, sizeof(s_spectrum_latest));
+}
+
+void spectrum_get_latest(float *out) {
+    memcpy(out, s_spectrum_latest, sizeof(s_spectrum_latest));
+}

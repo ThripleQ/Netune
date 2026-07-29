@@ -279,54 +279,6 @@ static void start_cover_download(const char *url) {
     if (u) threadpool_submit(g_thread_pool, cover_download_worker, u);
 }
 
-/* ── Spectrum update event (from playback thread) ──── */
-static float s_env[SPECTRUM_BANDS] = {0};
-static float s_emphasis[SPECTRUM_BANDS];
-static int   s_emph_inited = 0;
-
-static void ev_spectrum(const BusEvent *ev, void *data) {
-    (void)data;
-    if (!ev->data || ev->data_size != sizeof(float) * SPECTRUM_BANDS)
-        return;
-    const float *raw = (const float*)ev->data;
-
-    /* Precompute emphasis factors once */
-    if (!s_emph_inited) {
-        for (int i = 0; i < SPECTRUM_BANDS; i++)
-            s_emphasis[i] = 0.8f + 12.0f * (float)i * (float)i
-                            / ((float)SPECTRUM_BANDS * (float)SPECTRUM_BANDS);
-        s_emph_inited = 1;
-    }
-
-    float processed[SPECTRUM_BANDS];
-    const float ENV_RELEASE = 0.92f;
-    const float GAIN = 3.5f;
-    const float FLOOR = 0.05f;
-
-    for (int i = 0; i < SPECTRUM_BANDS; i++) {
-        float v = raw[i];
-        if (v < 0.0f) v = 0.0f;
-
-        /* Pre-emphasis */
-        v *= s_emphasis[i];
-
-        /* Envelope follower (attack immediate, release exponential) */
-        if (v > s_env[i])
-            s_env[i] = v;
-        else
-            s_env[i] *= ENV_RELEASE;
-        if (s_env[i] < 0.001f) s_env[i] = 0.0f;
-
-        /* Gain + floor */
-        v = s_env[i] * GAIN + FLOOR;
-        if (v > 1.0f) v = 1.0f;
-
-        processed[i] = v;
-    }
-
-    StateStore::instance().set_spectrum(processed);
-}
-
 /* ── Cover loaded event (from background thread) ───── */
 static void ev_cover_loaded(const BusEvent *ev, void *data) {
     (void)data;
@@ -856,7 +808,6 @@ int run_app(int argc, char **argv) {
     event_bus_subscribe(EV_SEARCH_ERROR, ev_search_error, NULL);
     event_bus_subscribe(EV_SEARCH_DONE, ev_search_done, NULL);
     event_bus_subscribe(EV_COVER_LOADED, ev_cover_loaded, NULL);
-    event_bus_subscribe(EV_SPECTRUM_UPDATE, ev_spectrum, NULL);
 
     if (cfg) {
         int vol = config_get_int(cfg, "audio.volume", -1);

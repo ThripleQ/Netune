@@ -192,6 +192,10 @@ Element render_spectrum_bar(const AppState &s) {
 
     init_gradient_lut();
 
+    /* Read latest processed data from shared buffer (no event overhead) */
+    float bands_local[SPECTRUM_BANDS];
+    spectrum_get_latest(bands_local);
+
     int total_w = s.song_panel_width + 29;
     if (total_w < 8) total_w = 8;
     int bands = SPECTRUM_BANDS;
@@ -209,7 +213,7 @@ Element render_spectrum_bar(const AppState &s) {
 
         /* Average pre-processed band values (already emph+env+gain, 0~1) */
         float sum = 0.0f;
-        for (int j = start; j < end; j++) sum += s.spectrum[j];
+        for (int j = start; j < end; j++) sum += bands_local[j];
         float v = sum / (float)count;
         if (v > 1.0f) v = 1.0f;
 
