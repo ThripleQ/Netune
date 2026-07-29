@@ -411,25 +411,32 @@ static void* playback_thread(void *arg) {
                     spectrum_pending += need;
                 }
 
-                /* Every HOP new samples slide the window and run FFT */
+                /* Every HOP new samples slide the window.
+                   Only run FFT + publish every 4th hop (~21.5 Hz at 44100 Hz).
+                   This saves ~75% of spectrum CPU. The envelope follower in
+                   ev_spectrum maintains smooth decay between updates. */
+                static int spectrum_skip = 0;
                 if (spectrum_pending >= SPECTRUM_HOP) {
                     spectrum_pending = 0;
 
-                    /* Shift out oldest HOP samples */
                     memmove(spectrum_buf,
                             spectrum_buf + SPECTRUM_HOP,
                             (SPECTRUM_FFT_SIZE - SPECTRUM_HOP)
                             * sizeof(int16_t));
-                    /* Copy HOP new samples to end */
                     memcpy(spectrum_buf + (SPECTRUM_FFT_SIZE - SPECTRUM_HOP),
                            spectrum_tmp,
                            SPECTRUM_HOP * sizeof(int16_t));
 
-                    spectrum_process(spectrum_buf, spectrum_bands,
-                                     SPECTRUM_BANDS);
-                    event_bus_publish(EV_SPECTRUM_UPDATE,
-                                      spectrum_bands,
-                                      sizeof(spectrum_bands));
+                    spectrum_skip++;
+                    if (spectrum_skip >= 4) {
+                        spectrum_skip = 0;
+
+                        spectrum_process(spectrum_buf, spectrum_bands,
+                                         SPECTRUM_BANDS);
+                        event_bus_publish(EV_SPECTRUM_UPDATE,
+                                          spectrum_bands,
+                                          sizeof(spectrum_bands));
+                    }
                 }
             }
 
