@@ -948,7 +948,9 @@ int run_app(int argc, char **argv) {
     std::atomic<bool> timer_active{true};
     std::thread refresh_timer([&]() {
         while (timer_active.load()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+            auto &st = StateStore::instance().state();
+            int ms = (st.playback_state == PlaybackState::Playing) ? 16 : 200;
+            std::this_thread::sleep_for(std::chrono::milliseconds(ms));
             screen.RequestAnimationFrame();
         }
     });

@@ -167,11 +167,34 @@ Element render_spectrum_bar(const AppState &s) {
     static const float ALPHA_UP[4]   = {0.28f, 0.28f, 0.35f, 0.40f};
     static const float ALPHA_DOWN[4] = {0.28f, 0.28f, 0.18f, 0.24f};
 
-    /* Gradient base color */
+    /* ── Gradient LUT ─────────────────────────────────── */
+    static struct { uint8_t r, g, b; } s_bot[SPECTRUM_BANDS], s_top[SPECTRUM_BANDS];
+    static uint8_t s_last_r = 0, s_last_g = 0, s_last_b = 0;
     const auto &theme = ThemeManager::instance().current();
     uint8_t base_r = theme.spectrum.has_color ? theme.spectrum.r : theme.accent.r;
     uint8_t base_g = theme.spectrum.has_color ? theme.spectrum.g : theme.accent.g;
     uint8_t base_b = theme.spectrum.has_color ? theme.spectrum.b : theme.accent.b;
+
+    if (base_r != s_last_r || base_g != s_last_g || base_b != s_last_b) {
+        s_last_r = base_r; s_last_g = base_g; s_last_b = base_b;
+        const float MAX_HBLEND = 0.45f;
+        float mid = (float)(SPECTRUM_BANDS - 1) * 0.5f;
+        const float vblend = 0.25f;
+        for (int k = 0; k < SPECTRUM_BANDS; k++) {
+            float norm_dist = fabsf((float)k - mid) / mid;
+            float hblend = MAX_HBLEND * (norm_dist * norm_dist);
+            s_bot[k].r = (uint8_t)(base_r + (255 - base_r) * hblend);
+            s_bot[k].g = (uint8_t)(base_g + (255 - base_g) * hblend);
+            s_bot[k].b = (uint8_t)(base_b + (255 - base_b) * hblend);
+            float target_t = 1.0f - hblend / MAX_HBLEND;
+            uint8_t trg_r = (uint8_t)(base_r + (255.0f - base_r) * target_t);
+            uint8_t trg_g = (uint8_t)(base_g + (255.0f - base_g) * target_t);
+            uint8_t trg_b = (uint8_t)(base_b + (255.0f - base_b) * target_t);
+            s_top[k].r = (uint8_t)(s_bot[k].r + (trg_r - (float)s_bot[k].r) * vblend);
+            s_top[k].g = (uint8_t)(s_bot[k].g + (trg_g - (float)s_bot[k].g) * vblend);
+            s_top[k].b = (uint8_t)(s_bot[k].b + (trg_b - (float)s_bot[k].b) * vblend);
+        }
+    }
 
     bool dimmed = (s.playback_state != PlaybackState::Playing);
     const float MAX_HEIGHT = 16.0f;  /* 2 rows × 8 levels each */
@@ -234,25 +257,6 @@ Element render_spectrum_bar(const AppState &s) {
         memcpy(bot_str, LEVEL_BYTES[bot], (size_t)bot_len);
         bot_str[bot_len] = '\0';
 
-        /* Horizontal gradient: pure base at center, fade toward white at both ends */
-        const float MAX_HBLEND = 0.45f;
-        float mid = (float)(SPECTRUM_BANDS - 1) * 0.5f;
-        float norm_dist = fabsf((float)i - mid) / mid;
-        float hblend = MAX_HBLEND * (norm_dist * norm_dist);
-        uint8_t bot_r = (uint8_t)(base_r + (255 - base_r) * hblend);
-        uint8_t bot_g = (uint8_t)(base_g + (255 - base_g) * hblend);
-        uint8_t bot_b = (uint8_t)(base_b + (255 - base_b) * hblend);
-
-        /* Vertical gradient */
-        float vblend = 0.25f;
-        float target_t = 1.0f - hblend / MAX_HBLEND;
-        uint8_t trg_r = (uint8_t)(base_r + (255.0f - base_r) * target_t);
-        uint8_t trg_g = (uint8_t)(base_g + (255.0f - base_g) * target_t);
-        uint8_t trg_b = (uint8_t)(base_b + (255.0f - base_b) * target_t);
-        uint8_t top_r = (uint8_t)(bot_r + (trg_r - (float)bot_r) * vblend);
-        uint8_t top_g = (uint8_t)(bot_g + (trg_g - (float)bot_g) * vblend);
-        uint8_t top_b = (uint8_t)(bot_b + (trg_b - (float)bot_b) * vblend);
-
         Element col_elem;
         if (dimmed) {
             col_elem = vbox({
@@ -261,9 +265,9 @@ Element render_spectrum_bar(const AppState &s) {
             });
         } else {
             col_elem = vbox({
-                color(Color::RGB(top_r, top_g, top_b),
+                color(Color::RGB(s_top[i].r, s_top[i].g, s_top[i].b),
                       text(std::string(top_str))),
-                color(Color::RGB(bot_r, bot_g, bot_b),
+                color(Color::RGB(s_bot[i].r, s_bot[i].g, s_bot[i].b),
                       text(std::string(bot_str))),
             });
         }
