@@ -15,7 +15,7 @@
  * Only compiled on MSVC; POSIX platforms use the real <wordexp.h>.
  */
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 
 #include <stdlib.h>
 #include <string.h>
@@ -155,4 +155,4 @@ static inline void wordfree(wordexp_t *p)
     p->we_wordc = 0;
 }
 
-#endif /* _MSC_VER */
+#endif /* _WIN32 */

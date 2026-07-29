@@ -93,11 +93,15 @@ AudioOutput* audio_output_create(int sample_rate, int channels) {
              sample_rate, channels);
 
     AudioOutput *ao = (AudioOutput*)malloc(sizeof(AudioOutput));
+    if (!ao) {
+        LOG_ERROR("OOM allocating AudioOutput");
+        if (g_active && g_active->shutdown) g_active->shutdown();
+        g_active = NULL;
+        return NULL;
+    }
     ao->sample_rate = sample_rate;
     ao->channels = channels;
-    ao->volume = 80;
-    Config *gcfg2 = config_global();
-    if (gcfg2) ao->volume = config_get_int(gcfg2, "audio.volume", 80);
+    ao->volume = gcfg ? config_get_int(gcfg, "audio.volume", 80) : 80;
     g_active_ao = ao;
     return ao;
 }
@@ -130,13 +134,12 @@ int audio_output_write(AudioOutput *ao, const int16_t *pcm, int frames) {
             g_scale_buf = (int16_t*)malloc(g_scale_cap * sizeof(int16_t));
             if (!g_scale_buf) { g_scale_cap = 0; return -1; }
         }
-        double gain = (double)ao->volume / 100.0;
-        for (size_t i = 0; i < samples; i++) {
-            double v = (double)pcm[i] * gain;
-            if (v > 32767.0) v = 32767.0;
-            if (v < -32768.0) v = -32768.0;
-            g_scale_buf[i] = (int16_t)v;
-        }
+        /* Integer scaling: (pcm * volume) / 100 stays within the int16 range
+           (|pcm| <= 32767, volume <= 100 → |product| <= 3276700, fits int32),
+           so no clamping is needed and we avoid per-sample double math. */
+        int vol = ao->volume;
+        for (size_t i = 0; i < samples; i++)
+            g_scale_buf[i] = (int16_t)((int32_t)pcm[i] * vol / 100);
         return g_active->write((const uint8_t*)g_scale_buf, bytes);
     }
 

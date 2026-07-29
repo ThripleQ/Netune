@@ -33,19 +33,16 @@ static void song_array_init(SongArray *a) {
 
 static void song_array_push(SongArray *a, const SongInfo *s) {
     if (a->count >= a->capacity) {
-        a->capacity = a->capacity ? a->capacity * 2 : 64;
-        a->items = (SongInfo*)realloc(a->items,
-                      (size_t)a->capacity * sizeof(SongInfo));
+        int newcap = a->capacity ? a->capacity * 2 : 64;
+        SongInfo *items = (SongInfo*)realloc(a->items,
+                          (size_t)newcap * sizeof(SongInfo));
+        if (!items) return;  /* keep existing array; skip this entry */
+        a->items    = items;
+        a->capacity = newcap;
     }
-    int idx = a->count++;
-    a->items[idx] = *s;
-    a->items[idx].id        = strdup(s->id);
-    a->items[idx].source    = strdup(s->source);
-    a->items[idx].title     = strdup(s->title);
-    a->items[idx].artist    = strdup(s->artist);
-    a->items[idx].album     = strdup(s->album);
-    a->items[idx].cover_url = strdup(s->cover_url);
-    a->items[idx].aux_label = strdup(s->aux_label);
+    /* Deep copy via the NULL-safe helper — raw strdup(s->cover_url) would
+       crash on the NULL cover_url/aux_label fields produced by scan_dir. */
+    song_info_copy(&a->items[a->count++], s);
 }
 
 /* ── File scanning ──────────────────────────────────── */
@@ -103,6 +100,7 @@ static void scan_dir(const char *dir_path, SongArray *arr) {
             }
 
             song_array_push(arr, &s);
+            song_info_free(&s);  /* push deep-copied s; free its scratch strings */
         }
     }
     closedir(dir);

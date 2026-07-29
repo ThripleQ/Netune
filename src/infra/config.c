@@ -65,6 +65,7 @@ static yyjson_val* resolve(Config *cfg, const char *key) {
     yyjson_val *v = cfg->root;
 
     char *k = strdup(key);
+    if (!k) return NULL;
     char *tok = strtok(k, ".");
     while (tok && v) {
         /* check for array index: key[idx] */

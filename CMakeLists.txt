@@ -317,10 +317,17 @@ if(NOT WIN32)
   target_link_libraries(netune PRIVATE dl m)
 endif()
 
+if(WIN32)
+  # Both MSVC and MinGW-w64 need the compat headers to shadow POSIX names
+  # (dirent.h, strings.h, utf8.h, wcwidth_compat.h, wordexp.h)
+  target_include_directories(netune BEFORE PRIVATE src/compat)
+endif()
+
 if(MSVC)
+  # MSVC also needs the pthread shim (MinGW-w64 provides its own <pthread.h>)
+  target_include_directories(netune BEFORE PRIVATE src/compat/msvc)
   target_compile_definitions(netune PRIVATE _CRT_NONSTDC_NO_DEPRECATE)
   target_compile_options(netune PRIVATE /utf-8)
-  target_include_directories(netune BEFORE PRIVATE src/compat)
 endif()
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")

@@ -1,7 +1,6 @@
 #include "core/decoder.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include "compat/utf8.h"   /* UTF-8 aware fopen for Windows */
 
 #define DR_MP3_IMPLEMENTATION

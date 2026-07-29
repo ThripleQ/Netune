@@ -1,6 +1,6 @@
 #include "core/decoder.h"
 #include <stdlib.h>
-#include <string.h>
+#include "compat/utf8.h"   /* UTF-8 → UTF-16 path conversion for Windows */
 
 #define DR_WAV_IMPLEMENTATION
 #include "dr_wav.h"
@@ -15,7 +15,16 @@ typedef struct {
 static void* wav_open(const char *path) {
     WavHandle *h = (WavHandle*)calloc(1, sizeof(WavHandle));
     if (!h) return NULL;
+#ifdef _MSC_VER
+    /* drwav_init_file() calls fopen() with the ANSI code page and fails for
+       paths containing non-ASCII characters (e.g. Chinese user names). Convert
+       the UTF-8 path to UTF-16 and use the wide variant instead. */
+    wchar_t wpath[32768];
+    if (utf8_to_wide(path, wpath, 32768) == 0) { free(h); return NULL; }
+    if (!drwav_init_file_w(&h->wav, wpath, NULL)) {
+#else
     if (!drwav_init_file(&h->wav, path, NULL)) {
+#endif
         free(h);
         return NULL;
     }
