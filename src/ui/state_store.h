@@ -139,8 +139,7 @@ public:
 
     /* groups & playlist */
     void set_groups(const std::vector<SongGroup> &grps);
-    void set_group_index(int idx);       /* cursor move, does NOT load playlist */
-    void load_group_playlist(int idx);   /* Enter: load group idx into playlist */
+    void set_group_index(int idx);       /* switch group, updates right panel */
     void set_active_panel(int panel);    /* 0=left, 1=right */
     void set_song_panel_width(int cols);
     void set_playlist(const std::vector<SongInfo> &list, int index);

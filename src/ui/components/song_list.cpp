@@ -176,14 +176,7 @@ Element render_song_list(const AppState &s) {
     } else {
         /* ── Normal playlist display ─────────────────── */
 
-        /* Spinner during async load */
-        if (s.loading && s.playlist.empty()) {
-            els.push_back(filler());
-            els.push_back(render_spinner(s) | center);
-            els.push_back(filler());
-        } else if (s.loading) {
-            els.push_back(render_spinner(s));
-        }
+        /* Spinner during async load (overlaid on top of list below) */
 
                                 /* Watermark: show netease logo when empty */
         if (!s.loading && s.playlist.empty()) {
@@ -240,14 +233,21 @@ Element render_song_list(const AppState &s) {
             bool scroll = (s.active_panel == 1 && sel);
             std::string row = build_info_row(content, avail_w, scroll);
 
-            if (s.active_panel == 1 && sel)
-                els.push_back(theme_selection(text("> " + row) | focus));
-            else if (s.active_panel == 0 && sel)
-                els.push_back(theme_fg(text("  " + row) | bold));
-            else
+            if (sel) {
+                if (s.active_panel == 1)
+                    els.push_back(theme_selection(text("> " + row) | focus));
+                else
+                    els.push_back(theme_fg(text("  " + row) | bold | focus));
+            } else {
                 els.push_back(theme_fg(text("  " + row)));
+            }
         }
     }
 
-    return theme_bg(vbox(std::move(els)) | vscroll_indicator | frame | flex | border);
+    auto list = theme_bg(vbox(std::move(els)) | vscroll_indicator | frame | flex | border);
+    if (s.loading) {
+        /* Overlay spinner on top of list so it's visible even when scrolled */
+        return dbox({list, render_spinner(s) | center});
+    }
+    return list;
 }
