@@ -1364,13 +1364,9 @@ int run_app(int argc, char **argv) {
                         const std::string &pl_id = cur.netease_menu[idx].id;
 
                         if (type == -1) {
-                            /* Back to main netease menu: clear nav stack
-                               so Esc doesn't go back to playlist folder */
-                            StateStore::instance().clear_nav_stack();
-                            /* Clear first so set_music_mode reinitializes */
-                            StateStore::instance().set_netease_menu({});
-                            StateStore::instance().set_music_mode(MusicMode::Local);
-                            StateStore::instance().set_music_mode(MusicMode::Netease);
+                            /* Back to main netease menu: pop nav to restore
+                               previous state (menu + playlist) without clearing. */
+                            StateStore::instance().nav_pop();
                         } else if (type == 200) {
                             start_login();
                         } else if (type == 100) {
