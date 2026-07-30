@@ -1201,7 +1201,7 @@ int run_app(int argc, char **argv) {
                             std::vector<const char*> paths;
                             for (auto &s : cur.groups[target_group].songs)
                                 paths.push_back(s.id);
-                            StateStore::instance().load_group_playlist(target_group);
+                            StateStore::instance().set_group_index(target_group);
                             StateStore::instance().set_selected_index(target_song >= 0 ? target_song : 0);
                             StateStore::instance().set_active_panel(1);
                         }
@@ -1347,15 +1347,11 @@ int run_app(int argc, char **argv) {
                     StateStore::instance().set_music_mode(MusicMode::Netease);
                     StateStore::instance().set_active_panel(0);
                     StateStore::instance().set_group_index(-1);
-                } else if (cur.music_mode == MusicMode::Local && cur.group_index >= 0) {
-                    /* Enter on a local group: load its songs into right panel */
-                    StateStore::instance().load_group_playlist(cur.group_index);
-                    StateStore::instance().set_active_panel(1);
                 } else if (cur.music_mode == MusicMode::Netease && cur.netease_selected < 0) {
                     /* Switch back to Local mode */
                     StateStore::instance().set_music_mode(MusicMode::Local);
                     StateStore::instance().set_active_panel(0);
-                    StateStore::instance().load_group_playlist(0);
+                    StateStore::instance().set_group_index(0);
                 } else if (cur.music_mode == MusicMode::Netease && cur.netease_selected >= 0) {
                     /* Load netease menu item content into right panel */
                     int idx = cur.netease_selected;

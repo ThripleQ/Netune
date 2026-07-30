@@ -216,25 +216,22 @@ void StateStore::set_groups(const std::vector<SongGroup> &grps) {
     /* Only populate right panel if groups exist; otherwise
        keep netease entry selected (group_index stays -1). */
     if (!state_.groups.empty())
-        load_group_playlist(0);
+        set_group_index(0);
     validate_selection();
 }
 
 void StateStore::set_group_index(int idx) {
-    if (idx == state_.group_index) return;
+    if (idx == state_.group_index) return;  /* same group, no reset */
     state_.group_index = idx;
     if (idx < 0) {
+        /* -1 = cross-mode entry (netease), no playlist update */
         validate_selection();
         return;
     }
     if (idx >= (int)state_.groups.size()) { state_.group_index = 0; validate_selection(); return; }
-    validate_selection();
-}
-
-void StateStore::load_group_playlist(int idx) {
-    if (idx < 0 || idx >= (int)state_.groups.size()) return;
-    set_playlist(state_.groups[idx].songs, 0);
-    state_.group_index = idx;
+    /* update right panel from this group */
+    auto &grp = state_.groups[idx];
+    set_playlist(grp.songs, 0);
 }
 
 void StateStore::nav_push(void) {
