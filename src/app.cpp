@@ -1364,14 +1364,9 @@ int run_app(int argc, char **argv) {
                         const std::string &pl_id = cur.netease_menu[idx].id;
 
                         if (type == -1) {
-                            /* Back to main netease menu: restore main menu
-                               without touching the right panel's playlist. */
-                            if (!cur.nav_stack.empty()) {
-                                auto &prev = cur.nav_stack.back();
-                                StateStore::instance().set_netease_menu(prev.netease_menu);
-                                StateStore::instance().set_netease_selected(prev.netease_selected);
-                                StateStore::instance().clear_nav_stack();
-                            }
+                            /* Back to main netease menu: pop nav to restore
+                               previous state (menu + playlist) without clearing. */
+                            StateStore::instance().nav_pop();
                         } else if (type == 200) {
                             start_login();
                         } else if (type == 100) {
