@@ -1,12 +1,12 @@
 #include "ui/components/spinner.h"
 #include "ui/components/theme_util.h"
 #include <string>
-#include <thread>
 #include <chrono>
 using namespace ftxui;
+using namespace std::chrono;
 
 Element render_spinner(const AppState &s) {
-    static int frame = 0;
+    static auto start = steady_clock::now();
     static bool was_loading = false;
 
     if (!s.loading && !s.cover_loading) {
@@ -14,15 +14,16 @@ Element render_spinner(const AppState &s) {
         return text("");
     }
 
-    /* reset on new loading session */
     if (!was_loading) {
-        frame = 0;
+        start = steady_clock::now();
         was_loading = true;
     }
 
-    frame++;
+    /* Time-based frame: 80ms per frame → ~12.5 fps, smooth enough */
+    int elapsed = (int)duration_cast<milliseconds>(steady_clock::now() - start).count();
+    int idx = (elapsed / 80) % 10;
     const char *frames[] = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"};
-    auto &f = frames[(frame / 2) % 10];
+    auto &f = frames[idx];
     return hbox({
         text(" " + std::string(f) + " "),
         text("Loading...") | dim,
