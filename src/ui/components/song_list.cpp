@@ -233,12 +233,14 @@ Element render_song_list(const AppState &s) {
             bool scroll = (s.active_panel == 1 && sel);
             std::string row = build_info_row(content, avail_w, scroll);
 
-            if (s.active_panel == 1 && sel)
-                els.push_back(theme_selection(text("> " + row) | focus));
-            else if (s.active_panel == 0 && sel)
-                els.push_back(theme_fg(text("  " + row) | bold));
-            else
+            if (sel) {
+                if (s.active_panel == 1)
+                    els.push_back(theme_selection(text("> " + row) | focus));
+                else
+                    els.push_back(theme_fg(text("  " + row) | bold | focus));
+            } else {
                 els.push_back(theme_fg(text("  " + row)));
+            }
         }
     }
 
