@@ -21,7 +21,7 @@ Element render_spinner(const AppState &s) {
 
     /* Time-based frame: 80ms per frame → ~12.5 fps, smooth enough */
     int elapsed = (int)duration_cast<milliseconds>(steady_clock::now() - start).count();
-    int idx = (elapsed / 80) % 10;
+    int idx = (elapsed / 16) % 10;
     const char *frames[] = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"};
     auto &f = frames[idx];
     return hbox({

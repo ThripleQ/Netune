@@ -949,7 +949,8 @@ int run_app(int argc, char **argv) {
     std::thread refresh_timer([&]() {
         while (timer_active.load()) {
             auto &st = StateStore::instance().state();
-            int ms = (st.playback_state == PlaybackState::Playing) ? 16 : 200;
+            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading)
+                      ? 16 : 200;
             std::this_thread::sleep_for(std::chrono::milliseconds(ms));
             screen.RequestAnimationFrame();
         }
