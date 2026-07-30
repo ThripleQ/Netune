@@ -221,6 +221,7 @@ void StateStore::set_groups(const std::vector<SongGroup> &grps) {
 }
 
 void StateStore::set_group_index(int idx) {
+    if (idx == state_.group_index) return;  /* same group, no reset */
     state_.group_index = idx;
     if (idx < 0) {
         /* -1 = cross-mode entry (netease), no playlist update */
