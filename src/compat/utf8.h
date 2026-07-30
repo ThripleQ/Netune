@@ -54,6 +54,14 @@
 #define X_OK 6
 #endif
 
+/* ── S_ISDIR/S_ISREG — not provided by MSVC's <sys/stat.h> ── */
+#ifndef S_ISDIR
+#define S_ISDIR(m)  (((m) & _S_IFMT) == _S_IFDIR)
+#endif
+#ifndef S_ISREG
+#define S_ISREG(m)  (((m) & _S_IFMT) == _S_IFREG)
+#endif
+
 /* ── Internal conversion helpers ────────────────────── */
 
 /* Convert a UTF-8 string to a UTF-16 wide string.
