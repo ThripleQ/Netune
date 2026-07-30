@@ -122,6 +122,8 @@ jobs:
           cd netune-windows && zip -r ../netune-windows.zip * && cd ..
 
       - name: Upload to release
+        env:
+          ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: true
         uses: softprops/action-gh-release@v2
         with:
           files: |
