@@ -176,14 +176,7 @@ Element render_song_list(const AppState &s) {
     } else {
         /* ── Normal playlist display ─────────────────── */
 
-        /* Spinner during async load */
-        if (s.loading && s.playlist.empty()) {
-            els.push_back(filler());
-            els.push_back(render_spinner(s) | center);
-            els.push_back(filler());
-        } else if (s.loading) {
-            els.push_back(render_spinner(s));
-        }
+        /* Spinner during async load (overlaid on top of list below) */
 
                                 /* Watermark: show netease logo when empty */
         if (!s.loading && s.playlist.empty()) {
@@ -253,5 +246,10 @@ Element render_song_list(const AppState &s) {
         }
     }
 
-    return theme_bg(vbox(std::move(els)) | vscroll_indicator | frame | flex | border);
+    auto list = theme_bg(vbox(std::move(els)) | vscroll_indicator | frame | flex | border);
+    if (s.loading) {
+        /* Overlay spinner on top of list so it's visible even when scrolled */
+        return dbox({list, render_spinner(s) | center});
+    }
+    return list;
 }
