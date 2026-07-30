@@ -13,7 +13,8 @@
  * (_w*) Win32/CRT APIs for file operations. This ensures that all internal
  * paths are UTF-8, and all system calls handle Unicode correctly.
  *
- * On POSIX, these are transparent aliases to the standard C library functions.
+ * On POSIX/MinGW, these are transparent aliases to the standard C library.
+ * MinGW-w64's CRT uses UTF-8 directly, so no conversion is needed.
  *
  * Usage: Include "utf8.h" and replace:
  *   getenv("X")     -> getenv_utf8("X")
@@ -28,7 +29,7 @@
  * F_OK, R_OK, W_OK are defined if not already available.
  */
 
-#ifdef _WIN32
+#ifdef _MSC_VER
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -65,30 +66,20 @@
 /* ── Internal conversion helpers ────────────────────── */
 
 /* Convert a UTF-8 string to a UTF-16 wide string.
-   Returns the number of wide chars written (including NUL), or 0 on failure.
-   The wpath buffer must be large enough (use MAX_PATH or 32768 for long paths). */
+   Returns the number of wide chars written (including NUL), or 0 on failure. */
 static inline int utf8_to_wide(const char *utf8, wchar_t *wbuf, int wbuf_size)
 {
     if (!utf8 || !wbuf || wbuf_size <= 0) return 0;
     int len = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wbuf, wbuf_size);
     if (len <= 0) {
-        /* Fallback: treat input as ANSI if UTF-8 conversion fails.
-           This handles the case where getenv() (ANSI) is used instead
-           of getenv_utf8(). The fallback ensures backward compatibility
-           but may not support full Unicode. */
         len = MultiByteToWideChar(CP_ACP, 0, utf8, -1, wbuf, wbuf_size);
         if (len <= 0) return 0;
     }
-    /* Ensure NUL termination even on truncation */
     wbuf[wbuf_size - 1] = L'\0';
     return len;
 }
 
-/* ── getenv_utf8 ──────────────────────────────────────
- * Returns a UTF-8 string from an environment variable.
- * Uses _wgetenv() to get the value as UTF-16, then converts to UTF-8.
- * Returns pointer to thread-local static buffer (overwritten by next call).
- * Returns NULL if the variable is not set or empty. */
+/* ── getenv_utf8 ────────────────────────────────────── */
 static inline const char* getenv_utf8(const char *name)
 {
     if (!name) return NULL;
@@ -97,22 +88,14 @@ static inline const char* getenv_utf8(const char *name)
         return NULL;
     const wchar_t *wval = _wgetenv(wname);
     if (!wval || !wval[0]) return NULL;
-    /* Thread-local buffer: each thread gets its own copy.
-       32768 chars covers even the longest Windows paths. */
-#if defined(_MSC_VER)
     static __declspec(thread) char buf[32768];
-#else
-    static __thread char buf[32768];
-#endif
     if (WideCharToMultiByte(CP_UTF8, 0, wval, -1, buf, (int)sizeof(buf),
                              NULL, NULL) == 0)
         return NULL;
     return buf;
 }
 
-/* ── fopen_utf8 ───────────────────────────────────────
- * Opens a file using a UTF-8 path.
- * Converts the path and mode to UTF-16 and calls _wfopen(). */
+/* ── fopen_utf8 ─────────────────────────────────────── */
 static inline FILE* fopen_utf8(const char *path, const char *mode)
 {
     if (!path || !mode) return NULL;
@@ -124,9 +107,7 @@ static inline FILE* fopen_utf8(const char *path, const char *mode)
     return _wfopen(wpath, wmode);
 }
 
-/* ── mkdir_utf8 ───────────────────────────────────────
- * Creates a directory using a UTF-8 path.
- * Converts the path to UTF-16 and calls _wmkdir(). */
+/* ── mkdir_utf8 ─────────────────────────────────────── */
 static inline int mkdir_utf8(const char *path)
 {
     if (!path) return -1;
@@ -135,9 +116,7 @@ static inline int mkdir_utf8(const char *path)
     return _wmkdir(wpath);
 }
 
-/* ── access_utf8 ──────────────────────────────────────
- * Checks file access permissions using a UTF-8 path.
- * Converts the path to UTF-16 and calls _waccess(). */
+/* ── access_utf8 ────────────────────────────────────── */
 static inline int access_utf8(const char *path, int mode)
 {
     if (!path) return -1;
@@ -146,10 +125,7 @@ static inline int access_utf8(const char *path, int mode)
     return _waccess(wpath, mode);
 }
 
-/* ── stat_utf8 ────────────────────────────────────────
- * Gets file status using a UTF-8 path.
- * Converts the path to UTF-16 and calls _wstat().
- * Note: struct _stat and struct stat are the same type on MSVC. */
+/* ── stat_utf8 ──────────────────────────────────────── */
 static inline int stat_utf8(const char *path, struct stat *buf)
 {
     if (!path || !buf) return -1;
@@ -158,9 +134,7 @@ static inline int stat_utf8(const char *path, struct stat *buf)
     return _wstat(wpath, (struct _stat*)buf);
 }
 
-/* ── remove_utf8 ──────────────────────────────────────
- * Removes/deletes a file using a UTF-8 path.
- * Converts the path to UTF-16 and calls _wremove(). */
+/* ── remove_utf8 ────────────────────────────────────── */
 static inline int remove_utf8(const char *path)
 {
     if (!path) return -1;
@@ -169,12 +143,49 @@ static inline int remove_utf8(const char *path)
     return _wremove(wpath);
 }
 
-#else /* !_WIN32 — POSIX: transparent aliases */
+#elif defined(__MINGW32__)
+
+/* MinGW-w64: CRT uses UTF-8 directly, no conversion needed.
+   Provide transparent aliases for API compatibility. */
+#ifndef F_OK
+#define F_OK 0
+#endif
+#ifndef R_OK
+#define R_OK 4
+#endif
+#ifndef W_OK
+#define W_OK 2
+#endif
+#ifndef X_OK
+#define X_OK 6
+#endif
+
+#define getenv_utf8  getenv
+#define fopen_utf8   fopen
+#define mkdir_utf8(p) mkdir(p, 0755)
+#define access_utf8  access
+#define stat_utf8    stat
+#define remove_utf8  remove
+
+#else /* POSIX */
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#ifndef F_OK
+#define F_OK 0
+#endif
+#ifndef R_OK
+#define R_OK 4
+#endif
+#ifndef W_OK
+#define W_OK 2
+#endif
+#ifndef X_OK
+#define X_OK 6
+#endif
 
 #define getenv_utf8  getenv
 #define fopen_utf8   fopen
@@ -183,4 +194,4 @@ static inline int remove_utf8(const char *path)
 #define stat_utf8    stat
 #define remove_utf8  remove
 
-#endif /* !_WIN32 */
+#endif
