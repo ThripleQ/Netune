@@ -50,6 +50,7 @@ extern "C" {
 
 #include "ui/state_store.h"
 #include "ui/keybindings.h"
+#include "ui/ui_util.h"
 #include "ui/components/top_bar.h"
 #include "ui/components/status_bar.h"
 #include "ui/components/group_list.h"
@@ -141,6 +142,10 @@ static void ev_search_done(const BusEvent *ev, void *data) {
 #define NS_CACHE_MAX 32
 static std::map<std::string, std::vector<SongInfo>> g_ns_cache;
 
+/* True while the right search box has pushed a nav snapshot for its
+   results view; Esc (or a query edit that misses the cache) restores. */
+static bool g_top_search_pushed = false;
+
 /* Free all SongInfo strings in a cache vector (for eviction / shutdown) */
 static void ns_cache_vec_free(std::vector<SongInfo> &v) {
     for (auto &s : v) song_info_free(&s);
@@ -149,14 +154,14 @@ static void ns_cache_vec_free(std::vector<SongInfo> &v) {
 
 struct LoadedSongs { SongInfo *songs; int count; };
 
-static void do_netease_search(const char *query) {
+static void do_netease_search(const char *query, bool push_nav) {
     if (!query || !query[0]) return;
     std::string q(query);
 
     /* Check cache first */
     auto it = g_ns_cache.find(q);
     if (it != g_ns_cache.end()) {
-        StateStore::instance().nav_push();
+        if (push_nav) StateStore::instance().nav_push();
         StateStore::instance().set_playlist(it->second, 0);
         StateStore::instance().set_active_panel(1);
         StateStore::instance().set_search_active(false);
@@ -164,7 +169,7 @@ static void do_netease_search(const char *query) {
         return;
     }
 
-    StateStore::instance().nav_push();
+    if (push_nav) StateStore::instance().nav_push();
     StateStore::instance().set_loading(true);
 
     std::thread([q]() {
@@ -221,6 +226,175 @@ static void do_netease_search(const char *query) {
 }
 
 /* Free search cache on shutdown */
+/* Apply cached netease search results instantly, if present.
+   Pushes the nav stack once per search session so Esc can restore
+   the pre-search view. Returns true when applied. */
+static bool netease_search_apply_cache(const std::string &q) {
+    auto it = g_ns_cache.find(q);
+    if (it == g_ns_cache.end()) return false;
+    if (!g_top_search_pushed) {
+        StateStore::instance().nav_push();
+        g_top_search_pushed = true;
+    }
+    StateStore::instance().set_playlist(it->second, 0);
+    StateStore::instance().set_active_panel(1);
+    return true;
+}
+
+/* Close the top search row and restore everything: clear both boxes'
+   queries (lists un-filter) and pop the nav snapshot taken for netease
+   search results. */
+static void close_top_search(void) {
+    StateStore &st = StateStore::instance();
+    st.set_top_left_query("");
+    st.set_top_right_query("");
+    if (g_top_search_pushed) {
+        st.nav_pop();
+        g_top_search_pushed = false;
+    }
+    st.set_top_search_active(false, 0);
+}
+
+/* After a right-box query edit: apply cached results instantly when the
+   list is empty; otherwise fall back to the pre-search view so stale
+   results don't linger. */
+static void restore_search_view(const std::string &q) {
+    if (!g_top_search_pushed) return;
+    if (!q.empty() && netease_search_apply_cache(q)) return;
+    /* cache miss or cleared query — restore the pre-search view */
+    NavState snap;
+    if (StateStore::instance().nav_peek(snap)) {
+        StateStore::instance().set_playlist(snap.playlist, snap.selected_index);
+        StateStore::instance().set_active_panel(snap.active_panel);
+    }
+}
+
+/* ── Activate a netease menu item: load its content into the right panel ── */
+static void activate_netease_menu_item(int idx) {
+    const auto &cur = StateStore::instance().state();
+    if (idx < 0 || idx >= (int)cur.netease_menu.size()) return;
+    int type = cur.netease_menu[idx].type;
+    const std::string &pl_id = cur.netease_menu[idx].id;
+
+
+    if (type == -1) {
+        /* Back to main netease menu: clear nav stack
+           so Esc doesn't go back to playlist folder */
+        StateStore::instance().clear_nav_stack();
+        /* Clear first so set_music_mode reinitializes */
+        StateStore::instance().set_netease_menu({});
+        StateStore::instance().set_music_mode(MusicMode::Local);
+        StateStore::instance().set_music_mode(MusicMode::Netease);
+    } else if (type == 200) {
+        start_login();
+    } else if (type == 100) {
+        /* netease "search" menu entry — focus the top right search box */
+        StateStore::instance().set_top_search_active(true, 1);
+    } else if (!pl_id.empty()) {
+        StateStore::instance().nav_push();
+        StateStore::instance().set_loading(true);
+        std::string _pl_id = pl_id;
+        std::thread([_pl_id]() {
+            SongInfo *songs = NULL; int sc = 0;
+            int ret = netease_playlist_songs(_pl_id.c_str(), &songs, &sc);
+            LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
+            if (ret == 0 && sc > 0) {
+                ld->songs = songs; ld->count = sc;
+            } else {
+                ld->songs = NULL; ld->count = 0;
+                free(songs); /* safe: NULL or alloc */
+            }
+            if (event_bus_publish(EV_PLAYLIST_LOADED, ld, sizeof(*ld)) != 0) {
+                /* shutdown — clean up data ourselves */
+                if (ld->songs) {
+                    for (int i = 0; i < ld->count; i++)
+                        song_info_free(&ld->songs[i]);
+                    free(ld->songs);
+                }
+                free(ld);
+            }
+        }).detach();
+
+    } else if (type >= 0 && type <= 1) {
+        StateStore::instance().nav_push();
+        StateStore::instance().set_loading(true);
+        int _type = type;
+        std::thread([_type]() {
+            SongInfo *ms = NULL; int mc = 0;
+            int ret = netease_menu_songs(_type, 200, &ms, &mc);
+            LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
+            if (ret == 0 && mc > 0) {
+                ld->songs = ms; ld->count = mc;
+            } else {
+                ld->songs = NULL; ld->count = 0;
+                free(ms);
+            }
+            if (event_bus_publish(EV_MENU_LOADED, ld, sizeof(*ld)) != 0) {
+                if (ld->songs) {
+                    for (int i = 0; i < ld->count; i++)
+                        song_info_free(&ld->songs[i]);
+                    free(ld->songs);
+                }
+                free(ld);
+            }
+        }).detach();
+    } else if (type == 2 || type == 3) {
+        if (!netease_is_logged_in()) {
+            start_login();
+        } else {
+            StateStore::instance().nav_push();
+            StateStore::instance().set_loading(true);
+            std::thread([type]() {
+                SongInfo *pl = NULL; int pc = 0;
+                int ret = netease_playlists(type == 3, &pl, &pc);
+                LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
+                if (ret == 0 && pc > 0) {
+                    ld->songs = pl; ld->count = pc;
+                } else {
+                    ld->songs = NULL; ld->count = 0;
+                    free(pl);
+                }
+                if (event_bus_publish(EV_PLAYLIST_LIST_LOADED, ld, sizeof(*ld)) != 0) {
+                    if (ld->songs) {
+                        for (int i = 0; i < ld->count; i++)
+                            song_info_free(&ld->songs[i]);
+                        free(ld->songs);
+                    }
+                    free(ld);
+                }
+            }).detach();
+        }
+    } else if (type == 4) {
+        /* 我喜欢的音乐 (liked songs) */
+        if (!netease_is_logged_in()) {
+            start_login();
+        } else {
+            StateStore::instance().nav_push();
+            StateStore::instance().set_loading(true);
+            std::thread([]() {
+                SongInfo *songs = NULL; int sc = 0;
+                int ret = netease_liked_songs(&songs, &sc);
+                LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
+                if (ret == 0 && sc > 0) {
+                    ld->songs = songs; ld->count = sc;
+                } else {
+                    ld->songs = NULL; ld->count = 0;
+                    free(songs);
+                }
+                if (event_bus_publish(EV_PLAYLIST_LOADED, ld, sizeof(*ld)) != 0) {
+                    if (ld->songs) {
+                        for (int i = 0; i < ld->count; i++)
+                            song_info_free(&ld->songs[i]);
+                        free(ld->songs);
+                    }
+                    free(ld);
+                }
+            }).detach();
+        }
+    }
+}
+
+
 void netease_search_cache_free(void) {
     for (auto &kv : g_ns_cache)
         ns_cache_vec_free(kv.second);
@@ -1000,6 +1174,7 @@ int run_app(int argc, char **argv) {
         const AppState &s = state.state();
 
         state.set_song_panel_width(screen.dimx() - 29);
+        state.set_top_row_width(screen.dimx());
 
         /* Login polling: every ~2s while waiting for QR scan;
            auto-close 2s after successful login */
@@ -1098,8 +1273,198 @@ int run_app(int argc, char **argv) {
             return true;
         }
 
+        /* ── Top search row input (both modes) ───────── */
+        if (cur.top_search_active && !cur.lyric_mode) {
+            int side = cur.top_search_side;
+
+            if (ev_key == "escape") {
+                /* close search and restore full views */
+                close_top_search();
+                return true;
+            }
+            if (ev_key == "tab") {
+                /* move editing focus to the other box */
+                StateStore::instance().set_top_search_active(true, side ? 0 : 1);
+                return true;
+            }
+            if (ev_key == "up" || ev_key == "down") {
+                int step = (ev_key == "up") ? -1 : 1;
+                if (side == 0) {
+                    const std::string &q = cur.top_left_query;
+                    if (cur.music_mode == MusicMode::Local) {
+                        /* entries: -1 = netease entry (only when unfiltered),
+                           0..n-1 = groups */
+                        int n = (int)cur.groups.size();
+                        if (n <= 0) return true;
+                        int idx = cur.group_index;
+                        auto matches = [&](int i) {
+                            if (i < 0) return q.empty();
+                            if (i >= (int)cur.groups.size()) return false;
+                            return q.empty() || str_icontains(cur.groups[i].name, q);
+                        };
+                        for (int k = 0; k < n + 2; k++) {
+                            idx += step;
+                            if (idx < -1) idx = n - 1;
+                            if (idx > n - 1) idx = -1;
+                            if (matches(idx)) {
+                                StateStore::instance().set_group_index(idx);
+                                break;
+                            }
+                        }
+                    } else {
+                        /* move within filtered menu items */
+                        int n = (int)cur.netease_menu.size();
+                        if (n <= 0) return true;
+                        int idx = cur.netease_selected;
+                        for (int k = 0; k < n; k++) {
+                            idx += step;
+                            if (idx < 0) idx = n - 1;
+                            if (idx >= n) idx = 0;
+                            if (q.empty() || str_icontains(cur.netease_menu[idx].name, q)) {
+                                StateStore::instance().set_netease_selected(idx);
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    /* move within filtered playlist */
+                    const std::string &q = cur.top_right_query;
+                    int n = (int)cur.playlist.size();
+                    if (n <= 0) return true;
+                    int idx = cur.selected_index;
+                    if (q.empty()) {
+                        idx += step;
+                        if (idx < 0) idx = n - 1;
+                        if (idx >= n) idx = 0;
+                        StateStore::instance().set_selected_index(idx);
+                    } else {
+                        for (int k = 0; k < n; k++) {
+                            idx += step;
+                            if (idx < 0) idx = n - 1;
+                            if (idx >= n) idx = 0;
+                            const auto &song = cur.playlist[idx];
+                            std::string h;
+                            if (song.title) h += song.title;
+                            if (song.artist) h += std::string(" ") + song.artist;
+                            if (str_icontains(h, q)) {
+                                StateStore::instance().set_selected_index(idx);
+                                break;
+                            }
+                        }
+                    }
+                }
+                return true;
+            }
+            if (ev_key == "enter" || ev_key == "\r") {
+                if (side == 0) {
+                    StateStore::instance().set_top_search_active(false, 0);
+                    if (cur.music_mode == MusicMode::Local) {
+                        /* activate the matching local group (netease entry is
+                           excluded from local search — strict separation) */
+                        const std::string &q = cur.top_left_query;
+                        int target = -2;
+                        if (q.empty()) {
+                            target = cur.group_index;
+                        } else {
+                            for (size_t i = 0; i < cur.groups.size(); i++) {
+                                if (str_icontains(cur.groups[i].name, q)) {
+                                    target = (int)i;
+                                    break;
+                                }
+                            }
+                        }
+                        if (target < -1) return true;  /* no match — just close */
+                        if (target < 0) {
+                            /* netease entry: switch to netease mode */
+                            StateStore::instance().set_music_mode(MusicMode::Netease);
+                            StateStore::instance().set_active_panel(0);
+                            StateStore::instance().set_group_index(-1);
+                        } else {
+                            StateStore::instance().set_group_index(target);
+                            StateStore::instance().set_active_panel(1);
+                        }
+                    } else {
+                        /* activate the first menu item matching the filter */
+                        const std::string &q = cur.top_left_query;
+                        int target = -1;
+                        if (q.empty()) {
+                            target = cur.netease_selected;
+                        } else {
+                            for (size_t i = 0; i < cur.netease_menu.size(); i++) {
+                                if (str_icontains(cur.netease_menu[i].name, q)) {
+                                    target = (int)i;
+                                    break;
+                                }
+                            }
+                        }
+                        if (target >= 0) {
+                            StateStore::instance().set_netease_selected(target);
+                            activate_netease_menu_item(target);
+                        }
+                    }
+                } else {
+                    /* right box: filter mode plays selected */
+                    if (!cur.playlist.empty()) {
+                        StateStore::instance().set_top_search_active(false, 1);
+                        int idx = cur.selected_index;
+                        if (idx >= 0 && idx < (int)cur.playlist.size()) {
+                            const auto &sel = cur.playlist[idx];
+                            const char *path = sel.id ? sel.id : "";
+                            StateStore::instance().set_current_song(sel);
+                            event_bus_publish(EV_TRACK_CHANGED, NULL, 0);
+                            event_bus_publish(EV_PLAYBACK_START,
+                                              (void*)path, strlen(path) + 1);
+                        }
+                    } else if (!cur.top_right_query.empty() &&
+                               cur.music_mode == MusicMode::Netease) {
+                        /* netease API search (cache hit → instant) */
+                        if (!netease_search_apply_cache(cur.top_right_query)) {
+                            do_netease_search(cur.top_right_query.c_str(),
+                                              !g_top_search_pushed);
+                            g_top_search_pushed = true;
+                        }
+                    }
+                }
+                return true;
+            }
+            if (ev_key == "backspace") {
+                /* remove last char (UTF-8 safe) */
+                std::string q = (side == 0) ? cur.top_left_query
+                                             : cur.top_right_query;
+                if (!q.empty()) {
+                    int n = (int)q.size() - 1;
+                    while (n > 0 && ((unsigned char)q[n] & 0xC0) == 0x80) n--;
+                    q.resize((size_t)n);
+                }
+                if (side == 0) {
+                    StateStore::instance().set_top_left_query(q);
+                } else {
+                    StateStore::instance().set_top_right_query(q);
+                    restore_search_view(q);
+                }
+                return true;
+            }
+            /* regular ASCII or UTF-8 character: append to query */
+            bool is_ascii = (ev_key.size() == 1 && ev_key[0] >= 32 && ev_key[0] < 127);
+            bool is_utf8  = (ev_key.size() > 1 && ((unsigned char)ev_key[0] & 0x80));
+            if (is_ascii || is_utf8) {
+                std::string ch = ev_key;
+                if (ev_key == "space") ch = " ";
+                std::string q = ((side == 0) ? cur.top_left_query
+                                             : cur.top_right_query) + ch;
+                if (side == 0) {
+                    StateStore::instance().set_top_left_query(q);
+                } else {
+                    StateStore::instance().set_top_right_query(q);
+                    restore_search_view(q);
+                }
+                return true;
+            }
+            return true; /* consume all keys while top search active */
+        }
+
         /* ── Search input mode: capture keys as query text ── */
-        if (cur.search_active) {
+        if (cur.search_active && cur.music_mode != MusicMode::Netease) {
             /* Navigate results */
             /* scope=0 (filter): navigate within current playlist */
             if (cur.search_scope == 0) {
@@ -1187,8 +1552,9 @@ int run_app(int argc, char **argv) {
             if (ev_key == "enter" || ev_key == "\r") {
                 if (cur.music_mode == MusicMode::Netease) {
                     if (!cur.search_query.empty()) {
-                        /* submit search to API */
-                        do_netease_search(cur.search_query.c_str());
+                        /* submit search to API (legacy path — netease mode
+                           now uses the top search row instead) */
+                        do_netease_search(cur.search_query.c_str(), true);
                     }
                     return true;
                 }
@@ -1365,129 +1731,7 @@ int run_app(int argc, char **argv) {
                     StateStore::instance().set_group_index(0);
                 } else if (cur.music_mode == MusicMode::Netease && cur.netease_selected >= 0) {
                     /* Load netease menu item content into right panel */
-                    int idx = cur.netease_selected;
-                    if (idx < (int)cur.netease_menu.size()) {
-                        int type = cur.netease_menu[idx].type;
-                        const std::string &pl_id = cur.netease_menu[idx].id;
-
-                        if (type == -1) {
-                            /* Back to main netease menu: clear nav stack
-                               so Esc doesn't go back to playlist folder */
-                            StateStore::instance().clear_nav_stack();
-                            /* Clear first so set_music_mode reinitializes */
-                            StateStore::instance().set_netease_menu({});
-                            StateStore::instance().set_music_mode(MusicMode::Local);
-                            StateStore::instance().set_music_mode(MusicMode::Netease);
-                        } else if (type == 200) {
-                            start_login();
-                        } else if (type == 100) {
-                            search_manager_clear();
-                            StateStore::instance().set_search_scope(1);
-                            StateStore::instance().set_search_active(true);
-                            StateStore::instance().set_search_query("");
-                        } else if (!pl_id.empty()) {
-                            StateStore::instance().nav_push();
-                            StateStore::instance().set_loading(true);
-                            std::string _pl_id = pl_id;
-                            std::thread([_pl_id]() {
-                                SongInfo *songs = NULL; int sc = 0;
-                                int ret = netease_playlist_songs(_pl_id.c_str(), &songs, &sc);
-                                LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
-                                if (ret == 0 && sc > 0) {
-                                    ld->songs = songs; ld->count = sc;
-                                } else {
-                                    ld->songs = NULL; ld->count = 0;
-                                    free(songs); /* safe: NULL or alloc */
-                                }
-                                if (event_bus_publish(EV_PLAYLIST_LOADED, ld, sizeof(*ld)) != 0) {
-                                    /* shutdown — clean up data ourselves */
-                                    if (ld->songs) {
-                                        for (int i = 0; i < ld->count; i++)
-                                            song_info_free(&ld->songs[i]);
-                                        free(ld->songs);
-                                    }
-                                    free(ld);
-                                }
-                            }).detach();
-
-                        } else if (type >= 0 && type <= 1) {
-                            StateStore::instance().nav_push();
-                            StateStore::instance().set_loading(true);
-                            int _type = type;
-                            std::thread([_type]() {
-                                SongInfo *ms = NULL; int mc = 0;
-                                int ret = netease_menu_songs(_type, 200, &ms, &mc);
-                                LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
-                                if (ret == 0 && mc > 0) {
-                                    ld->songs = ms; ld->count = mc;
-                                } else {
-                                    ld->songs = NULL; ld->count = 0;
-                                    free(ms);
-                                }
-                                if (event_bus_publish(EV_MENU_LOADED, ld, sizeof(*ld)) != 0) {
-                                    if (ld->songs) {
-                                        for (int i = 0; i < ld->count; i++)
-                                            song_info_free(&ld->songs[i]);
-                                        free(ld->songs);
-                                    }
-                                    free(ld);
-                                }
-                            }).detach();
-                        } else if (type == 2 || type == 3) {
-                            if (!netease_is_logged_in()) {
-                                start_login();
-                            } else {
-                                StateStore::instance().nav_push();
-                                StateStore::instance().set_loading(true);
-                                std::thread([type]() {
-                                    SongInfo *pl = NULL; int pc = 0;
-                                    int ret = netease_playlists(type == 3, &pl, &pc);
-                                    LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
-                                    if (ret == 0 && pc > 0) {
-                                        ld->songs = pl; ld->count = pc;
-                                    } else {
-                                        ld->songs = NULL; ld->count = 0;
-                                        free(pl);
-                                    }
-                                    if (event_bus_publish(EV_PLAYLIST_LIST_LOADED, ld, sizeof(*ld)) != 0) {
-                                        if (ld->songs) {
-                                            for (int i = 0; i < ld->count; i++)
-                                                song_info_free(&ld->songs[i]);
-                                            free(ld->songs);
-                                        }
-                                        free(ld);
-                                    }
-                                }).detach();
-                            }
-                        } else if (type == 4) {
-                            /* 我喜欢的音乐 (liked songs) */
-                            if (!netease_is_logged_in()) {
-                                start_login();
-                            } else {
-                                StateStore::instance().nav_push();
-                                StateStore::instance().set_loading(true);
-                                std::thread([]() {
-                                    SongInfo *songs = NULL; int sc = 0;
-                                    int ret = netease_liked_songs(&songs, &sc);
-                                    LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
-                                    if (ret == 0 && sc > 0) {
-                                        ld->songs = songs; ld->count = sc;
-                                    } else {
-                                        ld->songs = NULL; ld->count = 0;
-                                        free(songs);
-                                    }
-                                    if (event_bus_publish(EV_PLAYLIST_LOADED, ld, sizeof(*ld)) != 0) {
-                                        if (ld->songs) {
-                                            for (int i = 0; i < ld->count; i++)
-                                                song_info_free(&ld->songs[i]);
-                                            free(ld->songs);
-                                        }
-                                        free(ld);
-                                    }
-                                }).detach();
-                            }
-                        }
-                    }
+                    activate_netease_menu_item(cur.netease_selected);
                 }
                 return true;
             }
@@ -1593,18 +1837,14 @@ int run_app(int argc, char **argv) {
         }
 
         case Action::OpenSearch: {
-            bool was_active = cur.search_active;
-            if (was_active) {
-                search_manager_clear();
-                StateStore::instance().set_search_active(false);
-                StateStore::instance().set_search_query("");
-                StateStore::instance().set_search_scope(0);
+            /* search disabled in lyric mode */
+            if (cur.lyric_mode) return true;
+            /* toggle the top search row (focused panel's box) — both modes */
+            if (cur.top_search_active) {
+                close_top_search();
             } else {
-                /* filter mode (scope=0) */
-                search_manager_clear();
-                StateStore::instance().set_search_scope(0);
-                StateStore::instance().set_search_active(true);
-                StateStore::instance().set_search_query("");
+                StateStore::instance().set_top_search_active(true,
+                                                              cur.active_panel);
             }
             return true;
         }

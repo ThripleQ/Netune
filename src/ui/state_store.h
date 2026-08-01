@@ -104,13 +104,24 @@ struct AppState {
     /* marquee width: computed from terminal size, updated per-frame */
     int  song_panel_width = 50;
 
-    /* search: scope=0 filter in-list, scope=1 global search */
+    /* top search row width: full terminal width, updated per-frame */
+    int  top_row_width = 80;
+
+    /* search: scope=0 filter in-list, scope=1 global search
+       (local mode only — netease mode uses the top search row below) */
     int  search_scope = 0;
     bool search_active = false;
     std::string search_query;
     std::vector<SongInfo> search_results;
     int search_selected = 0;
     int search_total = 0;
+
+    /* top search row (netease mode only, rendered in top_bar slot) */
+    bool        top_search_active = false;  /* editing a top search box */
+    int         top_search_side   = 0;      /* 0 = left box, 1 = right box */
+    std::string top_left_query;             /* left box: filters netease menu items */
+    std::string top_right_query;            /* right box: filters playlist / netease API */
+
     /* navigation stack for Esc-back */
     std::vector<NavState> nav_stack;
 };
@@ -142,6 +153,7 @@ public:
     void set_group_index(int idx);       /* switch group, updates right panel */
     void set_active_panel(int panel);    /* 0=left, 1=right */
     void set_song_panel_width(int cols);
+    void set_top_row_width(int cols);
     void set_playlist(const std::vector<SongInfo> &list, int index);
     void set_selected_index(int idx);
     void set_loop_mode(LoopMode mode);
@@ -172,9 +184,16 @@ public:
     void set_search_query(const std::string &query);
     void set_search_selected(int idx);
     void set_search_results(const std::vector<SongInfo> &results, int total);
+
+    /* top search row (netease mode) */
+    void set_top_search_active(bool active, int side);
+    void set_top_left_query(const std::string &query);
+    void set_top_right_query(const std::string &query);
+
     /* nav stack push/pop for Esc-back */
     void nav_push(void);
     bool nav_pop(void);  /* returns true if state restored */
+    bool nav_peek(NavState &out) const;  /* shallow copy of top; false if empty */
     void clear_nav_stack(void);
 
 private:
