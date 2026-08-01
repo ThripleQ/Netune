@@ -22,6 +22,7 @@ int          audio_output_delay_us(AudioOutput *ao, uint64_t *delay_us);
 int          audio_output_flush(AudioOutput *ao);
 int          audio_output_set_volume(int vol);  /* 0-100 */
 int          audio_output_get_volume(void);       /* -1 if unsupported */
+void         audio_output_set_initial_volume(int vol); /* seed before playback */
 
 #ifdef __cplusplus
 }

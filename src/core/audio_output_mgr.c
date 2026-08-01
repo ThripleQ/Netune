@@ -11,6 +11,11 @@ static int                 g_count = 0;
 static AudioOutputBackend *g_active = NULL;
 static AudioOutput       *g_active_ao = NULL;
 
+/* Last user-set volume (0-100). Survives audio_output_destroy/create
+   cycles so the setting is kept across track switches; -1 = not set yet
+   (will be initialized from config on first output creation). */
+static int g_last_volume = -1;
+
 int audio_output_register_backend(AudioOutputBackend *backend) {
     if (!backend || !backend->name) return -1;
     if (g_count >= MAX_BACKENDS) return -1;
@@ -101,7 +106,13 @@ AudioOutput* audio_output_create(int sample_rate, int channels) {
     }
     ao->sample_rate = sample_rate;
     ao->channels = channels;
-    ao->volume = gcfg ? config_get_int(gcfg, "audio.volume", 80) : 80;
+    if (g_last_volume < 0) {
+        /* first output: take the volume from config */
+        g_last_volume = gcfg ? config_get_int(gcfg, "audio.volume", 80) : 80;
+        if (g_last_volume < 0) g_last_volume = 0;
+        if (g_last_volume > 100) g_last_volume = 100;
+    }
+    ao->volume = g_last_volume;
     g_active_ao = ao;
     return ao;
 }
@@ -159,16 +170,28 @@ int audio_output_flush(AudioOutput *ao) {
 }
 
 /* Volume is stored in the AudioOutput struct and applied as
-   software gain in audio_output_write(). Does NOT touch system mixer. */
+   software gain in audio_output_write(). Does NOT touch system mixer.
+   The value is also remembered in g_last_volume so it survives output
+   re-creation (track switches) and can be set before playback starts. */
 int audio_output_set_volume(int vol) {
-    if (!g_active_ao) return -1;
     if (vol < 0) vol = 0;
     if (vol > 100) vol = 100;
-    g_active_ao->volume = vol;
+    g_last_volume = vol;
+    if (g_active_ao) g_active_ao->volume = vol;
     return 0;
 }
 
 int audio_output_get_volume(void) {
-    if (!g_active_ao) return -1;
-    return g_active_ao->volume;
+    if (g_active_ao) return g_active_ao->volume;
+    return g_last_volume;   /* -1 if never initialized/set */
+}
+
+/* Seed the remembered volume before any output exists (called at startup
+   from the config value). Later audio_output_set_volume() calls override it. */
+void audio_output_set_initial_volume(int vol) {
+    if (g_last_volume < 0) {
+        if (vol < 0) vol = 0;
+        if (vol > 100) vol = 100;
+        g_last_volume = vol;
+    }
 }

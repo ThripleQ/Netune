@@ -457,6 +457,12 @@ static void ev_volume_changed(const BusEvent *ev, void *data) {
         if (vol > 100) vol = 100;
         audio_output_set_volume(vol);
         StateStore::instance().set_volume(vol);
+        /* persist so the setting survives restarts */
+        Config *gcfg = config_global();
+        if (gcfg) {
+            config_set_int(gcfg, "audio.volume", vol);
+            config_save(gcfg);
+        }
     }
 }
 
@@ -820,7 +826,11 @@ int run_app(int argc, char **argv) {
 
     if (cfg) {
         int vol = config_get_int(cfg, "audio.volume", -1);
-        if (vol >= 0 && vol <= 100) StateStore::instance().set_volume(vol);
+        if (vol >= 0 && vol <= 100) {
+            StateStore::instance().set_volume(vol);
+            /* seed the audio manager so +/- work before first playback */
+            audio_output_set_initial_volume(vol);
+        }
         int loop = config_get_int(cfg, "playback.loop_mode", 0);
         if (loop >= 0 && loop <= 2) {
             StateStore::instance().set_loop_mode((LoopMode)loop);
