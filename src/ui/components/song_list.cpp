@@ -2,6 +2,7 @@
 #include "ui/components/theme_util.h"
 #include "ui/components/spinner.h"
 #include "ui/state_store.h"
+#include "ui/ui_util.h"
 #include "compat/wcwidth_compat.h"
 #include <ftxui/screen/string.hpp>
 #include <string>
@@ -176,7 +177,18 @@ Element render_song_list(const AppState &s) {
     } else {
         /* ── Normal playlist display ─────────────────── */
 
+        /* top-right search box filters the current list (both modes) */
+        const std::string filter_q = s.top_right_query;
+
         /* Spinner during async load (overlaid on top of list below) */
+
+        /* Empty-list hints (netease mode) */
+        if (!s.loading && s.playlist.empty() && s.music_mode == MusicMode::Netease) {
+            if (!filter_q.empty()) {
+                els.push_back(theme_fg(text("  按 [Enter] 搜索网易云: " + filter_q)) | dim);
+                els.push_back(theme_fg(text("  (缓存命中则自动返回)")) | dim);
+            }
+        }
 
                                 /* Watermark: show netease logo when empty */
         if (!s.loading && s.playlist.empty()) {
@@ -216,8 +228,16 @@ Element render_song_list(const AppState &s) {
             els.push_back(filler());
         }
 
-                for (size_t i = 0; i < s.playlist.size(); i++) {
+                int shown_rows = 0;
+        for (size_t i = 0; i < s.playlist.size(); i++) {
             const auto &song = s.playlist[i];
+            if (!filter_q.empty()) {
+                std::string haystack;
+                if (song.title) haystack += song.title;
+                if (song.artist) haystack += std::string(" ") + song.artist;
+                if (!str_icontains(haystack, filter_q)) continue;
+            }
+            shown_rows++;
             bool sel = ((int)i == s.selected_index);
 
             std::string prefix;
@@ -242,6 +262,8 @@ Element render_song_list(const AppState &s) {
                 els.push_back(theme_fg(text("  " + row)));
             }
         }
+        if (shown_rows == 0 && !filter_q.empty())
+            els.push_back(theme_fg(text("  无匹配")) | dim);
     }
 
     auto list = theme_bg(vbox(std::move(els)) | vscroll_indicator | frame | flex | border);

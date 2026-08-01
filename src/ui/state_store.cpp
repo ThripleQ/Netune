@@ -185,6 +185,19 @@ void StateStore::set_search_results(const std::vector<SongInfo> &results, int to
     }
 }
 
+void StateStore::set_top_search_active(bool active, int side) {
+    state_.top_search_active = active;
+    state_.top_search_side   = side;
+}
+
+void StateStore::set_top_left_query(const std::string &query) {
+    state_.top_left_query = query;
+}
+
+void StateStore::set_top_right_query(const std::string &query) {
+    state_.top_right_query = query;
+}
+
 void StateStore::set_selected_index(int idx) {
     state_.selected_index = idx;
     validate_selection();
@@ -250,6 +263,12 @@ void StateStore::nav_push(void) {
     state_.nav_stack.push_back(std::move(ns));
 }
 
+bool StateStore::nav_peek(NavState &out) const {
+    if (state_.nav_stack.empty()) return false;
+    out = state_.nav_stack.back();  /* shallow: caller must not free songs */
+    return true;
+}
+
 bool StateStore::nav_pop(void) {
     if (state_.nav_stack.empty()) return false;
 
@@ -288,6 +307,11 @@ void StateStore::set_active_panel(int panel) {
 void StateStore::set_song_panel_width(int cols) {
     if (cols < 20) cols = 20;
     state_.song_panel_width = cols;
+}
+
+void StateStore::set_top_row_width(int cols) {
+    if (cols < 30) cols = 30;
+    state_.top_row_width = cols;
 }
 
 void StateStore::set_spectrum(const float *bands) {
