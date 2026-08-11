@@ -1,5 +1,6 @@
 #include "state_store.h"
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 
 extern "C" {
@@ -78,6 +79,145 @@ void StateStore::set_muted(bool m) {
 
 void StateStore::set_loop_mode(LoopMode mode) {
     state_.loop_mode = mode;
+}
+
+/* ── Playback queue ──────────────────────────────────
+   The queue is an independent deep copy of the playlist,
+   taken when a song starts playing. All auto-advance
+   (finish/next/prev) reads it exclusively, so browsing,
+   searching, or playlist replacement never disturbs what
+   is currently playing. */
+
+void StateStore::queue_snapshot(void) {
+    /* free old queue */
+    for (auto &s : state_.playback_queue) song_info_free(&s);
+    state_.playback_queue.clear();
+
+    for (auto &s : state_.playlist) {
+        SongInfo copy = {};
+        song_info_copy(&copy, &s);
+        state_.playback_queue.push_back(copy);
+    }
+    state_.queue_index  = state_.selected_index;
+    state_.queue_active = !state_.playback_queue.empty();
+
+    /* the shuffle permutation is derived once per playlist change:
+       regenerate it whenever the queue is (re)built, regardless of
+       the current loop mode, so switching to Shuffle later reuses
+       this same ordering */
+    shuffle_now();
+}
+
+void StateStore::queue_clear(void) {
+    for (auto &s : state_.playback_queue) song_info_free(&s);
+    state_.playback_queue.clear();
+    state_.queue_index  = 0;
+    state_.queue_active = false;
+    state_.shuffle_order.clear();
+    state_.shuffle_pos  = 0;
+}
+
+/* ── Shuffle support ─────────────────────────────────
+   shuffle_order is a permutation of queue indices, derived
+   once per playlist change (see queue_snapshot) and reused
+   as-is when loop_mode == LoopMode::Shuffle. shuffle_pos
+   tracks the current song's slot in the order. */
+
+void StateStore::shuffle_now(void) {
+    int n = (int)state_.playback_queue.size();
+    state_.shuffle_order.clear();
+    if (n <= 0) return;
+
+    /* start with identity order, then Fisher-Yates */
+    state_.shuffle_order.reserve((size_t)n);
+    for (int i = 0; i < n; i++) state_.shuffle_order.push_back(i);
+    for (int i = n - 1; i > 0; i--) {
+        int j = rand() % (i + 1);
+        std::swap(state_.shuffle_order[i], state_.shuffle_order[j]);
+    }
+
+    /* pin the current song: find its slot, keep it at shuffle_pos */
+    state_.shuffle_pos = 0;
+    for (int i = 0; i < n; i++) {
+        if (state_.shuffle_order[i] == state_.queue_index) {
+            state_.shuffle_pos = i;
+            break;
+        }
+    }
+}
+
+/* linear next/prev helper (Track handled by callers) */
+static int queue_step_linear(const AppState &st, int dir) {
+    int total = (int)st.playback_queue.size();
+    if (total <= 0) return -1;
+    int idx = st.queue_index;
+    if (st.loop_mode == LoopMode::Playlist) {
+        if (dir > 0) return (idx + 1 >= total) ? 0 : idx + 1;
+        return (idx - 1 < 0) ? total - 1 : idx - 1;
+    }
+    /* LoopMode::None */
+    if (dir > 0) {
+        if (idx + 1 >= total) return -1;
+        return idx + 1;
+    }
+    if (idx - 1 < 0) return -1;
+    return idx - 1;
+}
+
+/* shuffle step: move dir (+1/-1) inside the permutation,
+   wrapping at both ends (the permutation cycles as a whole). */
+static bool queue_step_shuffle(AppState &st, int dir) {
+    if (st.loop_mode != LoopMode::Shuffle || !st.queue_active) return false;
+    int n = (int)st.playback_queue.size();
+    if (n <= 0 || (int)st.shuffle_order.size() != n) return false;
+
+    int pos = st.shuffle_pos + dir;
+    if (pos < 0) pos = n - 1;
+    else if (pos >= n) pos = 0;
+    st.shuffle_pos  = pos;
+    st.queue_index  = st.shuffle_order[pos];
+    return true;
+}
+
+/* ── Single implementation shared by advance/next/prev ──
+   Returns the new queue_index, or -1 when playback should stop.
+   Track loop replays the current song; shuffle walks the fixed
+   permutation; linear modes walk the queue (Playlist wraps). */
+int StateStore::queue_step(int dir) {
+    if (!state_.queue_active || state_.playback_queue.empty()) return -1;
+
+    if (state_.loop_mode == LoopMode::Track)
+        return state_.queue_index;
+
+    if (state_.loop_mode == LoopMode::Shuffle) {
+        if (!queue_step_shuffle(state_, dir)) return -1;
+        return state_.queue_index;
+    }
+
+    int idx = queue_step_linear(state_, dir);
+    if (idx < 0) return -1;
+    state_.queue_index = idx;
+    return idx;
+}
+
+int StateStore::queue_advance(void) {
+    return queue_step(+1);
+}
+
+int StateStore::queue_next(void) {
+    return queue_step(+1);
+}
+
+int StateStore::queue_prev(void) {
+    return queue_step(-1);
+}
+
+const SongInfo* StateStore::queue_current(void) const {
+    if (!state_.queue_active) return nullptr;
+    if (state_.queue_index < 0 ||
+        state_.queue_index >= (int)state_.playback_queue.size())
+        return nullptr;
+    return &state_.playback_queue[state_.queue_index];
 }
 
 void StateStore::set_playlist(const std::vector<SongInfo> &list, int index) {
@@ -275,20 +415,18 @@ bool StateStore::nav_pop(void) {
     NavState ns = std::move(state_.nav_stack.back());
     state_.nav_stack.pop_back();
 
-    /* free current state */
-    for (auto &s : state_.playlist) song_info_free(&s);
-    state_.playlist.clear();
-
-    /* restore from saved state */
-    state_.playlist         = std::move(ns.playlist);
-    state_.selected_index   = ns.selected_index;
-    state_.active_panel     = ns.active_panel;
+    /* Restore navigation state only (left panel menu + focus). The right
+       panel list is intentionally NOT restored: its content is replaced
+       only by newly loaded content (playlist/menu loads), never by a
+       back-navigation. This keeps the visible list stable on Esc. */
+    state_.active_panel     = 0;                 /* back to the menu layer */
     state_.netease_menu     = std::move(ns.netease_menu);
     state_.netease_selected = ns.netease_selected;
     /* Esc always exits search mode, never restores it */
     state_.search_active    = false;
     state_.search_query     = "";
     state_.search_scope     = 0;
+    validate_selection();
     return true;
 }
 
