@@ -50,6 +50,7 @@ extern "C" {
 
 #include "ui/state_store.h"
 #include "ui/keybindings.h"
+#include "ui/mpris.h"
 #include "ui/ui_util.h"
 #include "ui/components/top_bar.h"
 #include "ui/components/status_bar.h"
@@ -1119,6 +1120,10 @@ int run_app(int argc, char **argv) {
 
     playback_coordinator_init();
 
+#ifndef _WIN32
+    mpris_init();
+#endif
+
     event_bus_publish(EV_APP_STARTUP, NULL, 0);
     event_bus_poll();
 
@@ -1170,6 +1175,9 @@ int run_app(int argc, char **argv) {
 
     auto component = Renderer([&]() -> Element {
         event_bus_poll();
+#ifndef _WIN32
+        mpris_sync(&state.state());
+#endif
         consume_seek();
         const AppState &s = state.state();
 
@@ -1879,6 +1887,9 @@ int run_app(int argc, char **argv) {
     timer_active.store(false);
     refresh_timer.join();
     event_bus_publish(EV_APP_SHUTDOWN, NULL, 0);
+#ifndef _WIN32
+    mpris_shutdown();
+#endif
     playback_coordinator_shutdown();
     music_source_manager_shutdown();
     netease_search_cache_free();
