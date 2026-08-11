@@ -570,6 +570,79 @@ static void ev_playback_finish(const BusEvent *ev, void *data) {
     play_queue_index(next);
 }
 
+/* ── Play/Pause toggle (shared by space key and MPRIS PlayPause) ── */
+static void toggle_playback(void) {
+    const AppState &cur = StateStore::instance().state();
+    if (cur.playback_state == PlaybackState::Playing)
+        event_bus_publish(EV_PLAYBACK_PAUSE, NULL, 0);
+    else if (cur.playback_state == PlaybackState::Paused)
+        event_bus_publish(EV_PLAYBACK_RESUME, NULL, 0);
+    else if (cur.playback_state == PlaybackState::Stopped)
+        play_from_playlist(cur.selected_index);
+}
+
+/* ── Seek to an absolute position in seconds (shared by arrows/MPRIS) ──
+   Note: unlike consume_seek (keyboard hold-debounce), this executes the
+   seek unconditionally — single-shot MPRIS calls must not be skipped. */
+static void do_seek_to(int target) {
+    auto &store = StateStore::instance();
+    const AppState &cur = store.state();
+    if (cur.playback_state == PlaybackState::Stopped || cur.total_time_sec <= 0)
+        return;
+    if (target > cur.total_time_sec) target = cur.total_time_sec;
+    if (target < 0) target = 0;
+    event_bus_publish(EV_BUFFERING_UPDATE, &target, sizeof(target));
+    g_seek_target = target;
+    store.set_seek_target_progress((float)target / cur.total_time_sec);
+    /* Immediately sync progress so the gauge doesn't fall back
+       to the old s.progress value when seek_target_progress is
+       0.0f (target=0 → 0/total → 0.0f, and > 0.0f is false). */
+    store.set_progress((double)target / cur.total_time_sec, target,
+                       cur.total_time_sec);
+}
+
+/* ── MPRIS external control (PlayPause/Stop/Next/Prev/Seek) ──
+   Commands arrive from the D-Bus thread via EV_MPRIS_COMMAND;
+   handled here on the main thread so StateStore access is safe.
+   payload: int[2] = { MprisCommand, arg } */
+static void ev_mpris_command(const BusEvent *ev, void *data) {
+    (void)data;
+    if (ev->data_size != 2 * sizeof(int)) return;
+    const int *cmd = (const int*)ev->data;
+    auto &store = StateStore::instance();
+
+    switch (cmd[0]) {
+    case MPRIS_CMD_PLAYPAUSE:
+        toggle_playback();
+        break;
+
+    case MPRIS_CMD_STOP:
+        store.queue_clear();
+        event_bus_publish(EV_PLAYBACK_STOP, NULL, 0);
+        break;
+
+    case MPRIS_CMD_NEXT: {
+        int next = store.queue_next();
+        if (next >= 0) play_queue_index(next);
+        break;
+    }
+
+    case MPRIS_CMD_PREV: {
+        int prev = store.queue_prev();
+        if (prev >= 0) play_queue_index(prev);
+        break;
+    }
+
+    case MPRIS_CMD_SEEK:
+        do_seek_to(cmd[1]);
+        break;
+
+    default:
+        LOG_WARN("Unknown MPRIS command %d", cmd[0]);
+        break;
+    }
+}
+
 /* ── Volume / Mute / Playlist event handlers ──────── */
 
 /* ── Async playlist loading helper ───────────────────── */
@@ -1001,6 +1074,7 @@ int run_app(int argc, char **argv) {
     event_bus_subscribe(EV_PLAYBACK_RESUME,   ev_playback_resume, NULL);
     event_bus_subscribe(EV_PLAYBACK_STOP,     ev_playback_stop, NULL);
     event_bus_subscribe(EV_PLAYBACK_FINISH,   ev_playback_finish, NULL);
+    event_bus_subscribe(EV_MPRIS_COMMAND,     ev_mpris_command, NULL);
         event_bus_subscribe(EV_PLAYLIST_LOADED, ev_playlist_loaded, NULL);
     event_bus_subscribe(EV_MENU_LOADED, ev_menu_loaded, NULL);
     event_bus_subscribe(EV_PLAYLIST_LIST_LOADED, ev_playlist_list_loaded, NULL);
@@ -1717,12 +1791,7 @@ int run_app(int argc, char **argv) {
             return true;
 
         case Action::PlayPause:
-            if (cur.playback_state == PlaybackState::Playing)
-                event_bus_publish(EV_PLAYBACK_PAUSE, NULL, 0);
-            else if (cur.playback_state == PlaybackState::Paused)
-                event_bus_publish(EV_PLAYBACK_RESUME, NULL, 0);
-            else if (cur.playback_state == PlaybackState::Stopped)
-                play_from_playlist(cur.selected_index);
+            toggle_playback();
             return true;
 
         case Action::PlaySelected:

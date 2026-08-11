@@ -31,7 +31,7 @@ static int64_t g_length_us = 0;
 static int64_t g_position_us = 0;
 static int      g_volume_pct = 80;                 /* 0..100 */
 static bool     g_muted = false;
-static int      g_loop_mode = 0;                   /* 0=None 1=Track 2=Playlist */
+static int      g_loop_mode = 0;                   /* 0=None 1=Track 2=Playlist 3=Shuffle */
 
 /* ── D-Bus helpers ─────────────────────────────────── */
 
@@ -165,7 +165,9 @@ static void handle_get_all(DBusMessage *msg) {
 
     dbus_bool_t btrue = TRUE;
     double rate = 1.0;
-    dbus_bool_t shuffle = FALSE;
+    pthread_mutex_lock(&g_mutex);
+    dbus_bool_t shuffle = (g_loop_mode == 3) ? TRUE : FALSE;
+    pthread_mutex_unlock(&g_mutex);
     append_variant_bool(&dict, "Shuffle", shuffle);
     append_variant_double(&dict, "Rate", rate);
     fill_metadata(&dict);
@@ -236,6 +238,12 @@ static void handle_get(DBusMessage *msg) {
         const char *v = loop.c_str();
         dbus_message_iter_append_basic(&variant, DBUS_TYPE_STRING, &v);
         found = true;
+    } else if (strcmp(prop, "Shuffle") == 0) {
+        dbus_bool_t v = (g_loop_mode == 3) ? TRUE : FALSE;
+        dbus_message_iter_open_container(&out, DBUS_TYPE_VARIANT,
+                                         DBUS_TYPE_BOOLEAN_AS_STRING, &variant);
+        dbus_message_iter_append_basic(&variant, DBUS_TYPE_BOOLEAN, &v);
+        found = true;
     } else if (strcmp(prop, "Identity") == 0) {
         const char *v = "Netune";
         dbus_message_iter_open_container(&out, DBUS_TYPE_VARIANT,
@@ -291,6 +299,8 @@ static void mpris_reply_empty(DBusMessage *msg) {
     }
 }
 
+/* Play/Pause are sent as dedicated playback events (no command payload);
+   PlayPause/Stop/Next/Prev go through EV_MPRIS_COMMAND. */
 static void handle_pause(DBusMessage *msg) {
     event_bus_publish(EV_PLAYBACK_PAUSE, NULL, 0);
     mpris_reply_empty(msg);
@@ -298,6 +308,68 @@ static void handle_pause(DBusMessage *msg) {
 
 static void handle_play(DBusMessage *msg) {
     event_bus_publish(EV_PLAYBACK_RESUME, NULL, 0);
+    mpris_reply_empty(msg);
+}
+
+/* publish an int-payload MPRIS command to the app (main thread) */
+static void mpris_publish_cmd(int cmd, int payload) {
+    int data[2] = { cmd, payload };
+    event_bus_publish(EV_MPRIS_COMMAND, data, sizeof(data));
+}
+
+/* send a command with no payload and reply */
+static void mpris_cmd_and_reply(int cmd, DBusMessage *msg) {
+    mpris_publish_cmd(cmd, 0);
+    mpris_reply_empty(msg);
+}
+
+static void handle_play_pause(DBusMessage *msg) {
+    mpris_cmd_and_reply(MPRIS_CMD_PLAYPAUSE, msg);
+}
+
+static void handle_stop(DBusMessage *msg) {
+    mpris_cmd_and_reply(MPRIS_CMD_STOP, msg);
+}
+
+static void handle_next(DBusMessage *msg) {
+    mpris_cmd_and_reply(MPRIS_CMD_NEXT, msg);
+}
+
+static void handle_previous(DBusMessage *msg) {
+    mpris_cmd_and_reply(MPRIS_CMD_PREV, msg);
+}
+
+/* Seek(Offset x): relative offset in microseconds → absolute target sec */
+static void handle_seek(DBusMessage *msg) {
+    dbus_int64_t offset_us = 0;
+    DBusMessageIter in;
+    if (dbus_message_iter_init(msg, &in) &&
+        dbus_message_iter_get_arg_type(&in) == DBUS_TYPE_INT64) {
+        dbus_message_iter_get_basic(&in, &offset_us);
+    }
+    pthread_mutex_lock(&g_mutex);
+    int target_sec = (int)((g_position_us + offset_us) / 1000000);
+    pthread_mutex_unlock(&g_mutex);
+    if (target_sec < 0) target_sec = 0;
+    mpris_publish_cmd(MPRIS_CMD_SEEK, target_sec);
+    mpris_reply_empty(msg);
+}
+
+/* SetPosition(TrackId o, Position x): absolute position in µs */
+static void handle_set_position(DBusMessage *msg) {
+    DBusMessageIter in;
+    dbus_int64_t pos_us = 0;
+    if (dbus_message_iter_init(msg, &in)) {
+        if (dbus_message_iter_get_arg_type(&in) == DBUS_TYPE_OBJECT_PATH) {
+            /* skip TrackId — only one track at a time */
+            dbus_message_iter_next(&in);
+        }
+        if (dbus_message_iter_get_arg_type(&in) == DBUS_TYPE_INT64)
+            dbus_message_iter_get_basic(&in, &pos_us);
+    }
+    int target_sec = (int)(pos_us / 1000000);
+    if (target_sec < 0) target_sec = 0;
+    mpris_publish_cmd(MPRIS_CMD_SEEK, target_sec);
     mpris_reply_empty(msg);
 }
 
@@ -501,6 +573,63 @@ static void emit_metadata_changed(void) {
     dbus_message_unref(sig);
 }
 
+/* ── Properties.Set ────────────────────────────────── */
+/* Handles writable properties: LoopStatus, Shuffle, Volume. */
+static void handle_properties_set(DBusMessage *msg) {
+    DBusMessageIter in;
+    if (!dbus_message_iter_init(msg, &in)) return;
+
+    /* interface name — empty string is the MPRIS convention for
+       "the property name is unique", accept it as-is */
+    if (dbus_message_iter_get_arg_type(&in) != DBUS_TYPE_STRING) return;
+    const char *iface_name = NULL;
+    dbus_message_iter_get_basic(&in, &iface_name);
+    if (iface_name && iface_name[0] &&
+        strcmp(iface_name, MPRIS_PLAYER) != 0) {
+        mpris_reply_empty(msg);  /* ignore other interfaces */
+        return;
+    }
+    if (!dbus_message_iter_next(&in)) return;
+
+    /* property name */
+    if (dbus_message_iter_get_arg_type(&in) != DBUS_TYPE_STRING) return;
+    const char *prop = NULL;
+    dbus_message_iter_get_basic(&in, &prop);
+    if (!prop) return;
+    if (!dbus_message_iter_next(&in)) return;
+
+    /* variant value */
+    if (dbus_message_iter_get_arg_type(&in) != DBUS_TYPE_VARIANT) return;
+    DBusMessageIter v;
+    dbus_message_iter_recurse(&in, &v);
+
+    if (strcmp(prop, "LoopStatus") == 0 &&
+        dbus_message_iter_get_arg_type(&v) == DBUS_TYPE_STRING) {
+        const char *s = NULL;
+        dbus_message_iter_get_basic(&v, &s);
+        int mode = (s && strcmp(s, "Track") == 0) ? 1 :
+                   (s && strcmp(s, "Playlist") == 0) ? 2 : 0;
+        event_bus_publish(EV_PLAYLIST_CHANGED, &mode, sizeof(mode));
+    } else if (strcmp(prop, "Shuffle") == 0 &&
+               dbus_message_iter_get_arg_type(&v) == DBUS_TYPE_BOOLEAN) {
+        dbus_bool_t on = FALSE;
+        dbus_message_iter_get_basic(&v, &on);
+        /* 3 = Shuffle, 0 = None (shuffle off keeps current queue order) */
+        int mode = on ? 3 : 0;
+        event_bus_publish(EV_PLAYLIST_CHANGED, &mode, sizeof(mode));
+    } else if (strcmp(prop, "Volume") == 0 &&
+               dbus_message_iter_get_arg_type(&v) == DBUS_TYPE_DOUBLE) {
+        double d = 1.0;
+        dbus_message_iter_get_basic(&v, &d);
+        if (d < 0.0) d = 0.0;
+        if (d > 1.0) d = 1.0;
+        int vol = (int)(d * 100.0 + 0.5);
+        event_bus_publish(EV_VOLUME_CHANGED, &vol, sizeof(vol));
+    }
+
+    mpris_reply_empty(msg);
+}
+
 /* ── Main message handler ──────────────────────────── */
 static DBusHandlerResult mpris_message_handler(DBusConnection *conn,
                                                DBusMessage *msg,
@@ -529,6 +658,10 @@ static DBusHandlerResult mpris_message_handler(DBusConnection *conn,
             handle_get(msg);
             return DBUS_HANDLER_RESULT_HANDLED;
         }
+        if (strcmp(member, "Set") == 0) {
+            handle_properties_set(msg);
+            return DBUS_HANDLER_RESULT_HANDLED;
+        }
         return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
     }
 
@@ -541,6 +674,30 @@ static DBusHandlerResult mpris_message_handler(DBusConnection *conn,
     }
     if (strcmp(member, "Play") == 0) {
         handle_play(msg);
+        return DBUS_HANDLER_RESULT_HANDLED;
+    }
+    if (strcmp(member, "PlayPause") == 0) {
+        handle_play_pause(msg);
+        return DBUS_HANDLER_RESULT_HANDLED;
+    }
+    if (strcmp(member, "Stop") == 0) {
+        handle_stop(msg);
+        return DBUS_HANDLER_RESULT_HANDLED;
+    }
+    if (strcmp(member, "Next") == 0) {
+        handle_next(msg);
+        return DBUS_HANDLER_RESULT_HANDLED;
+    }
+    if (strcmp(member, "Previous") == 0) {
+        handle_previous(msg);
+        return DBUS_HANDLER_RESULT_HANDLED;
+    }
+    if (strcmp(member, "Seek") == 0) {
+        handle_seek(msg);
+        return DBUS_HANDLER_RESULT_HANDLED;
+    }
+    if (strcmp(member, "SetPosition") == 0) {
+        handle_set_position(msg);
         return DBUS_HANDLER_RESULT_HANDLED;
     }
 
@@ -640,13 +797,15 @@ void mpris_sync(const void *state_ptr) {
     int64_t pos_us    = (int64_t)st.current_time_sec * 1000000;
 
     /* Detect changes while holding the lock */
-    bool status_changed = false, track_changed = false, volume_changed = false;
+    bool status_changed = false, track_changed = false, volume_changed = false,
+         loop_changed = false;
     pthread_mutex_lock(&g_mutex);
     status_changed  = (g_playback_status != status);
     track_changed   = (g_track_id != track_id || g_title != title ||
                        g_artist != artist || g_album != album ||
                        g_art_url != art_url || g_length_us != length_us);
     volume_changed  = (g_volume_pct != st.volume || g_muted != st.muted);
+    loop_changed    = (g_loop_mode != (int)st.loop_mode);
     g_playback_status = status;
     g_track_id   = track_id;
     g_title      = title;
@@ -669,6 +828,15 @@ void mpris_sync(const void *state_ptr) {
         double volume = g_muted ? 0.0 : (double)g_volume_pct / 100.0;
         pthread_mutex_unlock(&g_mutex);
         emit_properties_changed(MPRIS_PLAYER, "Volume", DBUS_TYPE_DOUBLE, &volume);
+    }
+    if (loop_changed) {
+        pthread_mutex_lock(&g_mutex);
+        const char *loop = (g_loop_mode == 1) ? "Track" :
+                           (g_loop_mode == 2) ? "Playlist" : "None";
+        dbus_bool_t shuffle = (g_loop_mode == 3) ? TRUE : FALSE;
+        pthread_mutex_unlock(&g_mutex);
+        emit_properties_changed_string(MPRIS_PLAYER, "LoopStatus", loop);
+        emit_properties_changed(MPRIS_PLAYER, "Shuffle", DBUS_TYPE_BOOLEAN, &shuffle);
     }
 }
 

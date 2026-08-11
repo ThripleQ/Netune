@@ -53,6 +53,9 @@ typedef enum {
     EV_APP_STARTUP,
     EV_APP_SHUTDOWN,
 
+    /* MPRIS external control commands (payload: int MprisCommand) */
+    EV_MPRIS_COMMAND,
+
     EV_COUNT  /* sentinel */
 } EventType;
 

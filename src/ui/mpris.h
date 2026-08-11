@@ -18,6 +18,17 @@ extern "C" {
 #endif
 
 #ifndef _WIN32
+
+/* ── External control commands ────────────────────────
+   Delivered to the app via EV_MPRIS_COMMAND (int payload). */
+enum MprisCommand {
+    MPRIS_CMD_PLAYPAUSE = 1,
+    MPRIS_CMD_STOP,
+    MPRIS_CMD_NEXT,
+    MPRIS_CMD_PREV,
+    MPRIS_CMD_SEEK,     /* payload = target position in seconds */
+};
+
 int  mpris_init(void);
 void mpris_shutdown(void);
 
