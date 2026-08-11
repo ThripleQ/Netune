@@ -36,7 +36,7 @@ struct NavState {
 };
 
 /* ── Loop mode ─────────────────────────────────────── */
-enum class LoopMode { None = 0, Track = 1, Playlist = 2 };
+enum class LoopMode { None = 0, Track = 1, Playlist = 2, Shuffle = 3 };
 
 /* ── Song group (folder/playlist) ──────────────────── */
 struct SongGroup {
@@ -63,6 +63,19 @@ struct AppState {
     /* right panel: current view of songs + selection */
     std::vector<SongInfo> playlist;    /* currently shown songs */
     int  selected_index = 0;
+
+    /* playback queue: snapshot taken when a song starts playing.
+       Auto-advance (finish/next/prev) reads ONLY this, never `playlist`,
+       so browsing/searching elsewhere doesn't disturb playback. */
+    std::vector<SongInfo> playback_queue;
+    int  queue_index = 0;             /* position in playback_queue */
+    bool queue_active = false;        /* true while a queue is playing */
+
+    /* shuffle: fixed permutation over playback_queue.
+       Used only when loop_mode == LoopMode::Shuffle.
+       shuffle_pos is the current song's slot in the order. */
+    std::vector<int> shuffle_order;
+    int              shuffle_pos = 0;
 
     /* left panel: groups (folders) */
     std::vector<SongGroup> groups;
@@ -162,6 +175,21 @@ public:
     void set_netease_selected(int idx);
     void set_login_state(int state, const std::string &status, const std::string &qr);
 
+    /* playback queue */
+    /* snapshot current playlist into the playback queue (call when a song
+       starts playing); deep-copies so later playlist changes don't affect it */
+    void queue_snapshot(void);
+    void queue_clear(void);              /* stop queue, free snapshot */
+    /* next/prev inside the queue honoring loop_mode and shuffle.
+       Returns the new queue_index, or -1 when playback should stop. */
+    int  queue_advance(void);            /* auto-advance after finish */
+    int  queue_next(void);               /* manual Next key */
+    int  queue_prev(void);               /* manual Prev key */
+    /* current queue song, or nullptr if queue inactive/empty */
+    const SongInfo* queue_current(void) const;
+    /* shuffle permutation helpers (used when loop_mode == Shuffle) */
+    void shuffle_now(void);              /* re-shuffle, keep current song fixed */
+
     /* spectrum */
     void set_spectrum(const float *bands);
 
@@ -199,4 +227,7 @@ public:
 private:
     StateStore() = default;
     AppState state_;
+
+    /* shared core of queue_advance/next/prev (+1 next / -1 prev) */
+    int queue_step(int dir);
 };

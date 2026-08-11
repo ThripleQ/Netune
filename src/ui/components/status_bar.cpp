@@ -40,6 +40,7 @@ Element render_status_bar(const AppState &s) {
     case LoopMode::None:     loop_str = "Off";  break;
     case LoopMode::Track:    loop_str = "One";  break;
     case LoopMode::Playlist: loop_str = "All";  break;
+    case LoopMode::Shuffle:  loop_str = "Shuf"; break;
     }
 
     /* ── Song title row ─────────────────────────────╴ */

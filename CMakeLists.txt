@@ -60,6 +60,7 @@ endif()
 # On Windows, vcpkg's pkgconf provides this.
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(YAML   REQUIRED IMPORTED_TARGET yaml-0.1)
+pkg_check_modules(DBUS   QUIET IMPORTED_TARGET dbus-1)
 pkg_check_modules(ALSA   QUIET IMPORTED_TARGET alsa)
 pkg_check_modules(PULSE  QUIET IMPORTED_TARGET libpulse-simple)
 pkg_check_modules(SDL2   QUIET IMPORTED_TARGET sdl2)
@@ -255,6 +256,13 @@ set(UI_SOURCES
   src/ui/components/lyric_panel.cpp
 )
 
+if(DBUS_FOUND AND NOT WIN32)
+  list(APPEND UI_SOURCES src/ui/mpris.cpp)
+  message(STATUS "D-Bus found: building MPRIS support")
+else()
+  message(STATUS "D-Bus not found: skipping MPRIS")
+endif()
+
 set(ALL_SOURCES
   src/app.cpp
   src/main.cpp
@@ -311,6 +319,9 @@ if(PULSE_FOUND)
 endif()
 if(SDL2_FOUND)
   target_link_libraries(netune PRIVATE PkgConfig::SDL2)
+endif()
+if(DBUS_FOUND AND NOT WIN32)
+  target_link_libraries(netune PRIVATE PkgConfig::DBUS)
 endif()
 
 if(NOT WIN32)
