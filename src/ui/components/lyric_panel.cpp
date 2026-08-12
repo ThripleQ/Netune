@@ -285,17 +285,16 @@ Element render_spectrum_bar(const AppState &s) {
 
     bool dimmed = (s.playback_state != PlaybackState::Playing);
 
-    /* ── No post-processing except a linear sensitivity gain ── */
-    /* Plain multiplier: a -24 dBFS bin (6%) reaches ~25% height, full
-       scale clips at 100%. No curves, no smoothing. */
-    const float SENS_GAIN = 4.0f;
+    /* ── Sensitivity: sqrt curve (no other post-processing) ── */
+    /* sqrt amplifies quiet bins (a bin at 6% → 25% height) while full
+       scale stays at 100% — responsive to quiet sounds without hard
+       clipping of loud ones. */
     float processed[SPECTRUM_BANDS];
     for (int i = 0; i < bands; i++) {
         float v = s.spectrum[i];
         if (v < 0.0f) v = 0.0f;
-        v *= SENS_GAIN;
         if (v > 1.0f) v = 1.0f;
-        processed[i] = v;
+        processed[i] = sqrtf(v);
     }
 
     /* ── Sample bands → columns (average when several bands per
