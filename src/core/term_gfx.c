@@ -140,12 +140,15 @@ void term_gfx_upload(const CoverData *cd) {
 }
 
 void term_gfx_place(int cols, int rows) {
-    if (!term_gfx_active() || g_img_id == 0 || cols <= 0 || rows <= 0)
+    (void)rows;
+    if (!term_gfx_active() || g_img_id == 0 || cols <= 0)
         return;
     char seq[128];
-    /* a=p place, i=id, q=2 no response, c/r cell-aligned size */
+    /* a=p place, i=id, q=2 no response. Specifying ONLY c (columns) makes
+       kitty scale the image to the column width keeping its own aspect
+       ratio — giving both c and r would stretch it to the cell grid. */
     snprintf(seq, sizeof(seq),
-             "\x1b_Ga=p,i=%lu,q=2,c=%d,r=%d\x1b\\", g_img_id, cols, rows);
+             "\x1b_Ga=p,i=%lu,q=2,c=%d\x1b\\", g_img_id, cols);
     esc_write(seq);
 }
 

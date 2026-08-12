@@ -2097,10 +2097,13 @@ int run_app(int argc, char **argv) {
                          int row0 = 2 + (avail - dh) / 2;
                          /* Character-mode dh counts rows that show 2 source
                             pixel rows each (half-block ▀). The kitty image
-                            is scaled 1:1 pixel-wise, so halve the rows to
-                            keep the image aspect ratio (cells are ~2:1). */
+                            is scaled keeping its aspect ratio (only the
+                            column count is given to place), so it ends up
+                            ~dh/2 rows tall — nudge the placement down so
+                            it stays centered in the placeholder area. */
                          int gfx_rows = (dh + 1) / 2;
                          if (gfx_rows < 1) gfx_rows = 1;
+                         row0 += (dh - gfx_rows) / 2;
                          /* Each kitty placement re-rasterizes the image to
                             the cell grid — only re-place when the cover or
                             its geometry changed. FTXUI outputs diffs, so the
