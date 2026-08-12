@@ -254,14 +254,31 @@ Element render_spectrum_bar(const AppState &s) {
     int bands = SPECTRUM_BANDS;
     int cols = total_w;
 
-    /* ── Smoothing state ─────────────────────────────── */
-    static float s_height[SPECTRUM_BANDS] = {0};
-    /* Fast attack / fast release gives the "punchy" bounce */
-    static const float ALPHA_UP[4]   = {0.80f, 0.80f, 0.75f, 0.70f};
-    static const float ALPHA_DOWN[4] = {0.60f, 0.60f, 0.60f, 0.60f};
-    /* Logarithmic bands have far less energy at the top end; boost the
-       high zones so the right side of the bar is actually visible. */
-    static const float ZONE_GAIN_DB[4] = {0.0f, 5.0f, 9.0f, 13.0f};
+    /* ── Smoothing state (cava-style) ─────────────────── */
+    /* Parabolic falloff: each bar holds its last peak and falls along
+       peak * (1 - fall^2 * G), fall advancing FALL_RATE per frame —
+       a fast initial drop that eases out, which reads as rhythmic. */
+    static float s_peak[SPECTRUM_BANDS] = {0};
+    static float s_fall[SPECTRUM_BANDS] = {0};
+    static const float FALL_RATE = 0.045f;
+    static const float GRAVITY   = 2.0f;
+
+    /* Continuous frequency EQ (cava's eq ~ pow(freq, 0.85)): high bands
+       get progressively more gain so the right side of the bar is
+       visible; 0.25+0.75*curve keeps the bass dominant. */
+    static float s_eq[SPECTRUM_BANDS];
+    static bool s_eq_init = false;
+    if (!s_eq_init) {
+        s_eq_init = true;
+        for (int k = 0; k < SPECTRUM_BANDS; k++)
+            s_eq[k] = 0.25f + 0.75f *
+                powf((float)(k + 1) / (float)SPECTRUM_BANDS, 0.85f);
+    }
+
+    /* Auto-gain (cava autosens): pull the gain down when the bars
+       overshoot the top, ease it back up when there is headroom, so
+       quiet music still lights up the bar. */
+    static float s_sens = 1.0f;
 
     /* ── Gradient LUT ─────────────────────────────────── */
     static struct { uint8_t r, g, b; } s_bot[SPECTRUM_BANDS], s_top[SPECTRUM_BANDS];
@@ -293,10 +310,10 @@ Element render_spectrum_bar(const AppState &s) {
     }
 
     bool dimmed = (s.playback_state != PlaybackState::Playing);
-    const float MAX_HEIGHT = (float)MAX_LEVELS;
 
-    /* ── Per-band: dB → zone gain → nonlinear → smoothing ── */
+    /* ── Per-band: dB → EQ → parabolic falloff ────────── */
     float processed[SPECTRUM_BANDS];
+    bool overshoot = false;
     for (int i = 0; i < bands; i++) {
         float v = s.spectrum[i];
         if (v < 0.0f) v = 0.0f;
@@ -306,29 +323,38 @@ Element render_spectrum_bar(const AppState &s) {
         if (d < -60.0f) d = -60.0f;
         if (d > 0.0f) d = 0.0f;
 
-        /* Frequency compensation: boost higher zones (see table above) */
-        int zone = (i < 24) ? 0 : (i < 64) ? 1 : (i < 104) ? 2 : 3;
-        d += ZONE_GAIN_DB[zone];
-        if (d > 0.0f) d = 0.0f;
+        /* dB → height ratio in [0,1] with frequency EQ + auto gain */
+        float ratio = (d + 60.0f) / 60.0f * s_eq[i] * s_sens;
+        if (ratio < 0.0f) ratio = 0.0f;
+        if (ratio > 1.0f) {
+            overshoot = true;
+            ratio = 1.0f;
+        }
 
-        /* dB → height in [0, MAX_HEIGHT] */
-        float target = (d + 60.0f) / 60.0f * MAX_HEIGHT;
-        if (target < 0.0f) target = 0.0f;
-        if (target > MAX_HEIGHT) target = MAX_HEIGHT;
+        /* Parabolic falloff (cava): snap up instantly, then fall along a
+           quadratic curve from the last peak */
+        float height;
+        if (ratio < s_peak[i]) {
+            s_fall[i] += FALL_RATE;
+            float drop = s_fall[i] * s_fall[i] * GRAVITY;
+            if (drop > 1.0f) drop = 1.0f;
+            height = s_peak[i] * (1.0f - drop);
+        } else {
+            s_peak[i] = ratio;
+            s_fall[i] = 0.0f;
+            height = ratio;
+        }
+        if (height < 0.0f) height = 0.0f;
 
-        /* Slight gamma lift makes quiet parts more visible */
-        float ratio = target / MAX_HEIGHT;
-        ratio = powf(ratio, 0.9f);
-        target = ratio * MAX_HEIGHT;
+        processed[i] = height;
+    }
 
-        /* Zone-specific attack/release smoothing */
-        float a = (target > s_height[i]) ? ALPHA_UP[zone] : ALPHA_DOWN[zone];
-        s_height[i] += a * (target - s_height[i]);
-
-        /* Clamp and store as 0~1 ratio for visual mapping */
-        if (s_height[i] < 0.0f) s_height[i] = 0.0f;
-        processed[i] = s_height[i] / MAX_HEIGHT;
-        if (processed[i] > 1.0f) processed[i] = 1.0f;
+    /* ── Auto-gain adjustment ─────────────────────────── */
+    if (overshoot) {
+        s_sens *= 0.98f;   /* fast pull-back */
+    } else {
+        s_sens += 0.0002f; /* slow recovery */
+        if (s_sens > 1.0f) s_sens = 1.0f;
     }
 
     /* ── Sample bands → columns (average when several bands per
