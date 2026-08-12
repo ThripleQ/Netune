@@ -77,8 +77,9 @@ static void fft(float *re, float *im, int n) {
 }
 
 /* ── Public API ───────────────────────────────────────
-   Raw per-bin magnitudes: band b = FFT bin b (21.5 Hz @ 44.1 kHz),
-   first SPECTRUM_BANDS bins. No band merging, no smoothing. */
+   128 linear bands covering 0 ~ mid-range (~8 kHz): each band is a
+   plain average of a few consecutive FFT bins — no log spacing, no
+   dB, no smoothing. */
 void spectrum_process(const int16_t *samples, float *bands, int band_count) {
     if (!samples || !bands || band_count > SPECTRUM_BANDS) return;
 
@@ -98,10 +99,25 @@ void spectrum_process(const int16_t *samples, float *bands, int band_count) {
     /* Normalization: full-scale sine → ~1.0 */
     float norm = 4.0f / (32767.0f * n);
 
-    for (int i = 0; i < band_count; i++) {
-        float v = sqrtf(re[i] * re[i] + im[i] * im[i]) * norm;
+    /* Mid-range coverage: bands span bins 0 .. mid_bin (8 kHz) */
+    const int mid_bin = (int)(8000.0 * SPECTRUM_FFT_SIZE / 44100.0);
+    int per = (mid_bin + band_count - 1) / band_count;   /* bins per band */
+    if (per < 1) per = 1;
+
+    for (int b = 0; b < band_count; b++) {
+        int start = b * per;
+        int end = start + per;
+        if (end > mid_bin + 1) end = mid_bin + 1;
+        double sum = 0.0;
+        int cnt = 0;
+        for (int i = start; i < end; i++) {
+            sum += sqrtf(re[i] * re[i] + im[i] * im[i]);
+            cnt++;
+        }
+        if (cnt == 0) { bands[b] = 0.0f; continue; }
+        float v = (float)(sum / cnt) * norm;
         if (v > 1.0f) v = 1.0f;
         if (v < 0.0f) v = 0.0f;
-        bands[i] = v;
+        bands[b] = v;
     }
 }
