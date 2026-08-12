@@ -4,6 +4,7 @@
 #include "ui/state_store.h"
 #include "core/lyric.h"
 #include "core/spectrum.h"
+#include "core/term_gfx.h"
 #include <ftxui/screen/string.hpp>
 #include <string>
 #include <algorithm>
@@ -76,6 +77,21 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
 }
 
 /* ── Cover ───────────────────────────────────────────────── */
+void cover_layout(const AppState &s, int *cw, int *dh) {
+    int total = s.song_panel_width + 29;
+    int w = total / 2 - 1;
+    if (w < 12) w = 12;
+    if (w > 60) w = 60;
+    int h = 0;
+    if (s.cover.pixels && s.cover.width > 0 && s.cover.height > 0) {
+        h = s.cover.height * w / s.cover.width;
+        if (h % 2) h++;
+    }
+    if (h > 20) h = 20;   /* lyrics panel is fixed at 20 rows */
+    if (cw) *cw = w;
+    if (dh) *dh = h;
+}
+
 static Element render_cover(const CoverData &cd, int panel_w) {
     if (!cd.pixels || cd.width <= 0 || cd.height <= 0 || panel_w < 4)
         return vbox({text("")}) | center | flex;
@@ -84,6 +100,18 @@ static Element render_cover(const CoverData &cd, int panel_w) {
     if (dw > cd.width) dw = cd.width;
     int dh = cd.height * dw / cd.width;
     if (dh % 2) dh++;
+
+    /* Terminal supports the kitty graphics protocol: reserve the same
+       cell area as blank space — the real image is overlaid on top by
+       the frame hook in app.cpp, keeping layout identical. */
+    if (term_gfx_active()) {
+        Elements rows;
+        std::string blank((size_t)dw, ' ');
+        for (int y = 0; y < dh; y++)
+            rows.push_back(text(blank));
+        return vbox(std::move(rows)) | center | flex;
+    }
+
     int sw = cd.width, sh = cd.height;
 
     /* Average the source region covered by each terminal half-block
@@ -131,10 +159,9 @@ static Element render_cover(const CoverData &cd, int panel_w) {
 }
 
 Element render_cover_only(const AppState &s) {
-    int total = s.song_panel_width + 29;
-    int cw = total / 2 - 1;
-    if (cw < 12) cw = 12;
-    if (cw > 60) cw = 60;
+    int cw = 0, dh = 0;
+    cover_layout(s, &cw, &dh);
+    (void)dh;
 
     if (s.cover.pixels && s.cover.width > 0 && s.cover.height > 0)
         return render_cover(s.cover, cw) | center | flex;

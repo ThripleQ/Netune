@@ -7,6 +7,7 @@
 #include <ftxui/screen/screen.hpp>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
+#include <ftxui/component/loop.hpp>
 #include <signal.h>
 #ifndef _WIN32
 #include <unistd.h>
@@ -43,6 +44,7 @@ extern "C" {
 #include "core/audio_output_mgr.h"
 #include "core/search_manager.h"
 #include "core/cache_manager.h"
+#include "core/term_gfx.h"
 #include "plugins/music_sources/local/local_source.h"
 #include "plugins/music_sources/netease/netease_source.h"
 #include "plugins/music_sources/netease/netease_api.h"
@@ -2066,7 +2068,38 @@ int run_app(int argc, char **argv) {
         }
     });
 
-    screen.Loop(component);
+    ftxui::Loop loop(&screen, component);
+    /* After each frame, overlay the cover as a real image when the
+       terminal supports the kitty graphics protocol (character-mode
+       fallback renders the half-block cover instead). */
+    bool gfx_overlay_active = false;
+    while (!loop.HasQuitted()) {
+        loop.RunOnceBlocking();
+        if (term_gfx_active()) {
+            const AppState &st = state.state();
+            bool active = st.lyric_mode && st.cover.pixels &&
+                          !st.show_help && st.login_state == 0;
+            if (active) {
+                int cw = 0, dh = 0;
+                cover_layout(st, &cw, &dh);
+                if (cw > 0 && dh > 0) {
+                    term_gfx_upload(&st.cover);
+                    /* lyric panel starts below the 1-row top bar; the
+                       cover rows are centered in the panel's 20-row
+                       height (same math as the character fallback) */
+                    int avail = (dh > 20) ? dh : 20;
+                    int row0 = 2 + (avail - dh) / 2;
+                    printf("\x1b[%d;1H", row0);
+                    term_gfx_place(cw, dh);
+                    gfx_overlay_active = true;
+                }
+            } else if (gfx_overlay_active) {
+                term_gfx_clear();
+                gfx_overlay_active = false;
+            }
+        }
+        fflush(stdout);
+    }
 
     LOG_INFO("Shutting down");
     timer_active.store(false);

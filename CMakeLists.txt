@@ -190,6 +190,7 @@ set(CORE_SOURCES
   src/core/cache_manager.c
   src/core/search_manager.c
   src/core/spectrum.c
+  src/core/term_gfx.c
 )
 
 set(INFRA_SOURCES
