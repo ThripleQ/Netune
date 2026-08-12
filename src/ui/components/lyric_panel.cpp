@@ -265,20 +265,21 @@ Element render_spectrum_bar(const AppState &s) {
 
     /* Continuous frequency EQ (cava's eq ~ pow(freq, 0.85)): high bands
        get progressively more gain so the right side of the bar is
-       visible; 0.25+0.75*curve keeps the bass dominant. */
+       visible; 0.35+0.65*curve keeps the bass dominant. */
     static float s_eq[SPECTRUM_BANDS];
     static bool s_eq_init = false;
     if (!s_eq_init) {
         s_eq_init = true;
         for (int k = 0; k < SPECTRUM_BANDS; k++)
-            s_eq[k] = 0.25f + 0.75f *
+            s_eq[k] = 0.35f + 0.65f *
                 powf((float)(k + 1) / (float)SPECTRUM_BANDS, 0.85f);
     }
 
     /* Auto-gain (cava autosens): pull the gain down when the bars
-       overshoot the top, ease it back up when there is headroom, so
-       quiet music still lights up the bar. */
+       overshoot the top, ease it back up when there is headroom — the
+       gain is allowed ABOVE 1.0 so quiet music still fills the bar. */
     static float s_sens = 1.0f;
+    static const float SENS_MAX = 5.0f;
 
     /* ── Gradient LUT ─────────────────────────────────── */
     static struct { uint8_t r, g, b; } s_bot[SPECTRUM_BANDS], s_top[SPECTRUM_BANDS];
@@ -352,9 +353,11 @@ Element render_spectrum_bar(const AppState &s) {
     /* ── Auto-gain adjustment ─────────────────────────── */
     if (overshoot) {
         s_sens *= 0.98f;   /* fast pull-back */
+        if (s_sens < 0.5f) s_sens = 0.5f;
     } else {
-        s_sens += 0.0002f; /* slow recovery */
-        if (s_sens > 1.0f) s_sens = 1.0f;
+        s_sens *= 1.0008f; /* slow recovery, no 1.0 cap — quiet tracks
+                              push the gain up until bars fill out */
+        if (s_sens > SENS_MAX) s_sens = SENS_MAX;
     }
 
     /* ── Sample bands → columns (average when several bands per
