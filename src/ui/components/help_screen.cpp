@@ -2,42 +2,80 @@
 #include "ui/components/theme_util.h"
 #include "ui/theme.h"
 #include <cstdio>
+#include <cstring>
+#include <string>
 using namespace ftxui;
 
 Element render_help_screen(const AppState &s) {
     (void)s;
 
-    /* Build keybinding help entries */
+    /* Key column width — all keys are ASCII so manual padding is safe */
+    constexpr int KEYW = 12;
+
     auto entry = [](const char *key, const char *desc) {
+        size_t klen = strlen(key);
+        size_t pad = klen < KEYW ? KEYW - klen : 1;
         return hbox(Elements{
             text("  "),
-            text(key) | bold,
-            text("  —  "),
+            text(std::string(key) + std::string(pad, ' ')) | bold,
             text(desc),
         });
     };
 
+    auto group = [](const char *title, Elements items) {
+        Elements col;
+        col.push_back(text(title) | bold | underlined);
+        col.push_back(text(""));
+        for (auto &e : items) col.push_back(e);
+        return vbox(std::move(col));
+    };
+
+    /* ── Navigation ── */
+    auto nav = group(" Navigation ", Elements{
+        entry("Tab",       "Switch panel (groups / songs)"),
+        entry("j / Down",  "Move down"),
+        entry("k / Up",    "Move up"),
+        entry("Enter",     "Play selected song"),
+        entry("/",         "Search"),
+    });
+
+    /* ── Playback ── */
+    auto play = group(" Playback ", Elements{
+        entry("Space",    "Play / Pause"),
+        entry("n",        "Next track"),
+        entry("p",        "Previous track"),
+        entry("Right",    "Seek forward"),
+        entry("Left",     "Seek backward"),
+        entry("s",        "Stop playback"),
+    });
+
+    /* ── Volume ── */
+    auto vol = group(" Volume ", Elements{
+        entry("+ / =",   "Volume up"),
+        entry("-",       "Volume down"),
+        entry("m",       "Toggle mute"),
+    });
+
+    /* ── Misc ── */
+    auto misc = group(" Misc ", Elements{
+        entry("r",        "Cycle loop mode"),
+        entry("l",        "Toggle lyrics"),
+        entry("?",        "Toggle this help"),
+        entry("q / Esc",  "Quit"),
+    });
+
+    auto left_col  = vbox(Elements{ nav, text(""), play });
+    auto right_col = vbox(Elements{ vol, text(""), misc });
+    auto body = hbox(Elements{
+        left_col  | flex,
+        separator(),
+        right_col | flex,
+    });
+
     Elements col;
     col.push_back(text(" Netune v2.0.0 — Help ") | bold | center | underlined);
     col.push_back(separator());
-    col.push_back(entry("Tab",      "Switch panel (groups / songs)"));
-    col.push_back(entry("j / Down", "Move down"));
-    col.push_back(entry("k / Up",   "Move up"));
-    col.push_back(entry("Enter",    "Play selected song"));
-    col.push_back(entry("Space",    "Play / Pause"));
-    col.push_back(entry("n",        "Next track"));
-    col.push_back(entry("p",        "Previous track"));
-    col.push_back(entry("Right",    "Seek forward"));
-    col.push_back(entry("Left",     "Seek backward"));
-    col.push_back(entry("+ / =",    "Volume up"));
-    col.push_back(entry("-",        "Volume down"));
-    col.push_back(entry("r",        "Cycle loop mode"));
-    col.push_back(entry("l",        "Toggle lyrics"));
-    col.push_back(entry("m",         "Toggle mute"));
-    col.push_back(entry("s",        "Stop playback"));
-    col.push_back(entry("/",        "Search"));
-    col.push_back(entry("q / Esc",  "Quit"));
-    col.push_back(entry("?",        "Toggle this help"));
+    col.push_back(body);
     col.push_back(separator());
     col.push_back(text(" Press ? again or Escape to close ") | dim | center);
 
