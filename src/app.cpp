@@ -2076,40 +2076,58 @@ int run_app(int argc, char **argv) {
         /* After each frame, overlay the cover as a real image when the
            terminal supports the kitty graphics protocol (character-mode
            fallback renders the half-block cover instead). */
-        bool gfx_overlay_active = false;
-        while (!loop.HasQuitted()) {
-            loop.RunOnceBlocking();
-            if (term_gfx_active()) {
-                const AppState &st = state.state();
-                bool active = st.lyric_mode && st.cover.pixels &&
-                              !st.show_help && st.login_state == 0;
-                if (active) {
-                    int cw = 0, dh = 0;
-                    cover_layout(st, &cw, &dh);
-                if (cw > 0 && dh > 0) {
-                    term_gfx_upload(&st.cover);
-                    /* lyric panel starts below the 1-row top bar; the
-                       cover rows are centered in the panel's 20-row
-                       height (same math as the character fallback) */
-                    int avail = (dh > 20) ? dh : 20;
-                    int row0 = 2 + (avail - dh) / 2;
-                    /* Character-mode dh counts rows that show 2 source
-                       pixel rows each (half-block ▀). The kitty image is
-                       scaled 1:1 pixel-wise, so halve the rows to keep
-                       the image aspect ratio (terminal cells are ~2:1). */
-                    int gfx_rows = (dh + 1) / 2;
-                    if (gfx_rows < 1) gfx_rows = 1;
-                    printf("\x1b[%d;1H", row0);
-                    term_gfx_place(cw, gfx_rows);
-                    gfx_overlay_active = true;
-                }
-                } else if (gfx_overlay_active) {
-                    term_gfx_clear();
-                    gfx_overlay_active = false;
-                }
-            }
-            fflush(stdout);
-        }
+         bool gfx_overlay_active = false;
+         const void *g_placed_pixels = NULL;
+         int g_placed_row0 = -1, g_placed_cw = 0, g_placed_rows = 0;
+         while (!loop.HasQuitted()) {
+             loop.RunOnceBlocking();
+             if (term_gfx_active()) {
+                 const AppState &st = state.state();
+                 bool active = st.lyric_mode && st.cover.pixels &&
+                               !st.show_help && st.login_state == 0;
+                 if (active) {
+                     int cw = 0, dh = 0;
+                     cover_layout(st, &cw, &dh);
+                     if (cw > 0 && dh > 0) {
+                         term_gfx_upload(&st.cover);
+                         /* lyric panel starts below the 1-row top bar; the
+                            cover rows are centered in the panel's 20-row
+                            height (same math as the character fallback) */
+                         int avail = (dh > 20) ? dh : 20;
+                         int row0 = 2 + (avail - dh) / 2;
+                         /* Character-mode dh counts rows that show 2 source
+                            pixel rows each (half-block ▀). The kitty image
+                            is scaled 1:1 pixel-wise, so halve the rows to
+                            keep the image aspect ratio (cells are ~2:1). */
+                         int gfx_rows = (dh + 1) / 2;
+                         if (gfx_rows < 1) gfx_rows = 1;
+                         /* Each kitty placement re-rasterizes the image to
+                            the cell grid — only re-place when the cover or
+                            its geometry changed. FTXUI outputs diffs, so the
+                            stable blank placeholder never rewrites this area
+                            and the image keeps displaying. */
+                         if (g_placed_pixels != st.cover.pixels ||
+                             g_placed_row0 != row0 ||
+                             g_placed_cw != cw ||
+                             g_placed_rows != gfx_rows) {
+                             printf("\x1b[%d;1H", row0);
+                             term_gfx_place(cw, gfx_rows);
+                             g_placed_pixels = st.cover.pixels;
+                             g_placed_row0 = row0;
+                             g_placed_cw = cw;
+                             g_placed_rows = gfx_rows;
+                         }
+                         gfx_overlay_active = true;
+                     }
+                 } else if (gfx_overlay_active) {
+                     term_gfx_clear();
+                     gfx_overlay_active = false;
+                     g_placed_pixels = NULL;
+                     g_placed_row0 = -1;
+                 }
+             }
+             fflush(stdout);
+         }
     }
 
     LOG_INFO("Shutting down");
