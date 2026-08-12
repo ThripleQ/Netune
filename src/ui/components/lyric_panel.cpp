@@ -263,21 +263,8 @@ Element render_spectrum_bar(const AppState &s) {
     static const float FALL_RATE = 0.045f;
     static const float GRAVITY   = 2.0f;
 
-    /* Continuous frequency EQ (cava's eq ~ pow(freq, 0.85)): high bands
-       get progressively more gain so the right side of the bar is
-       visible; 0.35+0.65*curve keeps the bass dominant. */
-    static float s_eq[SPECTRUM_BANDS];
-    static bool s_eq_init = false;
-    if (!s_eq_init) {
-        s_eq_init = true;
-        for (int k = 0; k < SPECTRUM_BANDS; k++)
-            s_eq[k] = 0.35f + 0.65f *
-                powf((float)(k + 1) / (float)SPECTRUM_BANDS, 0.85f);
-    }
-
-    /* Auto-gain (cava autosens): pull the gain down when the bars
-       overshoot the top, ease it back up when there is headroom — the
-       gain is allowed ABOVE 1.0 so quiet music still fills the bar. */
+    /* Continuous frequency EQ is now applied in the dB domain (eq_db
+       inside the per-band loop), so the LUT below is no longer used. */
     static float s_sens = 1.0f;
     static const float SENS_MAX = 5.0f;
 
@@ -312,25 +299,35 @@ Element render_spectrum_bar(const AppState &s) {
 
     bool dimmed = (s.playback_state != PlaybackState::Playing);
 
-    /* ── Per-band: dB → EQ → parabolic falloff ────────── */
+    /* ── Per-band: dB (compressed) → EQ → parabolic falloff ── */
     float processed[SPECTRUM_BANDS];
     bool overshoot = false;
+    const float DB_RANGE = 36.0f;  /* -36 dB is full scale — music sits in
+                                      [-30,-5] dB most of the time, so the
+                                      bar reads as a continuous wave */
     for (int i = 0; i < bands; i++) {
         float v = s.spectrum[i];
         if (v < 0.0f) v = 0.0f;
 
-        /* Magnitude → dB, clamp to [-60, 0] */
-        float d = (v > 1e-6f) ? 20.0f * log10f(v) : -60.0f;
-        if (d < -60.0f) d = -60.0f;
+        /* Magnitude → dB, clamp to [-DB_RANGE, 0] */
+        float d = (v > 1e-6f) ? 20.0f * log10f(v) : -DB_RANGE;
+        if (d < -DB_RANGE) d = -DB_RANGE;
         if (d > 0.0f) d = 0.0f;
 
-        /* dB → height ratio in [0,1] with frequency EQ + auto gain */
-        float ratio = (d + 60.0f) / 60.0f * s_eq[i] * s_sens;
+        /* Frequency compensation IN dB: boost high bands without
+           squashing the bass (which already carries the energy) */
+        float eq_db = 6.0f * powf((float)(i + 1) / (float)bands, 1.2f);
+        d += eq_db;
+        if (d > 0.0f) d = 0.0f;
+
+        /* dB → height ratio, with auto gain + slight gamma lift */
+        float ratio = (d + DB_RANGE) / DB_RANGE * s_sens;
         if (ratio < 0.0f) ratio = 0.0f;
         if (ratio > 1.0f) {
             overshoot = true;
             ratio = 1.0f;
         }
+        ratio = powf(ratio, 0.85f);
 
         /* Parabolic falloff (cava): snap up instantly, then fall along a
            quadratic curve from the last peak */
