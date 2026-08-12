@@ -43,7 +43,12 @@ Element render_help_screen(const AppState &s) {
 
     auto help_box = vbox(std::move(col));
     auto &theme = ThemeManager::instance().current();
-    auto framed = help_box | border | center | clear_under | bgcolor(Color::RGB(theme.overlay_bg.r, theme.overlay_bg.g, theme.overlay_bg.b));
-
-    return framed;
+    /* Full-page help: fills the whole terminal, content vertically centered,
+       scrolls when the window is too short (same pattern as login screen) */
+    return vbox(Elements{
+        filler(),
+        help_box | border,
+        filler(),
+    }) | yframe | flex |
+        bgcolor(Color::RGB(theme.overlay_bg.r, theme.overlay_bg.g, theme.overlay_bg.b));
 }

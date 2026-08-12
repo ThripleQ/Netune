@@ -1477,11 +1477,8 @@ int run_app(int argc, char **argv) {
             return render_login_screen(s);
         }
         if (s.show_help) {
-            /* overlay help screen centered on top of main content */
-            main = vbox(Elements{
-                main,
-                render_help_screen(s) | center | clear_under,
-            });
+            /* full-page help screen */
+            return render_help_screen(s);
         }
 
         return main;
