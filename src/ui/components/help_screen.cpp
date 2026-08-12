@@ -73,17 +73,18 @@ Element render_help_screen(const AppState &s) {
     });
 
     Elements col;
-    col.push_back(text(" Help ") | bold | center);
     col.push_back(body);
     col.push_back(separator());
     col.push_back(text(" Press ? again or Escape to close ") | dim | center);
 
     auto help_box = vbox(std::move(col));
     auto &theme = ThemeManager::instance().current();
-    /* Full-page help: fills the whole terminal, content vertically centered,
-       scrolls when the window is too short (same pattern as login screen) */
+    /* Full-page help: title sits above the bordered table, content
+       vertically centered, scrolls when the window is too short
+       (same pattern as login screen) */
     return vbox(Elements{
         filler(),
+        text(" Help ") | bold | center,
         help_box | border,
         filler(),
     }) | yframe | flex |
