@@ -192,7 +192,11 @@ void cover_cell_probe(void) {
     int old_fl = fcntl(STDIN_FILENO, F_GETFL, 0);
     fcntl(STDIN_FILENO, F_SETFL, old_fl | O_NONBLOCK);
 
-    write(STDOUT_FILENO, "\x1b[14t\x1b[18t", 8);
+    /* "\x1b[14t\x1b[18t" is 10 bytes — write() the full query, otherwise
+       the 18t half is truncated and rows/cols never arrive, silently
+       falling back to the 2:1 default and distorting the cover */
+    const char query[] = "\x1b[14t\x1b[18t";
+    write(STDOUT_FILENO, query, sizeof(query) - 1);
     fflush(stdout);
 
     int px_w = 0, px_h = 0, rows = 0, cols = 0;
