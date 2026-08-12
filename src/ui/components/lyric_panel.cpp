@@ -289,7 +289,7 @@ Element render_spectrum_bar(const AppState &s) {
     /* Bars snap up instantly and ease back down (exponential release)
        so the spectrum lingers briefly after each sound. */
     static float s_fall[SPECTRUM_BANDS] = {0};
-    const float FALL_SPEED = 0.06f;   /* per-frame release toward target */
+    const float FALL_SPEED = 0.12f;   /* per-frame release toward target */
     float processed[SPECTRUM_BANDS];
     for (int i = 0; i < bands; i++) {
         float v = s.spectrum[i];
