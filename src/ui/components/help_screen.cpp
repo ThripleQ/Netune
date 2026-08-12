@@ -70,7 +70,7 @@ Element render_help_screen(const AppState &s) {
     auto right_col = vbox(Elements{ vol, filler(), misc });
     auto body = hbox(Elements{
         left_col  | flex,
-        separator(),
+        text("   "),
         right_col | flex,
     });
 
