@@ -67,7 +67,9 @@ static int alsa_init(const AudioConfig *cfg) {
     snd_pcm_hw_params_set_rate_near(g_pcm, hw, &rate, NULL);
     snd_pcm_hw_params_set_channels_near(g_pcm, hw, &ch);
 
-    snd_pcm_uframes_t period_frames = 4096;
+    /* Small buffer: keeps drain-on-teardown short (~93ms @ 44.1kHz) so
+       track switches don't click AND don't stall on the drain. */
+    snd_pcm_uframes_t period_frames = 1024;
     snd_pcm_uframes_t buf_frames = period_frames * 4;
     snd_pcm_hw_params_set_buffer_size_near(g_pcm, hw, &buf_frames);
     snd_pcm_hw_params_set_period_size_near(g_pcm, hw, &period_frames, NULL);

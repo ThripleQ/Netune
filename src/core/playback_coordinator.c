@@ -172,15 +172,13 @@ static bool cmd_queue_try_pop(CmdQueue *q, Command *out) {
     return got;
 }
 
-/* Tear down the audio output without waiting for the hardware buffer to
-   drain. audio_output_destroy() alone calls the backend shutdown, which on
-   ALSA/Pulse drains the buffer first (snd_pcm_drain / pa_simple_drain) and
-   can block ~0.4s per track switch — stuttering on rapid skipping. */
+/* Tear down the audio output. The backend shutdown drains the hardware
+   buffer (snd_pcm_drain / pa_simple_drain) so the tail of the current
+   track plays out smoothly — a hard drop (snd_pcm_drop) clicks/pops.
+   The drain is short (≤~100ms with the small ALSA buffer) and CMD_PLAY
+   coalescing means rapid skipping only ever drains once. */
 static void audio_teardown(AudioOutput *audio) {
-    if (audio) {
-        audio_output_stop(audio);
-        audio_output_destroy(audio);
-    }
+    if (audio) audio_output_destroy(audio);
 }
 
 static void* playback_thread(void *arg) {
