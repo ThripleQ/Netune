@@ -154,7 +154,9 @@ void term_gfx_place(int cols, int rows) {
 
 void term_gfx_clear(void) {
     if (!term_gfx_active()) return;
-    esc_write("\x1b_Ga=d,d=I\x1b\\");
+    /* a=d delete, d=A deletes ALL images (d=I only deletes the image
+       named by i=, which is NOT what we want without an id) */
+    esc_write("\x1b_Ga=d,d=A\x1b\\");
     g_uploaded_pixels = NULL;
     g_uploaded_w = g_uploaded_h = 0;
 }
