@@ -302,13 +302,15 @@ Element render_spectrum_bar(const AppState &s) {
     static float s_smooth[SPECTRUM_BANDS] = {0};
     const float FALL_SPEED = 0.24f;   /* per-frame release toward target */
     const float ATTACK_SPEED = 0.65f; /* slight rise smoothing (~2 frames) */
+    const float MASTER_GAIN = 1.25f;  /* overall +25% */
     float processed[SPECTRUM_BANDS];
     for (int i = 0; i < bands; i++) {
         float v = s.spectrum[i];
         if (v < 0.0f) v = 0.0f;
         if (v > 1.0f) v = 1.0f;
         float expo = 0.5f - 0.2f * (float)i / (float)bands;
-        float target = powf(v, expo);
+        float target = powf(v, expo) * MASTER_GAIN;
+        if (target > 1.0f) target = 1.0f;
         if (target >= s_smooth[i]) {
             s_smooth[i] += (target - s_smooth[i]) * ATTACK_SPEED;
         } else {
