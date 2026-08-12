@@ -144,11 +144,13 @@ void term_gfx_place(int cols, int rows) {
     if (!term_gfx_active() || g_img_id == 0 || cols <= 0)
         return;
     char seq[128];
-    /* a=p place, i=id, q=2 no response. Specifying ONLY c (columns) makes
-       kitty scale the image to the column width keeping its own aspect
-       ratio — giving both c and r would stretch it to the cell grid. */
+    /* a=p place, i=id, q=2 no response. Only c (columns) is given so the
+       image scales keeping its aspect ratio; C=1 forbids kitty from moving
+       the cursor after placement — otherwise the next FTXUI diff output
+       would be written from the wrong cursor position, corrupting the
+       whole screen layout. */
     snprintf(seq, sizeof(seq),
-             "\x1b_Ga=p,i=%lu,q=2,c=%d\x1b\\", g_img_id, cols);
+             "\x1b_Ga=p,i=%lu,q=2,c=%d,C=1\x1b\\", g_img_id, cols);
     esc_write(seq);
 }
 
