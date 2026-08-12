@@ -116,7 +116,10 @@ static Element render_cover(const CoverData &cd, int panel_w) {
     /* Terminal supports the kitty graphics protocol: emit Unicode
        placeholder cells (U+10EEEE + row/col diacritics, image id in the
        foreground color). The image is then plain text from FTXUI's point
-       of view — layout, diffs, resizes and removal all Just Work. */
+       of view — layout, diffs, resizes and removal all Just Work.
+       NOTE: the color must be applied via FTXUI's color() decorator —
+       embedding an ESC sequence in the string would make FTXUI count the
+       control char in the text width and shift the whole layout. */
     if (term_gfx_active()) {
         term_gfx_ensure(&cd, dw, dh);
         unsigned long id = term_gfx_image_id();
@@ -130,13 +133,9 @@ static Element render_cover(const CoverData &cd, int panel_w) {
         /* 24-bit color encodes the image id: R=id&0xFF, G=(id>>8)&0xFF,
            B=(id>>16)&0xFF. Diacritics: U+0305+row / U+0305+col (0xCC
            0x85+n in UTF-8). */
-        char color_seq[32];
-        snprintf(color_seq, sizeof(color_seq),
-                 "\x1b[38;2;%lu;%lu;%lum",
-                 id & 0xFF, (id >> 8) & 0xFF, (id >> 16) & 0xFF);
         Elements rows;
         for (int y = 0; y < dh; y++) {
-            std::string line(color_seq);
+            std::string line;
             for (int x = 0; x < dw; x++) {
                 line += "\xf4\x8e\xbb\xae";   /* U+10EEEE placeholder */
                 line += (char)0xcc;           /* row diacritic U+0305+y */
@@ -144,7 +143,11 @@ static Element render_cover(const CoverData &cd, int panel_w) {
                 line += (char)0xcc;           /* col diacritic U+0305+x */
                 line += (char)(0x85 + x);
             }
-            rows.push_back(text(std::move(line)));
+            rows.push_back(
+                text(std::move(line)) |
+                color(Color::RGB((int)(id & 0xFF),
+                                 (int)((id >> 8) & 0xFF),
+                                 (int)((id >> 16) & 0xFF))));
         }
         return vbox(std::move(rows)) | center | flex;
     }
