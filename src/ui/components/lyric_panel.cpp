@@ -285,10 +285,10 @@ Element render_spectrum_bar(const AppState &s) {
 
     bool dimmed = (s.playback_state != PlaybackState::Playing);
 
-    /* ── Sensitivity: sqrt curve (no other post-processing) ── */
-    /* sqrt amplifies quiet bins (a bin at 6% → 25% height) while full
-       scale stays at 100% — responsive to quiet sounds without hard
-       clipping of loud ones. */
+    /* ── Frequency-weighted sensitivity curve ──────────── */
+    /* Per-band exponent: low bands use sqrt (x^0.5), smoothly ramping
+       to x^0.3 at the high end — high-frequency bands get progressively
+       more amplification to compensate their naturally lower energy. */
     static float s_fall[SPECTRUM_BANDS] = {0};
     const float FALL_SPEED = 0.24f;   /* per-frame release toward target */
     float processed[SPECTRUM_BANDS];
@@ -296,7 +296,8 @@ Element render_spectrum_bar(const AppState &s) {
         float v = s.spectrum[i];
         if (v < 0.0f) v = 0.0f;
         if (v > 1.0f) v = 1.0f;
-        float target = sqrtf(v);
+        float expo = 0.5f - 0.2f * (float)i / (float)bands;
+        float target = powf(v, expo);
         if (target >= s_fall[i]) {
             s_fall[i] = target;                     /* instant attack */
         } else {
