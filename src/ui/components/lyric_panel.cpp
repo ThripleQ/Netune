@@ -189,6 +189,15 @@ Element render_cover_only(const AppState &s) {
     return vbox({text("")}) | center | flex;
 }
 
+/* Lyrics panel height follows the cover's rendered height (they sit side
+   by side and share the same vertical extent); falls back to 20 rows
+   while no cover is loaded. */
+static int cover_panel_height(const AppState &s) {
+    int cw = 0, dh = 0;
+    cover_layout(s, &cw, &dh);
+    return dh > 0 ? dh : 20;
+}
+
 Element render_lyrics_only(const AppState &s) {
     int total = s.song_panel_width + 29;
     int cw = total / 2 - 1;
@@ -196,8 +205,9 @@ Element render_lyrics_only(const AppState &s) {
     if (cw > 60) cw = 60;
     int lw = total - cw - 1;
     if (lw < 20) lw = 20;
+    int h = cover_panel_height(s);
     return render_lyrics(s.lyrics, s.current_time_ms, lw) |
-           size(WIDTH, EQUAL, lw) | size(HEIGHT, EQUAL, 20);
+           size(WIDTH, EQUAL, lw) | size(HEIGHT, EQUAL, h);
 }
 
 Element render_lyric_panel(const AppState &s) {
@@ -207,10 +217,11 @@ Element render_lyric_panel(const AppState &s) {
     if (cw > 60) cw = 60;
     int lw = total - cw - 1;
     if (lw < 20) lw = 20;
+    int h = cover_panel_height(s);
     return theme_bg(hbox(Elements{
         render_cover_only(s) | size(WIDTH, EQUAL, cw),
         render_lyrics_only(s) | size(WIDTH, EQUAL, lw) | center,
-    }));
+    }) | size(HEIGHT, EQUAL, h));
 }
 
 /* ── Spectrum bar (2 rows, 16-level bars, gradient) ── */
