@@ -146,16 +146,17 @@ static Element render_cover(const CoverData &cd, int panel_w) {
 
     Elements rows;
     for (int y = 0; y < dh; y++) {
+        /* contiguous floor boundaries: row y covers source rows
+           [floor(y*step), floor((y+1)*step)) — no gaps, no overlap,
+           no cumulative drift (step=2 matches the classic 2:1 layout) */
         double y0f = y * step;
-        double midf = y0f + step / 2.0;
         double y1f = y0f + step;
         int y0 = (int)y0f;
-        int ymid = (int)midf;
-        int y1 = (int)y1f + 1;   /* ceil */
-        if (y0 >= sh) y0 = sh - 1;
-        if (ymid <= y0) ymid = y0 + 1;
+        int y1 = (int)y1f;
+        if (y1 <= y0) y1 = y0 + 1;
         if (y1 > sh) y1 = sh;
-        if (y1 <= ymid) y1 = ymid + 1;
+        int ymid = y0 + (y1 - y0) / 2;
+        if (ymid <= y0) ymid = y0 + 1;
 
         Elements cells;
         for (int x = 0; x < dw; x++) {
