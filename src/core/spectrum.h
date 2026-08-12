@@ -8,7 +8,7 @@ extern "C" {
 
 /* ── Constants ──────────────────────────────────────── */
 #define SPECTRUM_FFT_SIZE  2048  /* FFT window (must be power of 2) */
-#define SPECTRUM_BANDS     128   /* output frequency bands */
+#define SPECTRUM_BANDS     (SPECTRUM_FFT_SIZE / 2)  /* one FFT bin per band */
 
 /* ── Process PCM samples into frequency band magnitudes
  *
