@@ -10,16 +10,17 @@ TermGfxMode term_gfx_detect(void) {
     return TERM_GFX_NONE;
 }
 int term_gfx_active(void) { return 0; }
-void term_gfx_upload(const CoverData *cd) { (void)cd; }
-void term_gfx_place(int cols, int rows) { (void)cols; (void)rows; }
-void term_gfx_clear(void) {}
+void term_gfx_ensure(const CoverData *cd, int cols, int rows) {
+    (void)cd; (void)cols; (void)rows;
+}
+unsigned long term_gfx_image_id(void) { return 0; }
 #else
 
 /* ── Protocol state ─────────────────────────────────── */
 static TermGfxMode g_mode = TERM_GFX_NONE;
 static int g_detected = 0;
 
-/* fingerprint of the image currently uploaded to the terminal */
+/* fingerprint of the image currently uploaded */
 static const uint8_t *g_uploaded_pixels = NULL;
 static int g_uploaded_w = 0;
 static int g_uploaded_h = 0;
@@ -90,6 +91,10 @@ int term_gfx_active(void) {
     return term_gfx_detect() == TERM_GFX_KITTY;
 }
 
+unsigned long term_gfx_image_id(void) {
+    return term_gfx_active() ? g_img_id : 0;
+}
+
 /* ── Upload (chunked a=T transfer) ────────────────────── */
 static void kitty_upload_raw(const uint8_t *rgb, int w, int h,
                              unsigned long id) {
@@ -119,48 +124,38 @@ static void kitty_upload_raw(const uint8_t *rgb, int w, int h,
     free(b64);
 }
 
-void term_gfx_upload(const CoverData *cd) {
+void term_gfx_ensure(const CoverData *cd, int cols, int rows) {
     if (!term_gfx_active() || !cd || !cd->pixels) return;
+    if (cols < 1 || rows < 1) return;
 
-    /* skip re-transfer when nothing changed */
-    if (g_uploaded_pixels == cd->pixels &&
-        g_uploaded_w == cd->width && g_uploaded_h == cd->height)
-        return;
+    /* re-transfer when the image changed */
+    if (g_uploaded_pixels != cd->pixels ||
+        g_uploaded_w != cd->width || g_uploaded_h != cd->height) {
+        g_img_id++;
+        if (g_img_id == 0) g_img_id = 1;  /* id 0 is invalid */
+        kitty_upload_raw(cd->pixels, cd->width, cd->height, g_img_id);
+        g_uploaded_pixels = cd->pixels;
+        g_uploaded_w = cd->width;
+        g_uploaded_h = cd->height;
+        LOG_DEBUG("term_gfx: uploaded cover %dx%d id=%lu",
+                  cd->width, cd->height, g_img_id);
+    }
 
-    g_img_id++;
-    if (g_img_id == 0) g_img_id = 1;  /* id 0 is invalid in the protocol */
-
-    /* cover.c stores RGB24 (3 channels) */
-    kitty_upload_raw(cd->pixels, cd->width, cd->height, g_img_id);
-    g_uploaded_pixels = cd->pixels;
-    g_uploaded_w = cd->width;
-    g_uploaded_h = cd->height;
-    LOG_DEBUG("term_gfx: uploaded cover %dx%d id=%lu",
-              cd->width, cd->height, g_img_id);
-}
-
-void term_gfx_place(int cols, int rows) {
-    (void)rows;
-    if (!term_gfx_active() || g_img_id == 0 || cols <= 0)
-        return;
-    char seq[128];
-    /* a=p place, i=id, q=2 no response. Only c (columns) is given so the
-       image scales keeping its aspect ratio; C=1 forbids kitty from moving
-       the cursor after placement — otherwise the next FTXUI diff output
-       would be written from the wrong cursor position, corrupting the
-       whole screen layout. */
-    snprintf(seq, sizeof(seq),
-             "\x1b_Ga=p,i=%lu,q=2,c=%d,C=1\x1b\\", g_img_id, cols);
-    esc_write(seq);
-}
-
-void term_gfx_clear(void) {
-    if (!term_gfx_active()) return;
-    /* a=d delete, d=A deletes ALL images (d=I only deletes the image
-       named by i=, which is NOT what we want without an id) */
-    esc_write("\x1b_Ga=d,d=A\x1b\\");
-    g_uploaded_pixels = NULL;
-    g_uploaded_w = g_uploaded_h = 0;
+    /* (re)create the virtual placement matching the rendered grid so the
+       placeholder cells know the image's target size */
+    static int s_vp_cols = -1, s_vp_rows = -1;
+    if (s_vp_cols != cols || s_vp_rows != rows) {
+        char seq[128];
+        /* a=p place, U=1 virtual placement (invisible prototype) */
+        snprintf(seq, sizeof(seq),
+                 "\x1b_Ga=p,U=1,i=%lu,q=2,c=%d,r=%d\x1b\\",
+                 g_img_id, cols, rows);
+        esc_write(seq);
+        s_vp_cols = cols;
+        s_vp_rows = rows;
+        LOG_DEBUG("term_gfx: virtual placement %dx%d id=%lu",
+                  cols, rows, g_img_id);
+    }
 }
 
 #endif /* _WIN32 */

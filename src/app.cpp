@@ -2078,77 +2078,11 @@ int run_app(int argc, char **argv) {
         }
     });
 
-    /* scoped so the Loop destructor (terminal restore) runs BEFORE the
-       shutdown sequence below — a crash in shutdown must not leave the
-       terminal in alt-screen limbo */
-    {
-        ftxui::Loop loop(&screen, component);
-        /* After each frame, overlay the cover as a real image when the
-           terminal supports the kitty graphics protocol (character-mode
-           fallback renders the half-block cover instead). */
-         bool gfx_overlay_active = false;
-         const void *g_placed_pixels = NULL;
-         int g_placed_row0 = -1, g_placed_cw = 0, g_placed_rows = 0;
-         int g_last_dimx = -1, g_last_dimy = -1;
-         while (!loop.HasQuitted()) {
-             loop.RunOnceBlocking();
-             if (term_gfx_active()) {
-                 const AppState &st = state.state();
-                 bool active = st.lyric_mode && st.cover.pixels &&
-                               !st.show_help && st.login_state == 0;
-                 if (active) {
-                     /* A terminal resize may drop placed images (kitty
-                        frees sprites) — only cared about while a cover is
-                        up; clear and force fresh upload+placement. */
-                     if (screen.dimx() != g_last_dimx ||
-                         screen.dimy() != g_last_dimy) {
-                         term_gfx_clear();
-                         g_placed_pixels = NULL;
-                         g_placed_row0 = -1;
-                         g_placed_cw = 0;
-                         g_placed_rows = 0;
-                         g_last_dimx = screen.dimx();
-                         g_last_dimy = screen.dimy();
-                     }
-                     int cw = 0, dh = 0;
-                     cover_layout(st, &cw, &dh);
-                     if (cw > 0 && dh > 0) {
-                         term_gfx_upload(&st.cover);
-                         /* Place top-aligned at the panel start (1-row top
-                            bar). The image height is determined by kitty
-                            from the column width + aspect ratio; keep the
-                            cached gfx_rows for change detection only. */
-                         int gfx_rows = (dh + 1) / 2;
-                         if (gfx_rows < 1) gfx_rows = 1;
-                         int row0 = 2;
-                         /* Each kitty placement re-rasterizes the image to
-                            the cell grid — only re-place when the cover or
-                            its geometry changed. FTXUI outputs diffs, so the
-                            stable blank placeholder never rewrites this area
-                            and the image keeps displaying. */
-                         if (g_placed_pixels != st.cover.pixels ||
-                             g_placed_row0 != row0 ||
-                             g_placed_cw != cw ||
-                             g_placed_rows != gfx_rows) {
-                             printf("\x1b[%d;1H", row0);
-                             term_gfx_place(cw, gfx_rows);
-                             g_placed_pixels = st.cover.pixels;
-                             g_placed_row0 = row0;
-                             g_placed_cw = cw;
-                             g_placed_rows = gfx_rows;
-                         }
-                         gfx_overlay_active = true;
-                     }
-                 } else if (gfx_overlay_active) {
-                     term_gfx_clear();
-                     gfx_overlay_active = false;
-                     g_placed_pixels = NULL;
-                     g_placed_row0 = -1;
-                 }
-             }
-             fflush(stdout);
-         }
-    }
+    /* The cover as a raw image is rendered inside the FTXUI layout via
+       Unicode placeholder cells (see render_cover in lyric_panel.cpp) —
+       no frame hook, cursor placement or cleanup needed; FTXUI text
+       handling moves/removes the image automatically. */
+    screen.Loop(component);
 
     LOG_INFO("Shutting down");
     timer_active.store(false);
