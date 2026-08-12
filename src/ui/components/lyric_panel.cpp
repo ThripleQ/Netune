@@ -217,11 +217,13 @@ Element render_lyric_panel(const AppState &s) {
     if (cw > 60) cw = 60;
     int lw = total - cw - 1;
     if (lw < 20) lw = 20;
-    int h = cover_panel_height(s);
+    /* The panel itself stays flexed to fill the main layout; the inner
+       cover+lyrics block is centered vertically so the overall layout
+       (spectrum/status bars pinned to the bottom) is unchanged. */
     return theme_bg(hbox(Elements{
         render_cover_only(s) | size(WIDTH, EQUAL, cw),
         render_lyrics_only(s) | size(WIDTH, EQUAL, lw) | center,
-    }) | size(HEIGHT, EQUAL, h));
+    }) | center);
 }
 
 /* ── Spectrum bar (2 rows, 16-level bars, gradient) ── */
