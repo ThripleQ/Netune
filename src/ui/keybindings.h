@@ -46,6 +46,9 @@ public:
     ~KeybindingManager();
     bool load(const std::string &yaml_path);
     std::optional<Action> lookup(const std::string &key) const;
+    /* All keys currently bound to an action (order unspecified) —
+       used by the help screen to reflect user keybindings. */
+    std::vector<std::string> keys_for(Action action) const;
 
 private:
     /* shared state — one manager owns the mappings */

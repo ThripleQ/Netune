@@ -1477,8 +1477,8 @@ int run_app(int argc, char **argv) {
             return render_login_screen(s);
         }
         if (s.show_help) {
-            /* full-page help screen */
-            return render_help_screen(s);
+            /* full-page help screen, reflects user keybindings */
+            return render_help_screen(s, g_keybindings);
         }
 
         return main;
