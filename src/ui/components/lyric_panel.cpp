@@ -254,10 +254,18 @@ Element render_spectrum_bar(const AppState &s) {
     int bands = SPECTRUM_BANDS;
     int cols = total_w;
 
-    /* ── Smoothing state & zone attack/release ────────── */
+    /* ── Smoothing & peak state ──────────────────────── */
     static float s_height[SPECTRUM_BANDS] = {0};
-    static const float ALPHA_UP[4]   = {0.28f, 0.28f, 0.35f, 0.40f};
-    static const float ALPHA_DOWN[4] = {0.28f, 0.28f, 0.18f, 0.24f};
+    static float s_peak[SPECTRUM_BANDS]   = {0};
+    /* Fast attack / slow release gives the "punchy" bounce; high bands
+       decay a bit faster so the whole bar stays lively. */
+    static const float ALPHA_UP[4]   = {0.80f, 0.80f, 0.75f, 0.70f};
+    static const float ALPHA_DOWN[4] = {0.055f, 0.07f, 0.09f, 0.12f};
+    /* Logarithmic bands have far less energy at the top end; boost the
+       high zones so the right side of the bar is actually visible. */
+    static const float ZONE_GAIN_DB[4] = {0.0f, 5.0f, 9.0f, 13.0f};
+    /* Peak line decays slower than the bar (per-frame level drop) */
+    const float PEAK_DECAY = 1.5f;
 
     /* ── Gradient LUT ─────────────────────────────────── */
     static struct { uint8_t r, g, b; } s_bot[SPECTRUM_BANDS], s_top[SPECTRUM_BANDS];
@@ -291,8 +299,9 @@ Element render_spectrum_bar(const AppState &s) {
     bool dimmed = (s.playback_state != PlaybackState::Playing);
     const float MAX_HEIGHT = (float)MAX_LEVELS;
 
-    /* ── Per-band: dB → height → zone smoothing ────── */
+    /* ── Per-band: dB → zone gain → nonlinear → smoothing ── */
     float processed[SPECTRUM_BANDS];
+    float peaks[SPECTRUM_BANDS];
     for (int i = 0; i < bands; i++) {
         float v = s.spectrum[i];
         if (v < 0.0f) v = 0.0f;
@@ -302,20 +311,38 @@ Element render_spectrum_bar(const AppState &s) {
         if (d < -60.0f) d = -60.0f;
         if (d > 0.0f) d = 0.0f;
 
+        /* Frequency compensation: boost higher zones (see table above) */
+        int zone = (i < 24) ? 0 : (i < 64) ? 1 : (i < 104) ? 2 : 3;
+        d += ZONE_GAIN_DB[zone];
+        if (d > 0.0f) d = 0.0f;
+
         /* dB → height in [0, MAX_HEIGHT] */
         float target = (d + 60.0f) / 60.0f * MAX_HEIGHT;
         if (target < 0.0f) target = 0.0f;
         if (target > MAX_HEIGHT) target = MAX_HEIGHT;
 
+        /* Slight gamma lift makes quiet parts more visible */
+        float ratio = target / MAX_HEIGHT;
+        ratio = powf(ratio, 0.9f);
+        target = ratio * MAX_HEIGHT;
+
         /* Zone-specific attack/release smoothing */
-        int zone = (i < 24) ? 0 : (i < 64) ? 1 : (i < 104) ? 2 : 3;
         float a = (target > s_height[i]) ? ALPHA_UP[zone] : ALPHA_DOWN[zone];
         s_height[i] += a * (target - s_height[i]);
+
+        /* Peak line: instant up, slow decay */
+        if (target > s_peak[i]) s_peak[i] = target;
+        else s_peak[i] -= PEAK_DECAY;
+        if (s_peak[i] < s_height[i]) s_peak[i] = s_height[i];
+        if (s_peak[i] < 0.0f) s_peak[i] = 0.0f;
+        if (s_peak[i] > MAX_HEIGHT) s_peak[i] = MAX_HEIGHT;
 
         /* Clamp and store as 0~1 ratio for visual mapping */
         if (s_height[i] < 0.0f) s_height[i] = 0.0f;
         processed[i] = s_height[i] / MAX_HEIGHT;
         if (processed[i] > 1.0f) processed[i] = 1.0f;
+        peaks[i] = s_peak[i] / MAX_HEIGHT;
+        if (peaks[i] > 1.0f) peaks[i] = 1.0f;
     }
 
     /* ── Sample bands → columns (average when several bands per
@@ -334,10 +361,15 @@ Element render_spectrum_bar(const AppState &s) {
             count = 1;
         }
 
-        float sum = 0.0f;
-        for (int j = start; j < end; j++) sum += processed[j];
+        float sum = 0.0f, psum = 0.0f;
+        for (int j = start; j < end; j++) {
+            sum += processed[j];
+            psum += peaks[j];
+        }
         float v = sum / (float)count;
         if (v > 1.0f) v = 1.0f;
+        float pv = psum / (float)count;
+        if (pv > 1.0f) pv = 1.0f;
 
         /* Use center band index for gradient */
         int i = (start + end) / 2;
@@ -347,19 +379,34 @@ Element render_spectrum_bar(const AppState &s) {
            [8*r, 8*(r+1)) of the total level */
         int total = (int)(v * (float)MAX_LEVELS + 0.5f);
         if (total > MAX_LEVELS) total = MAX_LEVELS;
+        int ptotal = (int)(pv * (float)MAX_LEVELS + 0.5f);
+        if (ptotal > MAX_LEVELS) ptotal = MAX_LEVELS;
 
         Elements col_rows;
         for (int r = rows - 1; r >= 0; r--) {
-            int slice = total - r * 8;
-            if (slice < 0) slice = 0;
-            if (slice > 8) slice = 8;
+            int bar_slice = total - r * 8;
+            if (bar_slice < 0) bar_slice = 0;
+            if (bar_slice > 8) bar_slice = 8;
+            int pk_slice = ptotal - r * 8;
+            if (pk_slice < 0) pk_slice = 0;
+            if (pk_slice > 8) pk_slice = 8;
+
+            /* The peak line wins when it is taller than the bar in this
+               row (typically the row right above the bar top) */
+            bool is_peak = (pk_slice > bar_slice);
+            int slice = is_peak ? pk_slice : bar_slice;
+
             const char *glyph = (const char*)LEVEL_BYTES[slice];
             int g_len = (slice == 0) ? 1 : 3;
             std::string gs(glyph, (size_t)g_len);
-            /* bottom rows use s_bot gradient, top row s_top */
             bool topmost = (r == rows - 1);
             if (dimmed) {
                 col_rows.push_back(text(std::move(gs)) | dim);
+            } else if (is_peak) {
+                /* bright white peak dot above the bar */
+                col_rows.push_back(
+                    color(Color::RGB(255, 255, 255),
+                          text(std::move(gs)) | bold));
             } else if (topmost) {
                 col_rows.push_back(
                     color(Color::RGB(s_top[i].r, s_top[i].g, s_top[i].b),
