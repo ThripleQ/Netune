@@ -17,14 +17,14 @@ Element render_help_screen(const AppState &s) {
         size_t pad = klen < KEYW ? KEYW - klen : 1;
         return hbox(Elements{
             text("  "),
-            text(std::string(key) + std::string(pad, ' ')) | bold,
-            text(desc),
+            theme_fg(text(std::string(key) + std::string(pad, ' ')) | bold),
+            theme_fg(text(desc)),
         });
     };
 
     auto group = [](const char *title, Elements items) {
         Elements col;
-        col.push_back(text(title) | bold | underlined);
+        col.push_back(theme_fg(text(title) | bold));
         col.push_back(text(""));
         for (auto &e : items) col.push_back(e);
         return vbox(std::move(col));
@@ -64,28 +64,25 @@ Element render_help_screen(const AppState &s) {
         entry("q / Esc",  "Quit"),
     });
 
-    auto left_col  = vbox(Elements{ nav, text(""), play });
-    auto right_col = vbox(Elements{ vol, text(""), misc });
+    /* Two columns; the filler inside each column pushes the two groups to
+       top and bottom so the columns balance visually */
+    auto left_col  = vbox(Elements{ nav, filler(), play });
+    auto right_col = vbox(Elements{ vol, filler(), misc });
     auto body = hbox(Elements{
         left_col  | flex,
         separator(),
         right_col | flex,
     });
 
-    Elements col;
-    col.push_back(body);
-    col.push_back(separator());
-    col.push_back(text(" Press ? again or Escape to close ") | dim | center);
-
-    auto help_box = vbox(std::move(col));
     auto &theme = ThemeManager::instance().current();
-    /* Full-page help: title sits above the bordered table, content
-       vertically centered, scrolls when the window is too short
+    /* Full-page help: title above the bordered table, hint below it,
+       content vertically centered, scrolls when the window is too short
        (same pattern as login screen) */
     return vbox(Elements{
         filler(),
-        text(" Help ") | bold | center,
-        help_box | border,
+        theme_accent(text(" Help ") | bold),
+        body | border,
+        text(" Press ? again or Escape to close ") | dim | center,
         filler(),
     }) | yframe | flex |
         bgcolor(Color::RGB(theme.overlay_bg.r, theme.overlay_bg.g, theme.overlay_bg.b));
