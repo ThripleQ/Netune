@@ -285,11 +285,13 @@ Element render_spectrum_bar(const AppState &s) {
 
     bool dimmed = (s.playback_state != PlaybackState::Playing);
 
-    /* ── Frequency-weighted sensitivity curve ──────────── */
+    /* ── Frequency-weighted sensitivity + smoothing ───── */
     /* Per-band exponent: low bands use sqrt (x^0.5), smoothly ramping
        to x^0.3 at the high end — high-frequency bands get progressively
-       more amplification to compensate their naturally lower energy. */
-    static float s_fall[SPECTRUM_BANDS] = {0};
+       more amplification to compensate their naturally lower energy.
+       Smoothing: slight rise (~2 frames) and a slower exponential
+       release so bars linger briefly. */
+    static float s_smooth[SPECTRUM_BANDS] = {0};
     const float FALL_SPEED = 0.24f;   /* per-frame release toward target */
     const float ATTACK_SPEED = 0.65f; /* slight rise smoothing (~2 frames) */
     float processed[SPECTRUM_BANDS];
@@ -299,12 +301,12 @@ Element render_spectrum_bar(const AppState &s) {
         if (v > 1.0f) v = 1.0f;
         float expo = 0.5f - 0.2f * (float)i / (float)bands;
         float target = powf(v, expo);
-        if (target >= s_fall[i]) {
-            s_fall[i] += (target - s_fall[i]) * ATTACK_SPEED;
+        if (target >= s_smooth[i]) {
+            s_smooth[i] += (target - s_smooth[i]) * ATTACK_SPEED;
         } else {
-            s_fall[i] += (target - s_fall[i]) * FALL_SPEED;  /* slow fall */
+            s_smooth[i] += (target - s_smooth[i]) * FALL_SPEED;
         }
-        processed[i] = s_fall[i];
+        processed[i] = s_smooth[i];
     }
 
     /* ── Sample bands → columns (average when several bands per
