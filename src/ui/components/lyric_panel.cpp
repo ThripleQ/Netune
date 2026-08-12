@@ -77,6 +77,44 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
 }
 
 /* ── Cover ───────────────────────────────────────────────── */
+
+/* Diacritics for kitty image placeholder row/col encoding.
+   From kitty's docs/rowcolumn-diacritics.txt — a fixed table, NOT
+   contiguous: index N encodes number N (0x0305=0, 0x030D=1, ...). */
+static const uint16_t kRowColDiacritics[] = {
+    0x0305, 0x030D, 0x030E, 0x0310, 0x0312, 0x033D, 0x033E, 0x033F,
+    0x0346, 0x034A, 0x034B, 0x034C, 0x0350, 0x0351, 0x0352, 0x0357,
+    0x035B, 0x0363, 0x0364, 0x0365, 0x0366, 0x0367, 0x0368, 0x0369,
+    0x036A, 0x036B, 0x036C, 0x036D, 0x036E, 0x036F, 0x0483, 0x0484,
+    0x0485, 0x0486, 0x0487, 0x0592, 0x0593, 0x0594, 0x0595, 0x0597,
+    0x0598, 0x0599, 0x059C, 0x059D, 0x059E, 0x059F, 0x05A0, 0x05A1,
+    0x05A8, 0x05A9, 0x05AB, 0x05AC, 0x05AF, 0x05C4, 0x0610, 0x0611,
+    0x0612, 0x0613, 0x0614, 0x0615, 0x0616, 0x0617, 0x0657, 0x0658,
+    0x0659, 0x065A, 0x065B, 0x065D, 0x065E, 0x06D6, 0x06D7, 0x06D8,
+    0x06D9, 0x06DA, 0x06DB, 0x06DC, 0x06DF, 0x06E0, 0x06E1, 0x06E2,
+    0x06E4, 0x06E7, 0x06E8, 0x06EB, 0x06EC, 0x0730, 0x0732, 0x0733,
+    0x0735, 0x0736, 0x073A, 0x073D, 0x073F, 0x0740, 0x0741, 0x0743,
+    0x0745, 0x0747, 0x0749, 0x074A, 0x07EB, 0x07EC, 0x07ED, 0x07EE,
+    0x07EF, 0x07F0, 0x07F1, 0x07F3, 0x0816, 0x0817, 0x0818, 0x0819,
+    0x081B, 0x081C, 0x081D, 0x081E, 0x081F, 0x0820, 0x0821, 0x0822,
+    0x0823, 0x0825, 0x0826, 0x0827, 0x0829, 0x082A, 0x082B, 0x082C,
+    0x082D, 0x0951,
+};
+#define DIACRITIC_COUNT \
+    (int)(sizeof(kRowColDiacritics) / sizeof(kRowColDiacritics[0]))
+
+static void utf8_append(std::string &s, uint32_t cp) {
+    if (cp < 0x80) {
+        s += (char)cp;
+    } else if (cp < 0x800) {
+        s += (char)(0xC0 | (cp >> 6));
+        s += (char)(0x80 | (cp & 0x3F));
+    } else {
+        s += (char)(0xE0 | (cp >> 12));
+        s += (char)(0x80 | ((cp >> 6) & 0x3F));
+        s += (char)(0x80 | (cp & 0x3F));
+    }
+}
 void cover_layout(const AppState &s, int *cw, int *dh) {
     int total = s.song_panel_width + 29;
     int w = total / 2 - 1;
@@ -121,27 +159,28 @@ static Element render_cover(const CoverData &cd, int panel_w) {
        embedding an ESC sequence in the string would make FTXUI count the
        control char in the text width and shift the whole layout. */
     if (term_gfx_active()) {
-        term_gfx_ensure(&cd, dw, dh);
+        /* row diacritics are limited by the table size */
+        int gfx_rows = dh;
+        if (gfx_rows > DIACRITIC_COUNT) gfx_rows = DIACRITIC_COUNT;
+        term_gfx_ensure(&cd, dw, gfx_rows);
         unsigned long id = term_gfx_image_id();
         if (id == 0) {
             Elements rows;
             std::string blank((size_t)dw, ' ');
-            for (int y = 0; y < dh; y++)
+            for (int y = 0; y < gfx_rows; y++)
                 rows.push_back(text(blank));
             return vbox(std::move(rows)) | center | flex;
         }
         /* 24-bit color encodes the image id: R=id&0xFF, G=(id>>8)&0xFF,
-           B=(id>>16)&0xFF. Diacritics: U+0305+row / U+0305+col (0xCC
-           0x85+n in UTF-8). */
+           B=(id>>16)&0xFF. Row/col encoded via the official diacritic
+           table (index = number). */
         Elements rows;
-        for (int y = 0; y < dh; y++) {
+        for (int y = 0; y < gfx_rows; y++) {
             std::string line;
             for (int x = 0; x < dw; x++) {
                 line += "\xf4\x8e\xbb\xae";   /* U+10EEEE placeholder */
-                line += (char)0xcc;           /* row diacritic U+0305+y */
-                line += (char)(0x85 + y);
-                line += (char)0xcc;           /* col diacritic U+0305+x */
-                line += (char)(0x85 + x);
+                utf8_append(line, kRowColDiacritics[y]);
+                utf8_append(line, kRowColDiacritics[x]);
             }
             rows.push_back(
                 text(std::move(line)) |
