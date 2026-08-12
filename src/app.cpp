@@ -2104,8 +2104,17 @@ int run_app(int argc, char **argv) {
                         term_gfx_upload(&st.cover);
                         if (!gfx_active || ++gfx_tick >= 30) {
                             gfx_tick = 0;
-                            /* place top-aligned below the 1-row top bar */
-                            printf("\x1b[2;1H");
+                            /* The cover block is centered in the lyric
+                               panel (which spans the screen below the
+                               1-row top bar, above the 2+2 spectrum and
+                               status rows) — place the image at the same
+                               centered row so it overlays the blank
+                               placeholder exactly. */
+                            int panel_h = screen.dimy() - 1 - 2 - 2;
+                            int row0 = 2;
+                            if (panel_h > dh)
+                                row0 += (panel_h - dh) / 2;
+                            printf("\x1b[%d;1H", row0);
                             term_gfx_place(cw);
                         }
                     }

@@ -92,7 +92,8 @@ void cover_layout(const AppState &s, int *cw, int *dh) {
         h = (int)(s.cover.height * w / (double)s.cover.width / step);
         if (h % 2) h++;
     }
-    if (h > 20) h = 20;   /* lyrics panel is fixed at 20 rows */
+    if (h > 20) h = 20;   /* cover height cap (keeps the panel sane on
+                             tall covers; lyrics follows the same height) */
     if (cw) *cw = w;
     if (dh) *dh = h;
 }
@@ -178,9 +179,8 @@ static Element render_cover(const CoverData &cd, int panel_w) {
 }
 
 Element render_cover_only(const AppState &s) {
-    int cw = 0, dh = 0;
-    cover_layout(s, &cw, &dh);
-    (void)dh;
+    int cw = 0;
+    cover_layout(s, &cw, NULL);
 
     if (s.cover.pixels && s.cover.width > 0 && s.cover.height > 0)
         return render_cover(s.cover, cw) | center | flex;
