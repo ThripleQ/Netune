@@ -85,17 +85,44 @@ static Element render_cover(const CoverData &cd, int panel_w) {
     int dh = cd.height * dw / cd.width;
     if (dh % 2) dh++;
     int sw = cd.width, sh = cd.height;
+
+    /* Average the source region covered by each terminal half-block
+       (box filter) instead of nearest-neighbor sampling — crisper result
+       when the stored cover is larger than the panel. */
+    auto avg = [&](int x0, int x1, int y0, int y1, uint8_t out[3]) {
+        long r = 0, g = 0, b = 0, n = 0;
+        for (int sy = y0; sy < y1; sy++) {
+            const uint8_t *row = cd.pixels + (size_t)sy * sw * 3;
+            for (int sx = x0; sx < x1; sx++) {
+                const uint8_t *p = row + sx * 3;
+                r += p[0]; g += p[1]; b += p[2]; n++;
+            }
+        }
+        if (n == 0) n = 1;
+        out[0] = (uint8_t)(r / n);
+        out[1] = (uint8_t)(g / n);
+        out[2] = (uint8_t)(b / n);
+    };
+
     Elements rows;
     for (int y = 0; y < dh; y += 2) {
         Elements cells;
         for (int x = 0; x < dw; x++) {
-            int sx = x * sw / dw;
-            int sy0 = (y    ) * sh / dh, sy1 = (y + 1) * sh / dh;
-            if (sy1 >= sh) sy1 = sy0;
-            int t = (sy0 * sw + sx) * 3, b = (sy1 * sw + sx) * 3;
+            int x0 = x * sw / dw;
+            int x1 = (x + 1) * sw / dw;
+            if (x1 <= x0) x1 = x0 + 1;
+            int y0 = y * sh / dh;
+            int y2 = (y + 2) * sh / dh;
+            if (y2 <= y0) y2 = y0 + 1;
+            int ymid = y0 + (y2 - y0) / 2;
+            if (ymid <= y0) ymid = y0 + 1;
+
+            uint8_t top[3], bot[3];
+            avg(x0, x1, y0, ymid, top);
+            avg(x0, x1, ymid, y2, bot);
             cells.push_back(bgcolor(
-                Color::RGB(cd.pixels[t], cd.pixels[t+1], cd.pixels[t+2]),
-                color(Color::RGB(cd.pixels[b], cd.pixels[b+1], cd.pixels[b+2]),
+                Color::RGB(top[0], top[1], top[2]),
+                color(Color::RGB(bot[0], bot[1], bot[2]),
                     text("\u2580"))));
         }
         rows.push_back(hbox(std::move(cells)));

@@ -129,8 +129,11 @@ int cover_load(const char *url, CoverData *out) {
         return -1;
     }
 
-    /* Store at a reasonable max. The renderer will scale on-the-fly per frame. */
-    int max_dim = 200;
+    /* Store the original image (within a sanity cap). The renderer samples
+       from it per frame, so keeping full resolution preserves detail —
+       2048px covers real-world covers (typically 300–800px) while capping
+       memory against 4K+ edge cases. */
+    int max_dim = 2048;
     int dw = (w > h) ? max_dim : (max_dim * w / h);
     int dh = (h > w) ? max_dim : (max_dim * h / w);
     if (dw < 1) dw = 1;
