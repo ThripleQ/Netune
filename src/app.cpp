@@ -2085,9 +2085,23 @@ int run_app(int argc, char **argv) {
          bool gfx_overlay_active = false;
          const void *g_placed_pixels = NULL;
          int g_placed_row0 = -1, g_placed_cw = 0, g_placed_rows = 0;
+         int g_last_dimx = -1, g_last_dimy = -1;
          while (!loop.HasQuitted()) {
              loop.RunOnceBlocking();
              if (term_gfx_active()) {
+                 /* A terminal resize may drop placed images (kitty frees
+                    sprites); clear and force a fresh upload+placement on
+                    the next frame. */
+                 if (screen.dimx() != g_last_dimx ||
+                     screen.dimy() != g_last_dimy) {
+                     term_gfx_clear();
+                     g_placed_pixels = NULL;
+                     g_placed_row0 = -1;
+                     g_placed_cw = 0;
+                     g_placed_rows = 0;
+                     g_last_dimx = screen.dimx();
+                     g_last_dimy = screen.dimy();
+                 }
                  const AppState &st = state.state();
                  bool active = st.lyric_mode && st.cover.pixels &&
                                !st.show_help && st.login_state == 0;
