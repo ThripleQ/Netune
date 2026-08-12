@@ -77,9 +77,8 @@ static void fft(float *re, float *im, int n) {
 }
 
 /* ── Public API ───────────────────────────────────────
-   Raw per-bin magnitudes, one FFT bin per band (21.5 Hz @ 44.1 kHz).
-   No band merging, no smoothing — the display layer gets the raw
-   spectrum. */
+   Raw per-bin magnitudes: band b = FFT bin b (21.5 Hz @ 44.1 kHz),
+   first SPECTRUM_BANDS bins. No band merging, no smoothing. */
 void spectrum_process(const int16_t *samples, float *bands, int band_count) {
     if (!samples || !bands || band_count > SPECTRUM_BANDS) return;
 
@@ -99,8 +98,6 @@ void spectrum_process(const int16_t *samples, float *bands, int band_count) {
     /* Normalization: full-scale sine → ~1.0 */
     float norm = 4.0f / (32767.0f * n);
 
-    int half = n / 2;
-    if (band_count > half + 1) band_count = half + 1;
     for (int i = 0; i < band_count; i++) {
         float v = sqrtf(re[i] * re[i] + im[i] * im[i]) * norm;
         if (v > 1.0f) v = 1.0f;
