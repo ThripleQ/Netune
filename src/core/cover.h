@@ -20,3 +20,11 @@ int cover_load(const char *url, CoverData *out);
 
 /* Free cover pixel data. */
 void cover_free(CoverData *cd);
+
+/* ── Terminal cell metrics ──────────────────────────
+   Probed once at startup via CSI queries (14t/18t) so the character
+   renderer can sample cover pixels at the true cell aspect ratio
+   (cells are often not 2:1, e.g. Adwaita Mono). Falls back to 2:1. */
+void cover_cell_probe(void);
+int  cover_cell_width(void);   /* px, default 8  */
+int  cover_cell_height(void);  /* px, default 16 */

@@ -160,3 +160,73 @@ void cover_free(CoverData *cd) {
     free(cd->pixels);
     memset(cd, 0, sizeof(*cd));
 }
+
+/* ── Terminal cell metrics ────────────────────────── */
+static int g_cell_w = 8, g_cell_h = 16;  /* fallback: classic 2:1 */
+
+int cover_cell_width(void)  { return g_cell_w; }
+int cover_cell_height(void) { return g_cell_h; }
+
+/* Probe the terminal's cell size in pixels. Sends CSI 14t (pixel size)
+   and 18t (text rows/cols), reads the responses from stdin with a
+   timeout. Must run before FTXUI enters raw mode. Non-fatal: keeps the
+   2:1 default on terminals that don't answer. */
+#ifndef _WIN32
+#include <termios.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <unistd.h>
+#endif
+void cover_cell_probe(void) {
+#ifndef _WIN32
+    if (!isatty(STDIN_FILENO)) return;
+
+    struct termios old_tio, raw_tio;
+    if (tcgetattr(STDIN_FILENO, &old_tio) != 0) return;
+    raw_tio = old_tio;
+    raw_tio.c_lflag &= ~(ICANON | ECHO);
+    raw_tio.c_cc[VMIN] = 0;
+    raw_tio.c_cc[VTIME] = 0;
+    tcsetattr(STDIN_FILENO, TCSANOW, &raw_tio);
+
+    int old_fl = fcntl(STDIN_FILENO, F_GETFL, 0);
+    fcntl(STDIN_FILENO, F_SETFL, old_fl | O_NONBLOCK);
+
+    write(STDOUT_FILENO, "\x1b[14t\x1b[18t", 8);
+    fflush(stdout);
+
+    int px_w = 0, px_h = 0, rows = 0, cols = 0;
+    char buf[128];
+    struct pollfd pfd = { STDIN_FILENO, POLLIN, 0 };
+    for (int i = 0; i < 20 && (px_h == 0 || rows == 0); i++) {
+        if (poll(&pfd, 1, 50) <= 0) continue;
+        ssize_t r = read(STDIN_FILENO, buf, sizeof(buf) - 1);
+        if (r <= 0) continue;
+        buf[r] = '\0';
+        /* responses: CSI 4;<h>;<w>t  and  CSI 8;<rows>;<cols>t */
+        char *p = buf;
+        while ((p = strchr(p, '\x1b')) != NULL) {
+            if (p[1] == '[') {
+                int a = 0, b = 0;
+                if (sscanf(p + 2, "4;%d;%dt", &a, &b) == 2) {
+                    px_h = a; px_w = b;
+                } else if (sscanf(p + 2, "8;%d;%dt", &a, &b) == 2) {
+                    rows = a; cols = b;
+                }
+            }
+            p++;
+        }
+    }
+
+    tcsetattr(STDIN_FILENO, TCSANOW, &old_tio);
+    fcntl(STDIN_FILENO, F_SETFL, old_fl);
+
+    if (px_w > 0 && px_h > 0 && rows > 0 && cols > 0) {
+        g_cell_w = px_w / cols;
+        g_cell_h = px_h / rows;
+        if (g_cell_w < 1) g_cell_w = 1;
+        if (g_cell_h < 1) g_cell_h = 1;
+        LOG_INFO("Terminal cell: %d x %d px (probed)", g_cell_w, g_cell_h);
+    }
+#endif
+}

@@ -1201,6 +1201,10 @@ int run_app(int argc, char **argv) {
     log_init(log_path);
     LOG_INFO("Netune v2.0.0 starting");
 
+    /* Probe terminal cell size (before FTXUI takes over the terminal)
+       so the character cover renderer can keep aspect ratio on any font */
+    cover_cell_probe();
+
     /* ── Ensure default data tree exists (XDG_CONFIG_HOME/netune/data/) ── */
     /* Rebuilds config.json / themes / layouts / keybindings if missing.
        No scanning, no fallback lookups elsewhere. */

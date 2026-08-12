@@ -85,7 +85,11 @@ void cover_layout(const AppState &s, int *cw, int *dh) {
     if (s.cover.width > 0 && w > s.cover.width) w = s.cover.width;
     int h = 0;
     if (s.cover.pixels && s.cover.width > 0 && s.cover.height > 0) {
-        h = s.cover.height * w / s.cover.width;
+        /* rows = source pixel rows / step, where step = cell_h/cell_w
+           (source rows consumed per terminal row) */
+        double step = (double)cover_cell_height() / cover_cell_width();
+        if (step < 1.0) step = 1.0;
+        h = (int)(s.cover.height * w / (double)s.cover.width / step);
         if (h % 2) h++;
     }
     if (h > 20) h = 20;   /* lyrics panel is fixed at 20 rows */
@@ -99,7 +103,14 @@ static Element render_cover(const CoverData &cd, int panel_w) {
 
     int dw = panel_w;
     if (dw > cd.width) dw = cd.width;
-    int dh = cd.height * dw / cd.width;
+
+    /* Source pixel rows consumed per terminal row, from the probed cell
+       aspect (2:1 cell → step 2, the classic half-block case). This keeps
+       the rendered cover square on any terminal font. */
+    double step = (double)cover_cell_height() / cover_cell_width();
+    if (step < 1.0) step = 1.0;
+    int dh = (int)(cd.height * dw / (double)cd.width / step);
+    if (dh < 1) dh = 1;
     if (dh % 2) dh++;
 
     /* Terminal supports the kitty graphics protocol: reserve the same
@@ -134,21 +145,26 @@ static Element render_cover(const CoverData &cd, int panel_w) {
     };
 
     Elements rows;
-    for (int y = 0; y < dh; y += 2) {
+    for (int y = 0; y < dh; y++) {
+        double y0f = y * step;
+        double midf = y0f + step / 2.0;
+        double y1f = y0f + step;
+        int y0 = (int)y0f;
+        int ymid = (int)midf;
+        int y1 = (int)y1f + 1;   /* ceil */
+        if (y0 >= sh) y0 = sh - 1;
+        if (ymid <= y0) ymid = y0 + 1;
+        if (y1 > sh) y1 = sh;
+        if (y1 <= ymid) y1 = ymid + 1;
+
         Elements cells;
         for (int x = 0; x < dw; x++) {
             int x0 = x * sw / dw;
             int x1 = (x + 1) * sw / dw;
             if (x1 <= x0) x1 = x0 + 1;
-            int y0 = y * sh / dh;
-            int y2 = (y + 2) * sh / dh;
-            if (y2 <= y0) y2 = y0 + 1;
-            int ymid = y0 + (y2 - y0) / 2;
-            if (ymid <= y0) ymid = y0 + 1;
-
             uint8_t top[3], bot[3];
             avg(x0, x1, y0, ymid, top);
-            avg(x0, x1, ymid, y2, bot);
+            avg(x0, x1, ymid, y1, bot);
             cells.push_back(bgcolor(
                 Color::RGB(top[0], top[1], top[2]),
                 color(Color::RGB(bot[0], bot[1], bot[2]),
