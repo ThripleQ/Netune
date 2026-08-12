@@ -2078,11 +2078,46 @@ int run_app(int argc, char **argv) {
         }
     });
 
-    /* The cover as a raw image is rendered inside the FTXUI layout via
-       Unicode placeholder cells (see render_cover in lyric_panel.cpp) —
-       no frame hook, cursor placement or cleanup needed; FTXUI text
-       handling moves/removes the image automatically. */
-    screen.Loop(component);
+    /* scoped so the Loop destructor (terminal restore) runs BEFORE the
+       shutdown sequence below — a crash in shutdown must not leave the
+       terminal in alt-screen limbo */
+    {
+        ftxui::Loop loop(&screen, component);
+        /* Raw-image cover overlay (kitty graphics protocol):
+           - upload once per cover (fingerprinted inside term_gfx)
+           - re-place every ~0.5s: terminal resizes / fullscreen toggles /
+             window switches can drop or relocate placed images, and a
+             periodic re-place heals that with no fragile resize detection
+           - clear when leaving lyric mode (edge-triggered) */
+        bool gfx_active = false;
+        int  gfx_tick = 0;
+        while (!loop.HasQuitted()) {
+            loop.RunOnceBlocking();
+            if (term_gfx_active()) {
+                const AppState &st = state.state();
+                bool active = st.lyric_mode && st.cover.pixels &&
+                              !st.show_help && st.login_state == 0;
+                if (active) {
+                    int cw = 0, dh = 0;
+                    cover_layout(st, &cw, &dh);
+                    if (cw > 0 && dh > 0) {
+                        term_gfx_upload(&st.cover);
+                        if (!gfx_active || ++gfx_tick >= 30) {
+                            gfx_tick = 0;
+                            /* place top-aligned below the 1-row top bar */
+                            printf("\x1b[2;1H");
+                            term_gfx_place(cw);
+                        }
+                    }
+                    gfx_active = true;
+                } else if (gfx_active) {
+                    term_gfx_clear();
+                    gfx_active = false;
+                }
+            }
+            fflush(stdout);
+        }
+    }
 
     LOG_INFO("Shutting down");
     timer_active.store(false);
