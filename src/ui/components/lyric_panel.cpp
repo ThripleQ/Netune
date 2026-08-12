@@ -285,11 +285,15 @@ Element render_spectrum_bar(const AppState &s) {
 
     bool dimmed = (s.playback_state != PlaybackState::Playing);
 
-    /* ── No post-processing: raw per-bin magnitude, linear to height ── */
+    /* ── No post-processing except a linear sensitivity gain ── */
+    /* Plain multiplier: a -24 dBFS bin (6%) reaches ~25% height, full
+       scale clips at 100%. No curves, no smoothing. */
+    const float SENS_GAIN = 4.0f;
     float processed[SPECTRUM_BANDS];
     for (int i = 0; i < bands; i++) {
         float v = s.spectrum[i];
         if (v < 0.0f) v = 0.0f;
+        v *= SENS_GAIN;
         if (v > 1.0f) v = 1.0f;
         processed[i] = v;
     }
