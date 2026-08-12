@@ -82,6 +82,7 @@ void cover_layout(const AppState &s, int *cw, int *dh) {
     int w = total / 2 - 1;
     if (w < 12) w = 12;
     if (w > 60) w = 60;
+    if (s.cover.width > 0 && w > s.cover.width) w = s.cover.width;
     int h = 0;
     if (s.cover.pixels && s.cover.width > 0 && s.cover.height > 0) {
         h = s.cover.height * w / s.cover.width;
