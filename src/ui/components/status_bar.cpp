@@ -1,8 +1,35 @@
 #include "ui/components/status_bar.h"
 #include "ui/components/theme_util.h"
+#include <ftxui/screen/string.hpp>
 #include <cstdio>
 #include <string>
 using namespace ftxui;
+
+/* Take a max_w-column window of s starting at column col_offset, padded
+   with spaces on the right. UTF-8 aware (CJK glyphs count as 2). */
+static std::string window_at(const std::string &s, int col_offset, int max_w) {
+    std::string out;
+    int w = 0;
+    int cur_col = 0;
+    for (size_t i = 0; i < s.size(); ) {
+        unsigned char c = (unsigned char)s[i];
+        int len = (c < 0x80) ? 1 : (c < 0xE0) ? 2 : (c < 0xF0) ? 3 : 4;
+        if (i + len > s.size()) break;
+        int cw = string_width(s.substr(i, (size_t)len));
+        if (cur_col + cw > col_offset + max_w) break;
+        if (cur_col >= col_offset) {
+            out += s.substr(i, (size_t)len);
+            w += cw;
+        }
+        cur_col += cw;
+        i += (size_t)len;
+    }
+    while (w < max_w) {
+        out += ' ';
+        w++;
+    }
+    return out;
+}
 
 Element render_status_bar(const AppState &s) {
     /* ── State info row ────────────────────────────── */
@@ -59,10 +86,25 @@ Element render_status_bar(const AppState &s) {
                  state_str.c_str(), loop_str, time_str.c_str(), s.volume);
         top_line = buf;
     } else {
-        snprintf(buf, sizeof(buf), " %s  %s  %s  V:%d  %s",
-                 state_str.c_str(), loop_str, time_str.c_str(),
-                 s.volume, song_row.c_str());
+        snprintf(buf, sizeof(buf), " %s  %s  %s  V:%d  ",
+                 state_str.c_str(), loop_str, time_str.c_str(), s.volume);
         top_line = buf;
+        int prefix_w = string_width(top_line);
+        int avail = s.top_row_width - 1 - prefix_w;   /* one column margin */
+        int song_w = string_width(song_row);
+        if (song_w <= avail) {
+            /* fits — show the full title */
+            top_line += song_row;
+        } else {
+            /* too long — marquee: scroll 1 column per 4 frames, looping
+               with a small gap so the title re-enters from the right */
+            const int GAP = 4;
+            static int s_tick = 0;
+            s_tick++;
+            std::string loop_row = song_row + std::string(GAP, ' ');
+            int off = (s_tick / 4) % (song_w + GAP);
+            top_line += window_at(loop_row, off, avail);
+        }
     }
 
     float gv = s.progress;
