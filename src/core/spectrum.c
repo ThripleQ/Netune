@@ -142,7 +142,10 @@ void spectrum_process(const int16_t *samples, float *bands, int band_count) {
        So norm = 1 / (32767 * n / 4) = 4 / (32767 * n). */
     float norm = 4.0f / (32767.0f * n);
 
-    /* Merge bins into bands (quadratic spacing) */
+    /* Merge bins into bands. RMS (power average) — an arithmetic mean
+       would let the quiet bins inside a wide log band dilute the strong
+       ones (1 strong + 9 quiet → /10), flattening the high end into
+       nothing. RMS keeps the energy of the prominent bins. */
     for (int b = 0; b < band_count; b++) {
         int start = s_band_start[b];
         int end   = s_band_start[b + 1];
@@ -151,14 +154,14 @@ void spectrum_process(const int16_t *samples, float *bands, int band_count) {
             bands[b] = 0.0f;
             continue;
         }
-        double sum = 0.0;
+        double sum_sq = 0.0;
         for (int i = start; i < end; i++) {
-            sum += mags[i];
+            sum_sq += (double)mags[i] * mags[i];
         }
-        float avg = (float)(sum / count) * norm;
+        float rms = sqrtf((float)(sum_sq / count)) * norm;
         /* Clamp to [0, 1] */
-        if (avg > 1.0f) avg = 1.0f;
-        if (avg < 0.0f) avg = 0.0f;
-        bands[b] = avg;
+        if (rms > 1.0f) rms = 1.0f;
+        if (rms < 0.0f) rms = 0.0f;
+        bands[b] = rms;
     }
 }
