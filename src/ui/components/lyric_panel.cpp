@@ -285,9 +285,10 @@ Element render_spectrum_bar(const AppState &s) {
 
     bool dimmed = (s.playback_state != PlaybackState::Playing);
 
-    /* ── Sensitivity curve y = 10x³ ────────────────────── */
-    /* Bars snap up instantly and ease back down (exponential release)
-       so the spectrum lingers briefly after each sound. */
+    /* ── Sensitivity: sqrt curve (no other post-processing) ── */
+    /* sqrt amplifies quiet bins (a bin at 6% → 25% height) while full
+       scale stays at 100% — responsive to quiet sounds without hard
+       clipping of loud ones. */
     static float s_fall[SPECTRUM_BANDS] = {0};
     const float FALL_SPEED = 0.24f;   /* per-frame release toward target */
     float processed[SPECTRUM_BANDS];
@@ -295,8 +296,7 @@ Element render_spectrum_bar(const AppState &s) {
         float v = s.spectrum[i];
         if (v < 0.0f) v = 0.0f;
         if (v > 1.0f) v = 1.0f;
-        float target = 10.0f * v * v * v;
-        if (target > 1.0f) target = 1.0f;
+        float target = sqrtf(v);
         if (target >= s_fall[i]) {
             s_fall[i] = target;                     /* instant attack */
         } else {
