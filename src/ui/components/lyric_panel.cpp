@@ -257,11 +257,11 @@ Element render_spectrum_bar(const AppState &s) {
     /* ── Smoothing & peak state ──────────────────────── */
     static float s_height[SPECTRUM_BANDS] = {0};
     static float s_peak[SPECTRUM_BANDS]   = {0};
-    /* Fast attack / moderately fast release keeps it responsive — the
-       peak line carries the lingering tail instead. High bands decay a
-       bit faster so the whole bar stays lively. */
+    /* Fast attack AND fast release — the bar snaps up and falls back
+       immediately so every beat visibly jumps from low; the lingering
+       tail is carried by the peak line alone. */
     static const float ALPHA_UP[4]   = {0.80f, 0.80f, 0.75f, 0.70f};
-    static const float ALPHA_DOWN[4] = {0.13f, 0.15f, 0.18f, 0.22f};
+    static const float ALPHA_DOWN[4] = {0.35f, 0.38f, 0.42f, 0.48f};
     /* Logarithmic bands have far less energy at the top end; boost the
        high zones so the right side of the bar is actually visible. */
     static const float ZONE_GAIN_DB[4] = {0.0f, 5.0f, 9.0f, 13.0f};
