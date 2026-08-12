@@ -291,6 +291,7 @@ Element render_spectrum_bar(const AppState &s) {
        more amplification to compensate their naturally lower energy. */
     static float s_fall[SPECTRUM_BANDS] = {0};
     const float FALL_SPEED = 0.24f;   /* per-frame release toward target */
+    const float ATTACK_SPEED = 0.65f; /* slight rise smoothing (~2 frames) */
     float processed[SPECTRUM_BANDS];
     for (int i = 0; i < bands; i++) {
         float v = s.spectrum[i];
@@ -299,7 +300,7 @@ Element render_spectrum_bar(const AppState &s) {
         float expo = 0.5f - 0.2f * (float)i / (float)bands;
         float target = powf(v, expo);
         if (target >= s_fall[i]) {
-            s_fall[i] = target;                     /* instant attack */
+            s_fall[i] += (target - s_fall[i]) * ATTACK_SPEED;
         } else {
             s_fall[i] += (target - s_fall[i]) * FALL_SPEED;  /* slow fall */
         }
