@@ -9,7 +9,6 @@
 #include <string>
 #include <algorithm>
 #include <cmath>
-#include <cstring>
 using namespace ftxui;
 
 static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
@@ -226,7 +225,7 @@ Element render_lyric_panel(const AppState &s) {
     }) | center);
 }
 
-/* ── Spectrum bar (2 rows, 16-level bars, gradient) ── */
+/* ── Spectrum bar (adaptive: 2-4 rows, full terminal width) ── */
 Element render_spectrum_bar(const AppState &s) {
     /* UTF-8 bytes for each level: 0=space, 1-8=▁▂▃▄▅▆▇█ */
     static const char LEVEL_BYTES[9][4] = {
@@ -245,8 +244,15 @@ Element render_spectrum_bar(const AppState &s) {
     int total_w = s.song_panel_width + 29;
     if (total_w < 8) total_w = 8;
 
+    /* Adaptive height: one row per ~12 terminal rows, 2-4 rows total.
+       Each row adds 8 more levels of resolution. */
+    int rows = s.screen_height / 12;
+    if (rows < 2) rows = 2;
+    if (rows > 4) rows = 4;
+    const int MAX_LEVELS = rows * 8;
+
     int bands = SPECTRUM_BANDS;
-    int cols = (total_w < bands) ? total_w : bands;
+    int cols = total_w;
 
     /* ── Smoothing state & zone attack/release ────────── */
     static float s_height[SPECTRUM_BANDS] = {0};
@@ -283,7 +289,7 @@ Element render_spectrum_bar(const AppState &s) {
     }
 
     bool dimmed = (s.playback_state != PlaybackState::Playing);
-    const float MAX_HEIGHT = 16.0f;  /* 2 rows × 8 levels each */
+    const float MAX_HEIGHT = (float)MAX_LEVELS;
 
     /* ── Per-band: dB → height → zone smoothing ────── */
     float processed[SPECTRUM_BANDS];
@@ -296,7 +302,7 @@ Element render_spectrum_bar(const AppState &s) {
         if (d < -60.0f) d = -60.0f;
         if (d > 0.0f) d = 0.0f;
 
-        /* dB → height in [0, 16] */
+        /* dB → height in [0, MAX_HEIGHT] */
         float target = (d + 60.0f) / 60.0f * MAX_HEIGHT;
         if (target < 0.0f) target = 0.0f;
         if (target > MAX_HEIGHT) target = MAX_HEIGHT;
@@ -312,14 +318,21 @@ Element render_spectrum_bar(const AppState &s) {
         if (processed[i] > 1.0f) processed[i] = 1.0f;
     }
 
-    /* ── Downsample to columns and render ────────────── */
+    /* ── Sample bands → columns (average when several bands per
+          column, nearest band when more columns than bands) ── */
     Elements columns;
     for (int ci = 0; ci < cols; ci++) {
         int start = ci * bands / cols;
         int end = (ci + 1) * bands / cols;
         if (end > bands) end = bands;
         int count = end - start;
-        if (count <= 0) continue;
+        if (count < 1) {
+            /* wider terminal than bands: repeat the nearest band */
+            start = (ci * bands / cols);
+            end = start + 1;
+            if (start >= bands) start = bands - 1;
+            count = 1;
+        }
 
         float sum = 0.0f;
         for (int j = start; j < end; j++) sum += processed[j];
@@ -328,41 +341,41 @@ Element render_spectrum_bar(const AppState &s) {
 
         /* Use center band index for gradient */
         int i = (start + end) / 2;
+        if (i >= bands) i = bands - 1;
 
-        /* Map to 2-row bar */
-        int total = (int)(v * 16.0f + 0.5f);
-        if (total > 16) total = 16;
-        int bot = (total > 8) ? 8 : total;
-        int top = (total > 8) ? (total - 8) : 0;
+        /* Map to N-row bar: row r (from bottom) shows the slice
+           [8*r, 8*(r+1)) of the total level */
+        int total = (int)(v * (float)MAX_LEVELS + 0.5f);
+        if (total > MAX_LEVELS) total = MAX_LEVELS;
 
-        char top_str[4], bot_str[4];
-        int top_len = LEVEL_BYTES[top][0] == 0x20 ? 1 : 3;
-        int bot_len = LEVEL_BYTES[bot][0] == 0x20 ? 1 : 3;
-        memcpy(top_str, LEVEL_BYTES[top], (size_t)top_len);
-        top_str[top_len] = '\0';
-        memcpy(bot_str, LEVEL_BYTES[bot], (size_t)bot_len);
-        bot_str[bot_len] = '\0';
-
-        Element col_elem;
-        if (dimmed) {
-            col_elem = vbox({
-                text(std::string(top_str)) | dim,
-                text(std::string(bot_str)) | dim,
-            });
-        } else {
-            col_elem = vbox({
-                color(Color::RGB(s_top[i].r, s_top[i].g, s_top[i].b),
-                      text(std::string(top_str))),
-                color(Color::RGB(s_bot[i].r, s_bot[i].g, s_bot[i].b),
-                      text(std::string(bot_str))),
-            });
+        Elements col_rows;
+        for (int r = rows - 1; r >= 0; r--) {
+            int slice = total - r * 8;
+            if (slice < 0) slice = 0;
+            if (slice > 8) slice = 8;
+            const char *glyph = (const char*)LEVEL_BYTES[slice];
+            int g_len = (slice == 0) ? 1 : 3;
+            std::string gs(glyph, (size_t)g_len);
+            /* bottom rows use s_bot gradient, top row s_top */
+            bool topmost = (r == rows - 1);
+            if (dimmed) {
+                col_rows.push_back(text(std::move(gs)) | dim);
+            } else if (topmost) {
+                col_rows.push_back(
+                    color(Color::RGB(s_top[i].r, s_top[i].g, s_top[i].b),
+                          text(std::move(gs))));
+            } else {
+                col_rows.push_back(
+                    color(Color::RGB(s_bot[i].r, s_bot[i].g, s_bot[i].b),
+                          text(std::move(gs))));
+            }
         }
-        columns.push_back(std::move(col_elem));
+        columns.push_back(vbox(std::move(col_rows)));
     }
 
     return hbox({
         filler(),
         hbox(std::move(columns)),
         filler(),
-    }) | size(HEIGHT, EQUAL, 2);
+    }) | size(HEIGHT, EQUAL, rows);
 }

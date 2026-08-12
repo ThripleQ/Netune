@@ -1439,6 +1439,7 @@ int run_app(int argc, char **argv) {
         const AppState &s = state.state();
 
         state.set_song_panel_width(screen.dimx() - 29);
+        state.set_screen_height(screen.dimy());
         state.set_top_row_width(screen.dimx());
 
         /* Login polling: every ~2s while waiting for QR scan;
