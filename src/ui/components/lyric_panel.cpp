@@ -257,15 +257,16 @@ Element render_spectrum_bar(const AppState &s) {
     /* ── Smoothing & peak state ──────────────────────── */
     static float s_height[SPECTRUM_BANDS] = {0};
     static float s_peak[SPECTRUM_BANDS]   = {0};
-    /* Fast attack / slow release gives the "punchy" bounce; high bands
-       decay a bit faster so the whole bar stays lively. */
+    /* Fast attack / moderately fast release keeps it responsive — the
+       peak line carries the lingering tail instead. High bands decay a
+       bit faster so the whole bar stays lively. */
     static const float ALPHA_UP[4]   = {0.80f, 0.80f, 0.75f, 0.70f};
-    static const float ALPHA_DOWN[4] = {0.055f, 0.07f, 0.09f, 0.12f};
+    static const float ALPHA_DOWN[4] = {0.13f, 0.15f, 0.18f, 0.22f};
     /* Logarithmic bands have far less energy at the top end; boost the
        high zones so the right side of the bar is actually visible. */
     static const float ZONE_GAIN_DB[4] = {0.0f, 5.0f, 9.0f, 13.0f};
     /* Peak line decays slower than the bar (per-frame level drop) */
-    const float PEAK_DECAY = 1.5f;
+    const float PEAK_DECAY = 2.2f;
 
     /* ── Gradient LUT ─────────────────────────────────── */
     static struct { uint8_t r, g, b; } s_bot[SPECTRUM_BANDS], s_top[SPECTRUM_BANDS];
