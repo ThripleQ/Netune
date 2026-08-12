@@ -75,6 +75,103 @@ static threadpool_t *g_thread_pool = NULL;
 
 static volatile bool g_running = true;
 
+/* ── Event → key name ────────────────────────────────
+   Maps a raw FTXUI event to the canonical key name used by
+   the keybinding table ("up", "ctrl+n", "f5", "j", ...).
+   Returns empty string for events that are NOT keys:
+   mouse, cursor updates, IME text (multi-byte UTF-8), etc.
+   ──────────────────────────────────────────────────── */
+static std::string event_to_key_name(const ftxui::Event &event) {
+    /* ── Navigation / editing keys ── */
+    if (event == ftxui::Event::ArrowUp)        return "up";
+    if (event == ftxui::Event::ArrowDown)      return "down";
+    if (event == ftxui::Event::ArrowLeft)      return "left";
+    if (event == ftxui::Event::ArrowRight)     return "right";
+    if (event == ftxui::Event::ArrowUpCtrl)    return "ctrl+up";
+    if (event == ftxui::Event::ArrowDownCtrl)  return "ctrl+down";
+    if (event == ftxui::Event::ArrowLeftCtrl)  return "ctrl+left";
+    if (event == ftxui::Event::ArrowRightCtrl) return "ctrl+right";
+    if (event == ftxui::Event::Backspace)      return "backspace";
+    if (event == ftxui::Event::Delete)         return "delete";
+    if (event == ftxui::Event::Return)         return "enter";
+    if (event == ftxui::Event::Escape)         return "escape";
+    if (event == ftxui::Event::Tab)            return "tab";
+    if (event == ftxui::Event::TabReverse)     return "shift+tab";
+    if (event == ftxui::Event::Insert)         return "insert";
+    if (event == ftxui::Event::Home)           return "home";
+    if (event == ftxui::Event::End)            return "end";
+    if (event == ftxui::Event::PageUp)         return "pageup";
+    if (event == ftxui::Event::PageDown)       return "pagedown";
+
+    /* ── Function keys ── */
+    if (event == ftxui::Event::F1)  return "f1";
+    if (event == ftxui::Event::F2)  return "f2";
+    if (event == ftxui::Event::F3)  return "f3";
+    if (event == ftxui::Event::F4)  return "f4";
+    if (event == ftxui::Event::F5)  return "f5";
+    if (event == ftxui::Event::F6)  return "f6";
+    if (event == ftxui::Event::F7)  return "f7";
+    if (event == ftxui::Event::F8)  return "f8";
+    if (event == ftxui::Event::F9)  return "f9";
+    if (event == ftxui::Event::F10) return "f10";
+    if (event == ftxui::Event::F11) return "f11";
+    if (event == ftxui::Event::F12) return "f12";
+
+    /* ── Letters with modifiers (a-z) ──
+       FTXUI defines a/A/CtrlA/AltA/CtrlAltA per letter. Build the
+       canonical name via a lookup table to keep this readable. */
+    struct KeyTriple {
+        const ftxui::Event *ctrl, *alt, *ctrlalt;
+        char letter;
+    };
+    /* (macro-free table — each row: Ctrl event, Alt event, CtrlAlt event, letter) */
+    const KeyTriple keys[] = {
+        {&ftxui::Event::CtrlA, &ftxui::Event::AltA, &ftxui::Event::CtrlAltA, 'a'},
+        {&ftxui::Event::CtrlB, &ftxui::Event::AltB, &ftxui::Event::CtrlAltB, 'b'},
+        {&ftxui::Event::CtrlC, &ftxui::Event::AltC, &ftxui::Event::CtrlAltC, 'c'},
+        {&ftxui::Event::CtrlD, &ftxui::Event::AltD, &ftxui::Event::CtrlAltD, 'd'},
+        {&ftxui::Event::CtrlE, &ftxui::Event::AltE, &ftxui::Event::CtrlAltE, 'e'},
+        {&ftxui::Event::CtrlF, &ftxui::Event::AltF, &ftxui::Event::CtrlAltF, 'f'},
+        {&ftxui::Event::CtrlG, &ftxui::Event::AltG, &ftxui::Event::CtrlAltG, 'g'},
+        {&ftxui::Event::CtrlH, &ftxui::Event::AltH, &ftxui::Event::CtrlAltH, 'h'},
+        {&ftxui::Event::CtrlI, &ftxui::Event::AltI, &ftxui::Event::CtrlAltI, 'i'},
+        {&ftxui::Event::CtrlJ, &ftxui::Event::AltJ, &ftxui::Event::CtrlAltJ, 'j'},
+        {&ftxui::Event::CtrlK, &ftxui::Event::AltK, &ftxui::Event::CtrlAltK, 'k'},
+        {&ftxui::Event::CtrlL, &ftxui::Event::AltL, &ftxui::Event::CtrlAltL, 'l'},
+        {&ftxui::Event::CtrlM, &ftxui::Event::AltM, &ftxui::Event::CtrlAltM, 'm'},
+        {&ftxui::Event::CtrlN, &ftxui::Event::AltN, &ftxui::Event::CtrlAltN, 'n'},
+        {&ftxui::Event::CtrlO, &ftxui::Event::AltO, &ftxui::Event::CtrlAltO, 'o'},
+        {&ftxui::Event::CtrlP, &ftxui::Event::AltP, &ftxui::Event::CtrlAltP, 'p'},
+        {&ftxui::Event::CtrlQ, &ftxui::Event::AltQ, &ftxui::Event::CtrlAltQ, 'q'},
+        {&ftxui::Event::CtrlR, &ftxui::Event::AltR, &ftxui::Event::CtrlAltR, 'r'},
+        {&ftxui::Event::CtrlS, &ftxui::Event::AltS, &ftxui::Event::CtrlAltS, 's'},
+        {&ftxui::Event::CtrlT, &ftxui::Event::AltT, &ftxui::Event::CtrlAltT, 't'},
+        {&ftxui::Event::CtrlU, &ftxui::Event::AltU, &ftxui::Event::CtrlAltU, 'u'},
+        {&ftxui::Event::CtrlV, &ftxui::Event::AltV, &ftxui::Event::CtrlAltV, 'v'},
+        {&ftxui::Event::CtrlW, &ftxui::Event::AltW, &ftxui::Event::CtrlAltW, 'w'},
+        {&ftxui::Event::CtrlX, &ftxui::Event::AltX, &ftxui::Event::CtrlAltX, 'x'},
+        {&ftxui::Event::CtrlY, &ftxui::Event::AltY, &ftxui::Event::CtrlAltY, 'y'},
+        {&ftxui::Event::CtrlZ, &ftxui::Event::AltZ, &ftxui::Event::CtrlAltZ, 'z'},
+    };
+    for (const auto &k : keys) {
+        if (event == *k.ctrl)    return std::string("ctrl+") + k.letter;
+        if (event == *k.alt)     return std::string("alt+") + k.letter;
+        if (event == *k.ctrlalt) return std::string("ctrl+alt+") + k.letter;
+    }
+
+    /* ── Plain printable character (single byte ASCII) ── */
+    if (event.is_character()) {
+        const std::string &ch = event.character();
+        if (ch.size() == 1 && (unsigned char)ch[0] >= 32 && (unsigned char)ch[0] < 127)
+            return (ch == " ") ? "space" : ch;
+        /* multi-byte UTF-8 (IME text): not a key */
+        return "";
+    }
+
+    /* everything else (mouse, cursor, custom) is not a key */
+    return "";
+}
+
 /* ── Seek accumulation ────────────────────────────── */
 /* Press: accumulate. Release (>150ms idle): fire once. */
 static int g_seek_accum = 0;
@@ -1343,22 +1440,21 @@ int run_app(int argc, char **argv) {
             state.set_seek_target_progress(0.0f);
         }
 
+        /* ── Input modes accept characters (IME text) directly ──
+           Character events (incl. multi-byte UTF-8) keep their raw text
+           so the search boxes below can append them. Non-input modes
+           map keys via event_to_key_name() (IME text is filtered out). */
+        const AppState &cur = state.state();
+        bool input_mode = (cur.top_search_active && !cur.lyric_mode) ||
+                          (cur.search_active && cur.music_mode != MusicMode::Netease);
         std::string ev_key;
-        if (event == ftxui::Event::Backspace) { ev_key = "backspace"; }
-        else if (event == ftxui::Event::Tab) { ev_key = "tab"; }
-        else if (event == ftxui::Event::Return) { ev_key = "enter"; }
-        else if (event == ftxui::Event::Escape) { ev_key = "escape"; }
-        else if (event == ftxui::Event::ArrowUp) { ev_key = "up"; }
-        else if (event == ftxui::Event::ArrowDown) { ev_key = "down"; }
-        else if (event == ftxui::Event::ArrowLeft) { ev_key = "left"; }
-        else if (event == ftxui::Event::ArrowRight) { ev_key = "right"; }
-        else if (event.is_character()) {
+        if (input_mode && event.is_character()) {
             ev_key = event.character();
             if (ev_key == " ") ev_key = "space";
+        } else {
+            ev_key = event_to_key_name(event);
         }
         if (ev_key.empty()) return false;
-
-        const AppState &cur = state.state();
 
         /* ── Lyrics mode: Esc to close ── */
         if (cur.lyric_mode && ev_key == "escape") {
@@ -1538,10 +1634,9 @@ int run_app(int argc, char **argv) {
                 }
                 return true;
             }
-            /* regular ASCII or UTF-8 character: append to query */
-            bool is_ascii = (ev_key.size() == 1 && ev_key[0] >= 32 && ev_key[0] < 127);
-            bool is_utf8  = (ev_key.size() > 1 && ((unsigned char)ev_key[0] & 0x80));
-            if (is_ascii || is_utf8) {
+            /* character (ASCII or UTF-8 from IME): append to query.
+               (input_mode guarantees ev_key is a character here) */
+            {
                 std::string ch = ev_key;
                 if (ev_key == "space") ch = " ";
                 std::string q = ((side == 0) ? cur.top_left_query
@@ -1552,7 +1647,6 @@ int run_app(int argc, char **argv) {
                     StateStore::instance().set_top_right_query(q);
                     restore_search_view(q);
                 }
-                return true;
             }
             return true; /* consume all keys while top search active */
         }
@@ -1704,21 +1798,17 @@ int run_app(int argc, char **argv) {
                     search_manager_search_source("local", q.c_str(), 0);
                 return true;
             }
-            /* Regular ASCII or UTF-8 character: append to query */
-            bool is_ascii = (ev_key.size() == 1 && ev_key[0] >= 32 && ev_key[0] < 127);
-            bool is_utf8  = (ev_key.size() > 1 && ((unsigned char)ev_key[0] & 0x80));
-            if (is_ascii || is_utf8) {
+            /* character (ASCII or UTF-8 from IME): append to query.
+               (input_mode guarantees ev_key is a character here) */
+            {
                 std::string ch = ev_key;
                 if (ev_key == "space") ch = " ";
                 std::string q = cur.search_query + ch;
                 StateStore::instance().set_search_query(q);
                 StateStore::instance().set_search_results({}, 0);
                 /* scope=1 local: real-time */
-                if (cur.music_mode != MusicMode::Netease && cur.search_scope == 1) {
-                    if (q.size() == 1 || q.size() > 1)
-                        search_manager_search_source("local", q.c_str(), 0);
-                }
-                return true;
+                if (cur.music_mode != MusicMode::Netease && cur.search_scope == 1)
+                    search_manager_search_source("local", q.c_str(), 0);
             }
             return true; /* consume all keys while searching */
         }
