@@ -944,6 +944,12 @@ static void load_lyrics_for_current_song(void) {
 static void ev_track_changed(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
     load_lyrics_for_current_song();
+    /* Always clear the old cover — a track without artwork must not leave
+       the previous cover lingering (the raw-image overlay would keep
+       showing it); a new cover_url triggers a fresh download. */
+    CoverData empty = {NULL, 0, 0, 0};
+    StateStore::instance().set_cover(empty);
+    StateStore::instance().set_cover_loading(false);
     if (StateStore::instance().state().lyric_mode)
         start_cover_download(StateStore::instance().state().current_song.cover_url);
 }
@@ -2090,20 +2096,13 @@ int run_app(int argc, char **argv) {
                      cover_layout(st, &cw, &dh);
                      if (cw > 0 && dh > 0) {
                          term_gfx_upload(&st.cover);
-                         /* lyric panel starts below the 1-row top bar; the
-                            cover rows are centered in the panel's 20-row
-                            height (same math as the character fallback) */
-                         int avail = (dh > 20) ? dh : 20;
-                         int row0 = 2 + (avail - dh) / 2;
-                         /* Character-mode dh counts rows that show 2 source
-                            pixel rows each (half-block ▀). The kitty image
-                            is scaled keeping its aspect ratio (only the
-                            column count is given to place), so it ends up
-                            ~dh/2 rows tall — nudge the placement down so
-                            it stays centered in the placeholder area. */
+                         /* Place top-aligned at the panel start (1-row top
+                            bar). The image height is determined by kitty
+                            from the column width + aspect ratio; keep the
+                            cached gfx_rows for change detection only. */
                          int gfx_rows = (dh + 1) / 2;
                          if (gfx_rows < 1) gfx_rows = 1;
-                         row0 += (dh - gfx_rows) / 2;
+                         int row0 = 2;
                          /* Each kitty placement re-rasterizes the image to
                             the cell grid — only re-place when the cover or
                             its geometry changed. FTXUI outputs diffs, so the
