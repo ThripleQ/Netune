@@ -452,6 +452,11 @@ void StateStore::set_top_row_width(int cols) {
     state_.top_row_width = cols;
 }
 
+void StateStore::set_screen_height(int rows) {
+    if (rows < 10) rows = 10;
+    state_.screen_height = rows;
+}
+
 void StateStore::set_spectrum(const float *bands) {
     /* dispatched on main thread via event_bus_poll */
     if (bands)

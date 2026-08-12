@@ -62,6 +62,42 @@ static void cmd_queue_push(CmdQueue *q, const Command *cmd) {
     pthread_mutex_unlock(&q->mutex);
 }
 
+/* Push a CMD_PLAY, discarding any older CMD_PLAY commands still queued.
+   Rapid Next presses only ever switch to the newest target — without this
+   the playback thread would process every stale play command one by one,
+   each with a full close/open cycle, stalling audio. */
+static void cmd_queue_push_play(CmdQueue *q, const Command *cmd) {
+    pthread_mutex_lock(&q->mutex);
+    /* drop stale CMD_PLAY commands already in the queue */
+    for (int i = 0; i < q->count; ) {
+        int idx = (q->head + i) % CMD_QUEUE_SIZE;
+        if (q->items[idx].type == CMD_PLAY) {
+            for (int j = i; j < q->count - 1; j++) {
+                int a = (q->head + j) % CMD_QUEUE_SIZE;
+                int b = (q->head + j + 1) % CMD_QUEUE_SIZE;
+                q->items[a] = q->items[b];
+            }
+            q->tail = (q->tail + CMD_QUEUE_SIZE - 1) % CMD_QUEUE_SIZE;
+            q->count--;
+        } else {
+            i++;
+        }
+    }
+    if (q->count >= CMD_QUEUE_SIZE) {
+        /* full of non-PLAY commands: evict the oldest to make room —
+           losing a play is worse than losing any other command */
+        q->head = (q->head + 1) % CMD_QUEUE_SIZE;
+        q->count--;
+    }
+    if (q->count < CMD_QUEUE_SIZE) {
+        q->items[q->tail] = *cmd;
+        q->tail = (q->tail + 1) % CMD_QUEUE_SIZE;
+        q->count++;
+        pthread_cond_signal(&q->cond);
+    }
+    pthread_mutex_unlock(&q->mutex);
+}
+
 static Command cmd_queue_pop(CmdQueue *q) {
     Command cmd = {0};
     pthread_mutex_lock(&q->mutex);
@@ -91,7 +127,7 @@ static void on_play_start(const BusEvent *ev, void *ud) {
     const char *path = (const char*)ev->data;
     Command cmd = {.type = CMD_PLAY};
     if (path) snprintf(cmd.path, sizeof(cmd.path), "%s", path);
-    cmd_queue_push(&g_cmd_queue, &cmd);
+    cmd_queue_push_play(&g_cmd_queue, &cmd);
 }
 
 static void on_play_pause(const BusEvent *ev, void *ud) {
@@ -134,6 +170,15 @@ static bool cmd_queue_try_pop(CmdQueue *q, Command *out) {
     }
     pthread_mutex_unlock(&q->mutex);
     return got;
+}
+
+/* Tear down the audio output. The backend shutdown drains the hardware
+   buffer (snd_pcm_drain / pa_simple_drain) so the tail of the current
+   track plays out smoothly — a hard drop (snd_pcm_drop) clicks/pops.
+   The drain is short (≤~100ms with the small ALSA buffer) and CMD_PLAY
+   coalescing means rapid skipping only ever drains once. */
+static void audio_teardown(AudioOutput *audio) {
+    if (audio) audio_output_destroy(audio);
 }
 
 static void* playback_thread(void *arg) {
@@ -192,7 +237,7 @@ static void* playback_thread(void *arg) {
             case CMD_STOP:
                 if (state == PS_STOPPED) continue; /* guard feedback loop */
                 if (decoder) { decoder_close(decoder); decoder = NULL; }
-                if (audio)   { audio_output_destroy(audio); audio = NULL; }
+                audio_teardown(audio); audio = NULL;
                 state = PS_STOPPED;
                 current_frame = 0;
                 /* Don't publish EV_PLAYBACK_STOP here — the app already set
@@ -205,7 +250,7 @@ static void* playback_thread(void *arg) {
                 /* cleanup previous */
                 if (ffstream) { ffstream_close(ffstream); ffstream = NULL; }
                 if (decoder) { decoder_close(decoder); decoder = NULL; }
-                if (audio)   { audio_output_destroy(audio); audio = NULL; }
+                audio_teardown(audio); audio = NULL;
 
                 const char *play_path = cmd.path;
 
@@ -338,7 +383,7 @@ static void* playback_thread(void *arg) {
                     if (state == PS_STOPPED) goto next_song;
                     if (ffstream) { ffstream_close(ffstream); ffstream = NULL; }
                     if (decoder) { decoder_close(decoder); decoder = NULL; }
-                    if (audio)   { audio_output_destroy(audio); audio = NULL; }
+                    audio_teardown(audio); audio = NULL;
                     state = PS_STOPPED;
                     current_frame = 0;
                     /* Don't publish EV_PLAYBACK_STOP here — same race
@@ -348,7 +393,7 @@ static void* playback_thread(void *arg) {
                     /* switch to new track */
                     if (ffstream) { ffstream_close(ffstream); ffstream = NULL; }
                     if (decoder) { decoder_close(decoder); decoder = NULL; }
-                    if (audio)   { audio_output_destroy(audio); audio = NULL; }
+                    audio_teardown(audio); audio = NULL;
                     state = PS_STOPPED;
                     /* push a fresh CMD_PLAY for the outer loop */
                     cmd_queue_push(&g_cmd_queue, &icmd);
@@ -458,7 +503,7 @@ cleanup:
         ffstream = NULL;
     }
     if (decoder) decoder_close(decoder);
-    if (audio)   audio_output_destroy(audio);
+    audio_teardown(audio);
     free(spectrum_buf);
     free(pcm_buf);
     LOG_INFO("Playback thread ended");

@@ -4,11 +4,11 @@
 #include "ui/state_store.h"
 #include "core/lyric.h"
 #include "core/spectrum.h"
+#include "core/term_gfx.h"
 #include <ftxui/screen/string.hpp>
 #include <string>
 #include <algorithm>
 #include <cmath>
-#include <cstring>
 using namespace ftxui;
 
 static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
@@ -76,26 +76,100 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
 }
 
 /* ── Cover ───────────────────────────────────────────────── */
+void cover_layout(const AppState &s, int *cw, int *dh) {
+    int total = s.song_panel_width + 29;
+    int w = total / 2 - 1;
+    if (w < 12) w = 12;
+    if (w > 60) w = 60;
+    if (s.cover.width > 0 && w > s.cover.width) w = s.cover.width;
+    int h = 0;
+    if (s.cover.pixels && s.cover.width > 0 && s.cover.height > 0) {
+        /* rows = source pixel rows / step, where step = cell_h/cell_w
+           (source rows consumed per terminal row) */
+        double step = (double)cover_cell_height() / cover_cell_width();
+        if (step < 1.0) step = 1.0;
+        h = (int)(s.cover.height * w / (double)s.cover.width / step);
+        if (h % 2) h++;
+    }
+    if (h > 20) h = 20;   /* cover height cap (keeps the panel sane on
+                             tall covers; lyrics follows the same height) */
+    if (cw) *cw = w;
+    if (dh) *dh = h;
+}
+
 static Element render_cover(const CoverData &cd, int panel_w) {
     if (!cd.pixels || cd.width <= 0 || cd.height <= 0 || panel_w < 4)
         return vbox({text("")}) | center | flex;
 
     int dw = panel_w;
     if (dw > cd.width) dw = cd.width;
-    int dh = cd.height * dw / cd.width;
+
+    /* Source pixel rows consumed per terminal row, from the probed cell
+       aspect (2:1 cell → step 2, the classic half-block case). This keeps
+       the rendered cover square on any terminal font. */
+    double step = (double)cover_cell_height() / cover_cell_width();
+    if (step < 1.0) step = 1.0;
+    int dh = (int)(cd.height * dw / (double)cd.width / step);
+    if (dh < 1) dh = 1;
     if (dh % 2) dh++;
+
+    /* Terminal supports the kitty graphics protocol: reserve the same
+       cell area as blank space — the real image is placed on top by the
+       frame hook in app.cpp (periodic re-place, C=1), keeping the layout
+       identical to the character fallback. */
+    if (term_gfx_active()) {
+        Elements rows;
+        std::string blank((size_t)dw, ' ');
+        for (int y = 0; y < dh; y++)
+            rows.push_back(text(blank));
+        return vbox(std::move(rows)) | center | flex;
+    }
+
     int sw = cd.width, sh = cd.height;
+
+    /* Average the source region covered by each terminal half-block
+       (box filter) instead of nearest-neighbor sampling — crisper result
+       when the stored cover is larger than the panel. */
+    auto avg = [&](int x0, int x1, int y0, int y1, uint8_t out[3]) {
+        long r = 0, g = 0, b = 0, n = 0;
+        for (int sy = y0; sy < y1; sy++) {
+            const uint8_t *row = cd.pixels + (size_t)sy * sw * 3;
+            for (int sx = x0; sx < x1; sx++) {
+                const uint8_t *p = row + sx * 3;
+                r += p[0]; g += p[1]; b += p[2]; n++;
+            }
+        }
+        if (n == 0) n = 1;
+        out[0] = (uint8_t)(r / n);
+        out[1] = (uint8_t)(g / n);
+        out[2] = (uint8_t)(b / n);
+    };
+
     Elements rows;
-    for (int y = 0; y < dh; y += 2) {
+    for (int y = 0; y < dh; y++) {
+        /* contiguous floor boundaries: row y covers source rows
+           [floor(y*step), floor((y+1)*step)) — no gaps, no overlap,
+           no cumulative drift (step=2 matches the classic 2:1 layout) */
+        double y0f = y * step;
+        double y1f = y0f + step;
+        int y0 = (int)y0f;
+        int y1 = (int)y1f;
+        if (y1 <= y0) y1 = y0 + 1;
+        if (y1 > sh) y1 = sh;
+        int ymid = y0 + (y1 - y0) / 2;
+        if (ymid <= y0) ymid = y0 + 1;
+
         Elements cells;
         for (int x = 0; x < dw; x++) {
-            int sx = x * sw / dw;
-            int sy0 = (y    ) * sh / dh, sy1 = (y + 1) * sh / dh;
-            if (sy1 >= sh) sy1 = sy0;
-            int t = (sy0 * sw + sx) * 3, b = (sy1 * sw + sx) * 3;
+            int x0 = x * sw / dw;
+            int x1 = (x + 1) * sw / dw;
+            if (x1 <= x0) x1 = x0 + 1;
+            uint8_t top[3], bot[3];
+            avg(x0, x1, y0, ymid, top);
+            avg(x0, x1, ymid, y1, bot);
             cells.push_back(bgcolor(
-                Color::RGB(cd.pixels[t], cd.pixels[t+1], cd.pixels[t+2]),
-                color(Color::RGB(cd.pixels[b], cd.pixels[b+1], cd.pixels[b+2]),
+                Color::RGB(top[0], top[1], top[2]),
+                color(Color::RGB(bot[0], bot[1], bot[2]),
                     text("\u2580"))));
         }
         rows.push_back(hbox(std::move(cells)));
@@ -104,16 +178,23 @@ static Element render_cover(const CoverData &cd, int panel_w) {
 }
 
 Element render_cover_only(const AppState &s) {
-    int total = s.song_panel_width + 29;
-    int cw = total / 2 - 1;
-    if (cw < 12) cw = 12;
-    if (cw > 60) cw = 60;
+    int cw = 0;
+    cover_layout(s, &cw, NULL);
 
     if (s.cover.pixels && s.cover.width > 0 && s.cover.height > 0)
         return render_cover(s.cover, cw) | center | flex;
     if (s.cover_loading)
         return render_spinner(s) | center | flex;
     return vbox({text("")}) | center | flex;
+}
+
+/* Lyrics panel height follows the cover's rendered height (they sit side
+   by side and share the same vertical extent); falls back to 20 rows
+   while no cover is loaded. */
+static int cover_panel_height(const AppState &s) {
+    int cw = 0, dh = 0;
+    cover_layout(s, &cw, &dh);
+    return dh > 0 ? dh : 20;
 }
 
 Element render_lyrics_only(const AppState &s) {
@@ -123,8 +204,15 @@ Element render_lyrics_only(const AppState &s) {
     if (cw > 60) cw = 60;
     int lw = total - cw - 1;
     if (lw < 20) lw = 20;
+    int h = cover_panel_height(s);
     return render_lyrics(s.lyrics, s.current_time_ms, lw) |
-           size(WIDTH, EQUAL, lw) | size(HEIGHT, EQUAL, 20);
+           size(WIDTH, EQUAL, lw) | size(HEIGHT, EQUAL, h);
+}
+
+/* Left margin before the cover: 1/16 of the terminal width */
+int cover_left_margin(const AppState &s) {
+    int m = (s.song_panel_width + 29) / 16;
+    return m < 1 ? 1 : m;
 }
 
 Element render_lyric_panel(const AppState &s) {
@@ -134,13 +222,18 @@ Element render_lyric_panel(const AppState &s) {
     if (cw > 60) cw = 60;
     int lw = total - cw - 1;
     if (lw < 20) lw = 20;
+    /* The panel itself stays flexed to fill the main layout; the inner
+       cover+lyrics block is centered vertically so the overall layout
+       (spectrum/status bars pinned to the bottom) is unchanged. A left
+       margin of 1/16 terminal width keeps the cover off the screen edge. */
     return theme_bg(hbox(Elements{
+        filler() | size(WIDTH, EQUAL, cover_left_margin(s)),
         render_cover_only(s) | size(WIDTH, EQUAL, cw),
         render_lyrics_only(s) | size(WIDTH, EQUAL, lw) | center,
-    }));
+    }) | center);
 }
 
-/* ── Spectrum bar (2 rows, 16-level bars, gradient) ── */
+/* ── Spectrum bar (adaptive: 2-4 rows, full terminal width) ── */
 Element render_spectrum_bar(const AppState &s) {
     /* UTF-8 bytes for each level: 0=space, 1-8=▁▂▃▄▅▆▇█ */
     static const char LEVEL_BYTES[9][4] = {
@@ -159,13 +252,15 @@ Element render_spectrum_bar(const AppState &s) {
     int total_w = s.song_panel_width + 29;
     if (total_w < 8) total_w = 8;
 
-    int bands = SPECTRUM_BANDS;
-    int cols = (total_w < bands) ? total_w : bands;
+    /* Adaptive height: one row per ~12 terminal rows, 2-4 rows total.
+       Each row adds 8 more levels of resolution. */
+    int rows = s.screen_height / 12;
+    if (rows < 2) rows = 2;
+    if (rows > 4) rows = 4;
+    const int MAX_LEVELS = rows * 8;
 
-    /* ── Smoothing state & zone attack/release ────────── */
-    static float s_height[SPECTRUM_BANDS] = {0};
-    static const float ALPHA_UP[4]   = {0.28f, 0.28f, 0.35f, 0.40f};
-    static const float ALPHA_DOWN[4] = {0.28f, 0.28f, 0.18f, 0.24f};
+    int bands = SPECTRUM_BANDS;
+    int cols = total_w;
 
     /* ── Gradient LUT ─────────────────────────────────── */
     static struct { uint8_t r, g, b; } s_bot[SPECTRUM_BANDS], s_top[SPECTRUM_BANDS];
@@ -197,43 +292,48 @@ Element render_spectrum_bar(const AppState &s) {
     }
 
     bool dimmed = (s.playback_state != PlaybackState::Playing);
-    const float MAX_HEIGHT = 16.0f;  /* 2 rows × 8 levels each */
 
-    /* ── Per-band: dB → height → zone smoothing ────── */
+    /* ── Frequency-weighted sensitivity + smoothing ───── */
+    /* Per-band exponent: low bands use sqrt (x^0.5), smoothly ramping
+       to x^0.3 at the high end — high-frequency bands get progressively
+       more amplification to compensate their naturally lower energy.
+       Smoothing: slight rise (~2 frames) and a slower exponential
+       release so bars linger briefly. */
+    static float s_smooth[SPECTRUM_BANDS] = {0};
+    const float FALL_SPEED = 0.24f;   /* per-frame release toward target */
+    const float ATTACK_SPEED = 0.65f; /* slight rise smoothing (~2 frames) */
+    const float MASTER_GAIN = 1.25f;  /* overall +25% */
     float processed[SPECTRUM_BANDS];
     for (int i = 0; i < bands; i++) {
         float v = s.spectrum[i];
         if (v < 0.0f) v = 0.0f;
-
-        /* Magnitude → dB, clamp to [-60, 0] */
-        float d = (v > 1e-6f) ? 20.0f * log10f(v) : -60.0f;
-        if (d < -60.0f) d = -60.0f;
-        if (d > 0.0f) d = 0.0f;
-
-        /* dB → height in [0, 16] */
-        float target = (d + 60.0f) / 60.0f * MAX_HEIGHT;
-        if (target < 0.0f) target = 0.0f;
-        if (target > MAX_HEIGHT) target = MAX_HEIGHT;
-
-        /* Zone-specific attack/release smoothing */
-        int zone = (i < 24) ? 0 : (i < 64) ? 1 : (i < 104) ? 2 : 3;
-        float a = (target > s_height[i]) ? ALPHA_UP[zone] : ALPHA_DOWN[zone];
-        s_height[i] += a * (target - s_height[i]);
-
-        /* Clamp and store as 0~1 ratio for visual mapping */
-        if (s_height[i] < 0.0f) s_height[i] = 0.0f;
-        processed[i] = s_height[i] / MAX_HEIGHT;
-        if (processed[i] > 1.0f) processed[i] = 1.0f;
+        if (v > 1.0f) v = 1.0f;
+        float expo = 0.5f - 0.2f * (float)i / (float)bands;
+        float target = powf(v, expo) * MASTER_GAIN;
+        if (target > 1.0f) target = 1.0f;
+        if (target >= s_smooth[i]) {
+            s_smooth[i] += (target - s_smooth[i]) * ATTACK_SPEED;
+        } else {
+            s_smooth[i] += (target - s_smooth[i]) * FALL_SPEED;
+        }
+        processed[i] = s_smooth[i];
     }
 
-    /* ── Downsample to columns and render ────────────── */
+    /* ── Sample bands → columns (average when several bands per
+          column, nearest band when more columns than bands) ── */
     Elements columns;
     for (int ci = 0; ci < cols; ci++) {
         int start = ci * bands / cols;
         int end = (ci + 1) * bands / cols;
         if (end > bands) end = bands;
         int count = end - start;
-        if (count <= 0) continue;
+        if (count < 1) {
+            /* wider terminal than bands: repeat the nearest band */
+            start = (ci * bands / cols);
+            end = start + 1;
+            if (start >= bands) start = bands - 1;
+            count = 1;
+        }
 
         float sum = 0.0f;
         for (int j = start; j < end; j++) sum += processed[j];
@@ -242,41 +342,41 @@ Element render_spectrum_bar(const AppState &s) {
 
         /* Use center band index for gradient */
         int i = (start + end) / 2;
+        if (i >= bands) i = bands - 1;
 
-        /* Map to 2-row bar */
-        int total = (int)(v * 16.0f + 0.5f);
-        if (total > 16) total = 16;
-        int bot = (total > 8) ? 8 : total;
-        int top = (total > 8) ? (total - 8) : 0;
+        /* Map to N-row bar: row r (from bottom) shows the slice
+           [8*r, 8*(r+1)) of the total level */
+        int total = (int)(v * (float)MAX_LEVELS + 0.5f);
+        if (total > MAX_LEVELS) total = MAX_LEVELS;
 
-        char top_str[4], bot_str[4];
-        int top_len = LEVEL_BYTES[top][0] == 0x20 ? 1 : 3;
-        int bot_len = LEVEL_BYTES[bot][0] == 0x20 ? 1 : 3;
-        memcpy(top_str, LEVEL_BYTES[top], (size_t)top_len);
-        top_str[top_len] = '\0';
-        memcpy(bot_str, LEVEL_BYTES[bot], (size_t)bot_len);
-        bot_str[bot_len] = '\0';
+        Elements col_rows;
+        for (int r = rows - 1; r >= 0; r--) {
+            int slice = total - r * 8;
+            if (slice < 0) slice = 0;
+            if (slice > 8) slice = 8;
 
-        Element col_elem;
-        if (dimmed) {
-            col_elem = vbox({
-                text(std::string(top_str)) | dim,
-                text(std::string(bot_str)) | dim,
-            });
-        } else {
-            col_elem = vbox({
-                color(Color::RGB(s_top[i].r, s_top[i].g, s_top[i].b),
-                      text(std::string(top_str))),
-                color(Color::RGB(s_bot[i].r, s_bot[i].g, s_bot[i].b),
-                      text(std::string(bot_str))),
-            });
+            const char *glyph = (const char*)LEVEL_BYTES[slice];
+            int g_len = (slice == 0) ? 1 : 3;
+            std::string gs(glyph, (size_t)g_len);
+            bool topmost = (r == rows - 1);
+            if (dimmed) {
+                col_rows.push_back(text(std::move(gs)) | dim);
+            } else if (topmost) {
+                col_rows.push_back(
+                    color(Color::RGB(s_top[i].r, s_top[i].g, s_top[i].b),
+                          text(std::move(gs))));
+            } else {
+                col_rows.push_back(
+                    color(Color::RGB(s_bot[i].r, s_bot[i].g, s_bot[i].b),
+                          text(std::move(gs))));
+            }
         }
-        columns.push_back(std::move(col_elem));
+        columns.push_back(vbox(std::move(col_rows)));
     }
 
     return hbox({
         filler(),
         hbox(std::move(columns)),
         filler(),
-    }) | size(HEIGHT, EQUAL, 2);
+    }) | size(HEIGHT, EQUAL, rows);
 }

@@ -117,6 +117,9 @@ struct AppState {
     /* marquee width: computed from terminal size, updated per-frame */
     int  song_panel_width = 50;
 
+    /* terminal height, updated per-frame (drives spectrum bar rows) */
+    int  screen_height = 24;
+
     /* top search row width: full terminal width, updated per-frame */
     int  top_row_width = 80;
 
@@ -167,6 +170,7 @@ public:
     void set_active_panel(int panel);    /* 0=left, 1=right */
     void set_song_panel_width(int cols);
     void set_top_row_width(int cols);
+    void set_screen_height(int rows);
     void set_playlist(const std::vector<SongInfo> &list, int index);
     void set_selected_index(int idx);
     void set_loop_mode(LoopMode mode);

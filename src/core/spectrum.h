@@ -8,7 +8,9 @@ extern "C" {
 
 /* ── Constants ──────────────────────────────────────── */
 #define SPECTRUM_FFT_SIZE  2048  /* FFT window (must be power of 2) */
-#define SPECTRUM_BANDS     128   /* output frequency bands */
+#define SPECTRUM_BANDS     128   /* bands = first 128 FFT bins, one bin
+                                    per band (21.5 Hz each @ 44.1 kHz,
+                                    covering 0 ~ 2.75 kHz) */
 
 /* ── Process PCM samples into frequency band magnitudes
  *

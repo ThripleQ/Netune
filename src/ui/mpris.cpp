@@ -773,7 +773,10 @@ void mpris_shutdown(void) {
     if (!g_conn) return;
     g_running = 0;
     pthread_join(g_thread, NULL);
-    dbus_connection_close(g_conn);
+    /* The connection came from dbus_bus_get(), which returns a process-wide
+       SHARED connection. libdbus forbids dbus_connection_close() on shared
+       connections (it aborts the process) — just release our reference and
+       let libdbus clean it up at process exit. */
     dbus_connection_unref(g_conn);
     g_conn = NULL;
     LOG_INFO("MPRIS: shut down");

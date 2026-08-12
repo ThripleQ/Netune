@@ -144,3 +144,13 @@ std::optional<Action> KeybindingManager::lookup(const std::string &key) const {
         return it->second;
     return std::nullopt;
 }
+
+std::vector<std::string> KeybindingManager::keys_for(Action action) const {
+    std::vector<std::string> out;
+    if (!impl_) return out;
+    for (const auto &kv : impl_->map) {
+        if (kv.second == action)
+            out.push_back(kv.first);
+    }
+    return out;
+}
