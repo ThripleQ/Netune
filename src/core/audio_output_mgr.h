@@ -17,6 +17,10 @@ int audio_output_register_backend(AudioOutputBackend *backend);
 /* ── High-level API ────────────────────────────────── */
 AudioOutput* audio_output_create(int sample_rate, int channels);
 void         audio_output_destroy(AudioOutput *ao);
+/* Stop output without waiting for the hardware buffer to drain.
+   Non-blocking; safe to call before audio_output_destroy() on track
+   switches (drain would block ~0.4s on ALSA/Pulse). */
+int          audio_output_stop(AudioOutput *ao);
 int          audio_output_write(AudioOutput *ao, const int16_t *pcm, int frames);
 int          audio_output_delay_us(AudioOutput *ao, uint64_t *delay_us);
 int          audio_output_flush(AudioOutput *ao);

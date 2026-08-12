@@ -531,6 +531,61 @@ static void ev_search_error(const BusEvent *ev, void *data) {
     StateStore::instance().set_search_query("");
 }
 
+/* ── Lyrics ───────────────────────────────────────── */
+/* EV_LYRIC_LOADED payload: { Lyrics*, song_id* } — both heap-allocated.
+   Ownership: the UI callback compares song_id with the current song; on
+   match it takes the Lyrics (replacing the old one) and frees song_id,
+   on a stale song it frees both. */
+struct LyricLoadResult {
+    Lyrics *lyrics;   /* may be NULL on failure */
+    char   *song_id;
+};
+
+/* Netease lyric fetch runs in a background thread — the CLI does a network
+   round-trip (hundreds of ms); doing it synchronously on the UI thread
+   froze the interface on every track switch. */
+static void lyric_load_worker(void *arg) {
+    char *song_id = (char*)arg;
+    char *lyric_buf = NULL;
+    Lyrics *ly = NULL;
+    if (netease_lyric(song_id, &lyric_buf) == 0 && lyric_buf) {
+        ly = lyric_parse(lyric_buf);
+        free(lyric_buf);
+    }
+    LyricLoadResult res = { ly, song_id };
+    event_bus_publish(EV_LYRIC_LOADED, &res, sizeof(res));
+}
+
+/* In-flight marker (UI thread only): song whose lyrics are being fetched.
+   Prevents duplicate spawns from EV_TRACK_CHANGED + EV_PLAYBACK_START
+   firing for the same song. */
+static char *g_lyric_pending_id = NULL;
+
+static void ev_lyric_loaded(const BusEvent *ev, void *data) {
+    (void)data;
+    if (ev->data_size != sizeof(LyricLoadResult)) return;
+    const LyricLoadResult *res = (const LyricLoadResult*)ev->data;
+    auto &store = StateStore::instance();
+    const SongInfo &cur = store.state().current_song;
+    bool match = res->song_id && cur.id &&
+                 strcmp(res->song_id, cur.id) == 0;
+
+    if (g_lyric_pending_id) {
+        free(g_lyric_pending_id);
+        g_lyric_pending_id = NULL;
+    }
+
+    if (match && res->lyrics) {
+        Lyrics *old = store.state().lyrics;
+        store.set_lyrics(res->lyrics);
+        if (old) lyric_free(old);
+        LOG_INFO("Lyrics loaded from Netease (%d lines)", res->lyrics->count);
+    } else {
+        if (res->lyrics) lyric_free(res->lyrics);
+    }
+    free(res->song_id);
+}
+
 /* ── Start cover download (shows spinner, clears old cover) ──── */
 /* ── Cover downloaded in background thread ─────────── */
 static void cover_download_worker(void *arg) {
@@ -850,9 +905,9 @@ static void load_lyrics_for_current_song(void) {
 
     if (!song.id) return;
 
-    char *lyric_buf = NULL;
     if (song.source && strcmp(song.source, "local") == 0) {
-        /* local song: look for .lrc sidecar file */
+        /* local song: look for .lrc sidecar file (fast local IO, stays
+           synchronous so lyrics are ready immediately) */
         size_t len = strlen(song.id);
         char *lrc_path = (char*)malloc(len + 5);
         if (!lrc_path) return;
@@ -867,18 +922,18 @@ static void load_lyrics_for_current_song(void) {
         if (ly) {
             store.set_lyrics(ly);
             LOG_INFO("Lyrics loaded from .lrc (%d lines)", ly->count);
-            return;
         }
+        return;
     } else if (song.source && strcmp(song.source, "netease") == 0) {
-        /* Netease: fetch via netease-cli */
-        if (netease_lyric(song.id, &lyric_buf) == 0 && lyric_buf) {
-            Lyrics *ly = lyric_parse(lyric_buf);
-            free(lyric_buf);
-            if (ly) {
-                store.set_lyrics(ly);
-                LOG_INFO("Lyrics loaded from Netease (%d lines)", ly->count);
-            }
-        }
+        /* Netease: fetch via netease-cli in a background thread */
+        if (g_lyric_pending_id &&
+            strcmp(g_lyric_pending_id, song.id) == 0)
+            return;  /* already loading this song's lyrics */
+        char *dup = strdup(song.id);
+        if (!dup || !g_thread_pool) { free(dup); return; }
+        threadpool_submit(g_thread_pool, lyric_load_worker, dup);
+        free(g_lyric_pending_id);
+        g_lyric_pending_id = strdup(song.id);
         /* Cover is now loaded lazily when entering lyric mode */
         return;
     }
@@ -1186,6 +1241,7 @@ int run_app(int argc, char **argv) {
     event_bus_subscribe(EV_SEARCH_ERROR, ev_search_error, NULL);
     event_bus_subscribe(EV_SEARCH_DONE, ev_search_done, NULL);
     event_bus_subscribe(EV_COVER_LOADED, ev_cover_loaded, NULL);
+    event_bus_subscribe(EV_LYRIC_LOADED, ev_lyric_loaded, NULL);
     event_bus_subscribe(EV_SPECTRUM_UPDATE, ev_spectrum, NULL);
 
     if (cfg) {

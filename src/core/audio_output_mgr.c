@@ -127,6 +127,12 @@ void audio_output_destroy(AudioOutput *ao) {
     LOG_DEBUG("Audio output destroyed");
 }
 
+int audio_output_stop(AudioOutput *ao) {
+    (void)ao;
+    if (!g_active || !g_active->stop) return -1;
+    return g_active->stop();
+}
+
 /* reusable scratch buffer for software volume scaling */
 static int16_t *g_scale_buf = NULL;
 static size_t   g_scale_cap = 0;
