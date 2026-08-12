@@ -285,19 +285,18 @@ Element render_spectrum_bar(const AppState &s) {
 
     bool dimmed = (s.playback_state != PlaybackState::Playing);
 
-    /* ── Sensitivity curve y = a·x² + b (a + b = 1 keeps 100% full) ── */
+    /* ── Sensitivity curve y = 2x³ ─────────────────────── */
     /* Bars snap up instantly and ease back down (exponential release)
        so the spectrum lingers briefly after each sound. */
     static float s_fall[SPECTRUM_BANDS] = {0};
     const float FALL_SPEED = 0.24f;   /* per-frame release toward target */
-    const float CURVE_B = 0.1f;       /* baseline visibility at x=0 */
-    const float CURVE_A = 1.0f - CURVE_B;
     float processed[SPECTRUM_BANDS];
     for (int i = 0; i < bands; i++) {
         float v = s.spectrum[i];
         if (v < 0.0f) v = 0.0f;
         if (v > 1.0f) v = 1.0f;
-        float target = CURVE_A * v * v + CURVE_B;
+        float target = 2.0f * v * v * v;
+        if (target > 1.0f) target = 1.0f;
         if (target >= s_fall[i]) {
             s_fall[i] = target;                     /* instant attack */
         } else {
