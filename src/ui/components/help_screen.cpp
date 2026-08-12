@@ -84,7 +84,7 @@ Element render_help_screen(const AppState &s) {
        scrolls when the window is too short (same pattern as login screen) */
     return vbox(Elements{
         filler(),
-        help_box | border,
+        help_box,
         filler(),
     }) | yframe | flex |
         bgcolor(Color::RGB(theme.overlay_bg.r, theme.overlay_bg.g, theme.overlay_bg.b));
