@@ -2115,7 +2115,8 @@ int run_app(int argc, char **argv) {
                             int row0 = 2;
                             if (panel_h > dh)
                                 row0 += (panel_h - dh) / 2;
-                            printf("\x1b[%d;1H", row0);
+                            printf("\x1b[%d;%dH", row0,
+                                   1 + cover_left_margin(st));
                             term_gfx_place(cw);
                         }
                     }

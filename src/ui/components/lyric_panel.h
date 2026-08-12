@@ -12,6 +12,9 @@ ftxui::Element render_cover_only(const AppState &s);
    rows for the current cover (capped at the lyrics panel height 20). */
 void cover_layout(const AppState &s, int *cw, int *dh);
 
+/* Left margin before the cover: 1/16 of the terminal width. */
+int cover_left_margin(const AppState &s);
+
 /* Lyrics panel only (right side) */
 ftxui::Element render_lyrics_only(const AppState &s);
 

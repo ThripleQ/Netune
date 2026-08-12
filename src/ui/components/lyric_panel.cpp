@@ -209,6 +209,12 @@ Element render_lyrics_only(const AppState &s) {
            size(WIDTH, EQUAL, lw) | size(HEIGHT, EQUAL, h);
 }
 
+/* Left margin before the cover: 1/16 of the terminal width */
+int cover_left_margin(const AppState &s) {
+    int m = (s.song_panel_width + 29) / 16;
+    return m < 1 ? 1 : m;
+}
+
 Element render_lyric_panel(const AppState &s) {
     int total = s.song_panel_width + 29;
     int cw = total / 2 - 1;
@@ -218,8 +224,10 @@ Element render_lyric_panel(const AppState &s) {
     if (lw < 20) lw = 20;
     /* The panel itself stays flexed to fill the main layout; the inner
        cover+lyrics block is centered vertically so the overall layout
-       (spectrum/status bars pinned to the bottom) is unchanged. */
+       (spectrum/status bars pinned to the bottom) is unchanged. A left
+       margin of 1/16 terminal width keeps the cover off the screen edge. */
     return theme_bg(hbox(Elements{
+        filler() | size(WIDTH, EQUAL, cover_left_margin(s)),
         render_cover_only(s) | size(WIDTH, EQUAL, cw),
         render_lyrics_only(s) | size(WIDTH, EQUAL, lw) | center,
     }) | center);
