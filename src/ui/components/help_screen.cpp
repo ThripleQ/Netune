@@ -73,7 +73,7 @@ Element render_help_screen(const AppState &s) {
     });
 
     Elements col;
-    col.push_back(text(" Help ") | bold | center | underlined);
+    col.push_back(text(" Help ") | bold | center);
     col.push_back(body);
     col.push_back(separator());
     col.push_back(text(" Press ? again or Escape to close ") | dim | center);
@@ -84,7 +84,7 @@ Element render_help_screen(const AppState &s) {
        scrolls when the window is too short (same pattern as login screen) */
     return vbox(Elements{
         filler(),
-        help_box,
+        help_box | border,
         filler(),
     }) | yframe | flex |
         bgcolor(Color::RGB(theme.overlay_bg.r, theme.overlay_bg.g, theme.overlay_bg.b));
