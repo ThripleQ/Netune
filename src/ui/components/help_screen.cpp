@@ -73,8 +73,7 @@ Element render_help_screen(const AppState &s) {
     });
 
     Elements col;
-    col.push_back(text(" Netune v2.0.0 — Help ") | bold | center | underlined);
-    col.push_back(separator());
+    col.push_back(text(" Help ") | bold | center | underlined);
     col.push_back(body);
     col.push_back(separator());
     col.push_back(text(" Press ? again or Escape to close ") | dim | center);
