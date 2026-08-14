@@ -9,6 +9,12 @@ typedef struct {
     int      width;
     int      height;
     int      channels; /* 3=RGB, 4=RGBA */
+    /* Monotonic id assigned by cover_load(); uniquely identifies the image
+       content. Used as the upload fingerprint by term_gfx — comparing the
+       pixel pointer alone is unsafe (the old buffer is freed and malloc
+       may hand out the same address for the next cover, which would skip
+       the re-upload and keep showing the previous cover). */
+    uint64_t stamp;
 } CoverData;
 
 /* ── API ──────────────────────────────────────── */

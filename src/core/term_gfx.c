@@ -9,7 +9,7 @@
 TermGfxMode term_gfx_detect(void) { return TERM_GFX_NONE; }
 int term_gfx_active(void) { return 0; }
 void term_gfx_upload(const CoverData *cd) { (void)cd; }
-void term_gfx_place(int cols) { (void)cols; }
+void term_gfx_place(int cols, int rows) { (void)cols; (void)rows; }
 void term_gfx_clear(void) {}
 #else
 
@@ -17,13 +17,21 @@ void term_gfx_clear(void) {}
 static TermGfxMode g_mode = TERM_GFX_NONE;
 static int g_detected = 0;
 
-/* fingerprint of the image currently uploaded */
-static const uint8_t *g_uploaded_pixels = NULL;
+/* fingerprint of the image currently uploaded — the cover stamp, not the
+   pixel pointer: the old buffer is freed on cover change and malloc may
+   reuse the same address for same-dimension covers, which a pointer
+   compare cannot tell apart (stale cover would stay on screen) */
+static uint64_t g_uploaded_stamp = 0;
 static int g_uploaded_w = 0;
 static int g_uploaded_h = 0;
 
 /* stable id handed out to the terminal (kitty i= parameter) */
 static unsigned long g_img_id = 0;
+
+/* fixed placement id (kitty p= parameter): re-placing the same
+   (image id, placement id) pair atomically replaces the previous
+   placement instead of stacking a new one on top */
+#define TERM_GFX_PLACEMENT_ID 1
 
 /* ── Base64 (RFC 4648) ──────────────────────────────── */
 static const char B64[] =
@@ -117,32 +125,55 @@ void term_gfx_upload(const CoverData *cd) {
     if (!term_gfx_active() || !cd || !cd->pixels) return;
 
     /* skip re-transfer when nothing changed */
-    if (g_uploaded_pixels == cd->pixels &&
+    if (cd->stamp != 0 && cd->stamp == g_uploaded_stamp &&
         g_uploaded_w == cd->width && g_uploaded_h == cd->height)
         return;
+
+    /* replacing the cover: drop the previous image's placements AND data
+       (uppercase d=I frees the data) so old artwork doesn't linger under
+       the new placement or eat the terminal's image quota */
+    if (g_img_id != 0) {
+        char seq[96];
+        snprintf(seq, sizeof(seq), "\x1b_Ga=d,d=I,i=%lu\x1b\\", g_img_id);
+        esc_write(seq);
+    }
 
     g_img_id++;
     if (g_img_id == 0) g_img_id = 1;  /* id 0 is invalid */
 
     /* cover.c stores RGB24 (3 channels) */
     kitty_upload_raw(cd->pixels, cd->width, cd->height, g_img_id);
-    g_uploaded_pixels = cd->pixels;
+    g_uploaded_stamp = cd->stamp;
     g_uploaded_w = cd->width;
     g_uploaded_h = cd->height;
-    LOG_DEBUG("term_gfx: uploaded cover %dx%d id=%lu",
-              cd->width, cd->height, g_img_id);
+    LOG_DEBUG("term_gfx: uploaded cover %dx%d id=%lu stamp=%llu",
+              cd->width, cd->height, g_img_id,
+              (unsigned long long)cd->stamp);
 }
 
-void term_gfx_place(int cols) {
-    if (!term_gfx_active() || g_img_id == 0 || cols <= 0)
+void term_gfx_place(int cols, int rows) {
+    if (!term_gfx_active() || g_img_id == 0 || cols <= 0 || rows <= 0)
         return;
-    char seq[128];
-    /* a=p place, i=id, q=2 no response. Only c (columns) is given so the
-       image scales keeping its aspect ratio; C=1 forbids kitty from moving
-       the cursor after placement — otherwise the next FTXUI diff output
-       would be written from the wrong cursor position. */
+    char seq[160];
+    /* Drop stale placements of this image first (lowercase d=i keeps the
+       uploaded data). Without this every a=p adds an additional
+       placement, and old ones linger after terminal resizes — the ghost
+       covers that corrupt the layout. Both escapes go out in one flush,
+       so the terminal applies them before the next frame: no flicker. */
+    snprintf(seq, sizeof(seq), "\x1b_Ga=d,d=i,i=%lu\x1b\\", g_img_id);
+    esc_write(seq);
+    /* a=p place, i=id, p= fixed placement id (re-placing the same
+       (image id, placement id) pair atomically replaces the previous
+       placement on terminals that support placement ids), q=2 no
+       response. Both c and r are given so the image fills exactly the
+       reserved placeholder rectangle (dw×dh from cover_layout) — with c
+       alone kitty scales by aspect and can overflow the placeholder when
+       the height cap kicked in. C=1 forbids kitty from moving the cursor
+       after placement — otherwise the next FTXUI diff output would be
+       written from the wrong cursor position. */
     snprintf(seq, sizeof(seq),
-             "\x1b_Ga=p,i=%lu,q=2,c=%d,C=1\x1b\\", g_img_id, cols);
+             "\x1b_Ga=p,i=%lu,p=%d,q=2,c=%d,r=%d,C=1\x1b\\",
+             g_img_id, TERM_GFX_PLACEMENT_ID, cols, rows);
     esc_write(seq);
 }
 
@@ -150,7 +181,7 @@ void term_gfx_clear(void) {
     if (!term_gfx_active()) return;
     /* a=d delete, d=A deletes ALL images (and frees their data) */
     esc_write("\x1b_Ga=d,d=A\x1b\\");
-    g_uploaded_pixels = NULL;
+    g_uploaded_stamp = 0;
     g_uploaded_w = g_uploaded_h = 0;
 }
 

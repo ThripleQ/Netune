@@ -8,9 +8,15 @@ struct AppState;
 ftxui::Element render_cover_only(const AppState &s);
 
 /* Cover cell layout shared by the character renderer and the raw-image
-   overlay: cw = panel width in columns (clamped 12-60), dh = rendered
-   rows for the current cover (capped at the lyrics panel height 20). */
-void cover_layout(const AppState &s, int *cw, int *dh);
+   overlay:
+   - cw = slot width in columns (60% of the panel, 12-column floor;
+          lyrics layout follows it)
+   - dw = actual cover width in columns (≤ cw, centered inside the slot;
+          shrunk instead of distorting when the height cap kicks in)
+   - dh = rendered rows for the current cover (capped at 2/5 of the
+          terminal height, 12-row floor)
+   Any output pointer may be NULL. */
+void cover_layout(const AppState &s, int *cw, int *dw, int *dh);
 
 /* Left margin before the cover: 1/16 of the terminal width. */
 int cover_left_margin(const AppState &s);

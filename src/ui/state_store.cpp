@@ -201,6 +201,11 @@ int StateStore::queue_step(int dir) {
 }
 
 int StateStore::queue_advance(void) {
+    if (!state_.queue_active || state_.playback_queue.empty()) return -1;
+    /* LoopMode::None: a finished track stops playback — the queue does
+       NOT continue to the next song (that only happens via manual Next).
+       This matches the pre-queue-system behavior (default: next = -1). */
+    if (state_.loop_mode == LoopMode::None) return -1;
     return queue_step(+1);
 }
 

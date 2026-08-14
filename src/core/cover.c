@@ -14,21 +14,46 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
-/* ── Nearest-neighbor downscale ──────────────────── */
+/* ── Area-average (box) downscale ─────────────────────
+   Every destination pixel averages the full source rectangle it maps to
+   (contiguous floor boundaries: no gaps, no overlap). Unlike the old
+   nearest-neighbor sampling this keeps thin outlines and high-contrast
+   edges visible when shrinking large covers, because no source pixel is
+   ever dropped. */
 static void cover_scale(const uint8_t *src, int sw, int sh, int ch,
                         uint8_t *dst, int dw, int dh)
 {
     for (int y = 0; y < dh; y++) {
-        int sy = y * sh / dh;
+        int y0 = y * sh / dh;
+        int y1 = (y + 1) * sh / dh;
+        if (y1 <= y0) y1 = y0 + 1;
+        if (y1 > sh) y1 = sh;
         for (int x = 0; x < dw; x++) {
-            int sx = x * sw / dw;
-            int si = (sy * sw + sx) * ch;
-            int di = (y * dw + x) * ch;
+            int x0 = x * sw / dw;
+            int x1 = (x + 1) * sw / dw;
+            if (x1 <= x0) x1 = x0 + 1;
+            if (x1 > sw) x1 = sw;
+            long acc[4] = {0, 0, 0, 0};
+            long n = 0;
+            for (int sy = y0; sy < y1; sy++) {
+                const uint8_t *row = src + (size_t)sy * sw * ch;
+                for (int sx = x0; sx < x1; sx++) {
+                    const uint8_t *p = row + sx * ch;
+                    for (int c = 0; c < ch; c++)
+                        acc[c] += p[c];
+                    n++;
+                }
+            }
+            if (n == 0) n = 1;
+            uint8_t *o = dst + ((size_t)y * dw + x) * ch;
             for (int c = 0; c < ch; c++)
-                dst[di + c] = src[si + c];
+                o[c] = (uint8_t)(acc[c] / n);
         }
     }
 }
+
+/* unique id source for CoverData.stamp */
+static uint64_t g_cover_seq = 0;
 
 /* ── Run a program and capture stdout ────────────── */
 static char *popen_read(const char *cmd, size_t *out_size) {
@@ -132,10 +157,18 @@ int cover_load(const char *url, CoverData *out) {
     /* Store the original image (within a sanity cap). The renderer samples
        from it per frame, so keeping full resolution preserves detail —
        2048px covers real-world covers (typically 300–800px) while capping
-       memory against 4K+ edge cases. */
+       memory against 4K+ edge cases.
+
+       NOTE: images *below* the cap keep their native size. The previous
+       code resized everything to a 2048px longest side, nearest-neighbor
+       UPSCALING typical 300–800px covers: ~12MB of duplicated pixels per
+       cover, a ~17MB base64 kitty upload, and zero extra detail. */
     int max_dim = 2048;
-    int dw = (w > h) ? max_dim : (max_dim * w / h);
-    int dh = (h > w) ? max_dim : (max_dim * h / w);
+    int dw = w, dh = h;
+    if (w > max_dim || h > max_dim) {
+        if (w >= h) { dw = max_dim; dh = max_dim * h / w; }
+        else        { dh = max_dim; dw = max_dim * w / h; }
+    }
     if (dw < 1) dw = 1;
     if (dh < 1) dh = 1;
 
@@ -144,13 +177,17 @@ int cover_load(const char *url, CoverData *out) {
         stbi_image_free(pixels);
         return -1;
     }
-    cover_scale(pixels, w, h, 3, scaled, dw, dh);
+    if (dw == w && dh == h)
+        memcpy(scaled, pixels, (size_t)w * h * 3);
+    else
+        cover_scale(pixels, w, h, 3, scaled, dw, dh);
     stbi_image_free(pixels);
 
     out->pixels   = scaled;
     out->width    = dw;
     out->height   = dh;
     out->channels = 3;
+    out->stamp    = ++g_cover_seq;
     return 0;
 }
 

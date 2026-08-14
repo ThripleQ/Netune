@@ -7,8 +7,10 @@
 #include "core/term_gfx.h"
 #include <ftxui/screen/string.hpp>
 #include <string>
+#include <vector>
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 using namespace ftxui;
 
 static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
@@ -76,47 +78,139 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
 }
 
 /* ── Cover ───────────────────────────────────────────────── */
-void cover_layout(const AppState &s, int *cw, int *dh) {
-    int total = s.song_panel_width + 29;
-    int w = total / 2 - 1;
-    if (w < 12) w = 12;
-    if (w > 60) w = 60;
-    if (s.cover.width > 0 && w > s.cover.width) w = s.cover.width;
-    int h = 0;
-    if (s.cover.pixels && s.cover.width > 0 && s.cover.height > 0) {
-        /* rows = source pixel rows / step, where step = cell_h/cell_w
-           (source rows consumed per terminal row) */
-        double step = (double)cover_cell_height() / cover_cell_width();
-        if (step < 1.0) step = 1.0;
-        h = (int)(s.cover.height * w / (double)s.cover.width / step);
-        if (h % 2) h++;
-    }
-    if (h > 20) h = 20;   /* cover height cap (keeps the panel sane on
-                             tall covers; lyrics follows the same height) */
-    if (cw) *cw = w;
-    if (dh) *dh = h;
+
+/* Dynamic cover height cap: the panel's usable height (terminal minus
+   the 1-row top bar, the adaptive spectrum bar and the 2-row status
+   bar) — the cover can grow as large as the layout physically allows.
+   12 rows floor keeps small terminals sane. */
+static int cover_max_rows(const AppState &s) {
+    int spec = s.screen_height / 12;
+    if (spec < 2) spec = 2;
+    if (spec > 4) spec = 4;
+    int m = s.screen_height - 1 - spec - 2;
+    if (m < 12) m = 12;
+    return m;
 }
 
-static Element render_cover(const CoverData &cd, int panel_w) {
-    if (!cd.pixels || cd.width <= 0 || cd.height <= 0 || panel_w < 4)
+/* Aspect-preserving fit of the cover into a `slot_w`-column slot.
+   Returns the display size dw×dh that shows the ENTIRE image with no
+   distortion and no crop: when the height cap kicks in, the width is
+   reduced instead of squashing the image vertically. The display size is
+   decided by the layout alone — the source may be smaller (each cell
+   then averages fewer/more pixels), the mosaic stays sharp either way. */
+static void cover_fit(const CoverData &cd, int slot_w, int max_rows,
+                      int *dw_out, int *dh_out) {
+    int dw = slot_w, dh = 0;
+    if (cd.pixels && cd.width > 0 && cd.height > 0) {
+        /* Probed cell aspect: source rows consumed per terminal row for an
+           undistorted rendering (2:1 cells → 2, the classic half-block
+           case). Keeps the cover square on any terminal font. */
+        double step = (double)cover_cell_height() / (double)cover_cell_width();
+        if (step < 1.0) step = 1.0;
+        if (dw < 1) dw = 1;
+        dh = (int)(cd.height * (double)dw / (double)cd.width / step);
+        if (dh < 1) dh = 1;
+        if (dh > max_rows) {
+            dh = max_rows;
+            dw = (int)(cd.width * (double)dh * step / (double)cd.height);
+            if (dw < 1) dw = 1;
+        }
+    }
+    if (dw_out) *dw_out = dw;
+    if (dh_out) *dh_out = dh;
+}
+
+/* Cover slot width (60% of the panel, 12-column floor) shared by the
+   cover/lyrics layout. */
+static int cover_slot_width(const AppState &s) {
+    int total = s.song_panel_width + 29;
+    int w = total * 6 / 10;
+    if (w < 12) w = 12;
+    return w;
+}
+
+void cover_layout(const AppState &s, int *cw, int *dw, int *dh) {
+    /* slot width = 60% of the panel, so the cover scales with the
+       terminal on wide screens (12-column floor for narrow ones) */
+    int w = cover_slot_width(s);
+    int fw = 0, fh = 0;
+    cover_fit(s.cover, w, cover_max_rows(s), &fw, &fh);
+    if (cw) *cw = w;    /* slot width (lyrics layout follows this) */
+    if (dw) *dw = fw;   /* actual cover width, centered in the slot */
+    if (dh) *dh = fh;   /* actual cover rows (≤ dynamic cap) */
+}
+
+/* ── Half-block downsampling ────────────────────────────────
+   The full source image is mapped onto dw×dh terminal cells (two
+   vertical sub-pixels per cell via ▀). Boundaries are contiguous floors
+   over the FULL source extent — every source pixel contributes to
+   exactly one output sub-pixel, no gaps, no overlap.
+
+   The old code advanced the source by a cell-aspect "step" (≈2) rows per
+   terminal row, which is only correct at 1:1 scale. For any downscaled
+   cover it sampled just the top strip of the image (e.g. the top 40 of
+   300 rows), so the mosaic showed a horizontal band instead of the cover
+   and no outline of the original was recognizable. */
+
+/* Average one source rectangle. Accumulation happens in approximate
+   linear light (square law) instead of raw sRGB: plain sRGB averaging
+   darkens midtones and smears high-contrast edges — exactly where cover
+   art outlines live. */
+static void cover_avg_region(const CoverData &cd, int x0, int x1, int y0, int y1,
+                             uint8_t out[3]) {
+    uint64_t r = 0, g = 0, b = 0;
+    size_t n = 0;
+    int ch = cd.channels > 0 ? cd.channels : 3;
+    for (int sy = y0; sy < y1; sy++) {
+        const uint8_t *row = cd.pixels + (size_t)sy * cd.width * ch;
+        for (int sx = x0; sx < x1; sx++) {
+            const uint8_t *p = row + sx * ch;
+            r += (unsigned)p[0] * p[0];
+            g += (unsigned)p[1] * p[1];
+            b += (unsigned)p[2] * p[2];
+            n++;
+        }
+    }
+    if (n == 0) n = 1;
+    out[0] = (uint8_t)(sqrtf((float)(r / n)) + 0.5f);
+    out[1] = (uint8_t)(sqrtf((float)(g / n)) + 0.5f);
+    out[2] = (uint8_t)(sqrtf((float)(b / n)) + 0.5f);
+}
+
+/* Resample the whole cover into dw×dh cells. `out` receives
+   dw*dh*2*3 bytes: top, then bottom half-block color per cell. */
+static void cover_resample(const CoverData &cd, int dw, int dh,
+                           std::vector<uint8_t> &out) {
+    int sw = cd.width, sh = cd.height;
+    out.assign((size_t)dw * dh * 2 * 3, 0);
+    const int sub_rows = dh * 2;   /* half-block sub-rows */
+    for (int y = 0; y < dh; y++) {
+        int t0 = (2 * y) * sh / sub_rows;
+        int t1 = (2 * y + 1) * sh / sub_rows;
+        int b1 = (2 * y + 2) * sh / sub_rows;
+        if (t1 <= t0) t1 = t0 + 1;
+        if (b1 <= t1) b1 = t1 + 1;
+        if (b1 > sh) b1 = sh;
+        for (int x = 0; x < dw; x++) {
+            int x0 = x * sw / dw;
+            int x1 = (x + 1) * sw / dw;
+            if (x1 <= x0) x1 = x0 + 1;
+            if (x1 > sw) x1 = sw;
+            uint8_t *cell = &out[(size_t)(y * dw + x) * 6];
+            cover_avg_region(cd, x0, x1, t0, t1, cell);      /* top */
+            cover_avg_region(cd, x0, x1, t1, b1, cell + 3);  /* bottom */
+        }
+    }
+}
+
+static Element render_cover(const CoverData &cd, int dw, int dh) {
+    if (!cd.pixels || cd.width <= 0 || cd.height <= 0 || dw < 1 || dh < 1)
         return vbox({text("")}) | center | flex;
-
-    int dw = panel_w;
-    if (dw > cd.width) dw = cd.width;
-
-    /* Source pixel rows consumed per terminal row, from the probed cell
-       aspect (2:1 cell → step 2, the classic half-block case). This keeps
-       the rendered cover square on any terminal font. */
-    double step = (double)cover_cell_height() / cover_cell_width();
-    if (step < 1.0) step = 1.0;
-    int dh = (int)(cd.height * dw / (double)cd.width / step);
-    if (dh < 1) dh = 1;
-    if (dh % 2) dh++;
 
     /* Terminal supports the kitty graphics protocol: reserve the same
        cell area as blank space — the real image is placed on top by the
-       frame hook in app.cpp (periodic re-place, C=1), keeping the layout
-       identical to the character fallback. */
+       frame hook in app.cpp, keeping the layout identical to the
+       character fallback. */
     if (term_gfx_active()) {
         Elements rows;
         std::string blank((size_t)dw, ' ');
@@ -125,51 +219,34 @@ static Element render_cover(const CoverData &cd, int panel_w) {
         return vbox(std::move(rows)) | center | flex;
     }
 
-    int sw = cd.width, sh = cd.height;
-
-    /* Average the source region covered by each terminal half-block
-       (box filter) instead of nearest-neighbor sampling — crisper result
-       when the stored cover is larger than the panel. */
-    auto avg = [&](int x0, int x1, int y0, int y1, uint8_t out[3]) {
-        long r = 0, g = 0, b = 0, n = 0;
-        for (int sy = y0; sy < y1; sy++) {
-            const uint8_t *row = cd.pixels + (size_t)sy * sw * 3;
-            for (int sx = x0; sx < x1; sx++) {
-                const uint8_t *p = row + sx * 3;
-                r += p[0]; g += p[1]; b += p[2]; n++;
-            }
-        }
-        if (n == 0) n = 1;
-        out[0] = (uint8_t)(r / n);
-        out[1] = (uint8_t)(g / n);
-        out[2] = (uint8_t)(b / n);
+    /* Downsampled cell colors, cached: the resample touches every source
+       pixel, so it only runs when the cover or the target size changed
+       (i.e. on window resize / new cover) — per-frame cost is just
+       emitting the characters. */
+    struct CellCache {
+        uint64_t stamp = 0;
+        int sw = 0, sh = 0, dw = 0, dh = 0;
+        std::vector<uint8_t> rgb;
     };
+    static CellCache cache;
+    if (cache.stamp != cd.stamp || cache.sw != cd.width ||
+        cache.sh != cd.height || cache.dw != dw || cache.dh != dh) {
+        cover_resample(cd, dw, dh, cache.rgb);
+        cache.stamp = cd.stamp;
+        cache.sw = cd.width;
+        cache.sh = cd.height;
+        cache.dw = dw;
+        cache.dh = dh;
+    }
 
     Elements rows;
     for (int y = 0; y < dh; y++) {
-        /* contiguous floor boundaries: row y covers source rows
-           [floor(y*step), floor((y+1)*step)) — no gaps, no overlap,
-           no cumulative drift (step=2 matches the classic 2:1 layout) */
-        double y0f = y * step;
-        double y1f = y0f + step;
-        int y0 = (int)y0f;
-        int y1 = (int)y1f;
-        if (y1 <= y0) y1 = y0 + 1;
-        if (y1 > sh) y1 = sh;
-        int ymid = y0 + (y1 - y0) / 2;
-        if (ymid <= y0) ymid = y0 + 1;
-
         Elements cells;
         for (int x = 0; x < dw; x++) {
-            int x0 = x * sw / dw;
-            int x1 = (x + 1) * sw / dw;
-            if (x1 <= x0) x1 = x0 + 1;
-            uint8_t top[3], bot[3];
-            avg(x0, x1, y0, ymid, top);
-            avg(x0, x1, ymid, y1, bot);
+            const uint8_t *c = &cache.rgb[(size_t)(y * dw + x) * 6];
             cells.push_back(bgcolor(
-                Color::RGB(top[0], top[1], top[2]),
-                color(Color::RGB(bot[0], bot[1], bot[2]),
+                Color::RGB(c[0], c[1], c[2]),
+                color(Color::RGB(c[3], c[4], c[5]),
                     text("\u2580"))));
         }
         rows.push_back(hbox(std::move(cells)));
@@ -178,30 +255,29 @@ static Element render_cover(const CoverData &cd, int panel_w) {
 }
 
 Element render_cover_only(const AppState &s) {
-    int cw = 0;
-    cover_layout(s, &cw, NULL);
+    int cw = 0, dw = 0, dh = 0;
+    cover_layout(s, &cw, &dw, &dh);
 
-    if (s.cover.pixels && s.cover.width > 0 && s.cover.height > 0)
-        return render_cover(s.cover, cw) | center | flex;
+    if (s.cover.pixels && s.cover.width > 0 && s.cover.height > 0 &&
+        dw > 0 && dh > 0)
+        return render_cover(s.cover, dw, dh) | center | flex;
     if (s.cover_loading)
         return render_spinner(s) | center | flex;
     return vbox({text("")}) | center | flex;
 }
 
 /* Lyrics panel height follows the cover's rendered height (they sit side
-   by side and share the same vertical extent); falls back to 20 rows
-   while no cover is loaded. */
+   by side and share the same vertical extent); falls back to the dynamic
+   cap while no cover is loaded. */
 static int cover_panel_height(const AppState &s) {
-    int cw = 0, dh = 0;
-    cover_layout(s, &cw, &dh);
-    return dh > 0 ? dh : 20;
+    int dh = 0;
+    cover_layout(s, NULL, NULL, &dh);
+    return dh > 0 ? dh : cover_max_rows(s);
 }
 
 Element render_lyrics_only(const AppState &s) {
     int total = s.song_panel_width + 29;
-    int cw = total / 2 - 1;
-    if (cw < 12) cw = 12;
-    if (cw > 60) cw = 60;
+    int cw = cover_slot_width(s);
     int lw = total - cw - 1;
     if (lw < 20) lw = 20;
     int h = cover_panel_height(s);
@@ -209,17 +285,16 @@ Element render_lyrics_only(const AppState &s) {
            size(WIDTH, EQUAL, lw) | size(HEIGHT, EQUAL, h);
 }
 
-/* Left margin before the cover: 1/16 of the terminal width */
+/* Left margin before the cover: 1 column, mirroring the 1-row top bar
+   above so the cover sits flush with the layout edge. */
 int cover_left_margin(const AppState &s) {
-    int m = (s.song_panel_width + 29) / 16;
-    return m < 1 ? 1 : m;
+    (void)s;
+    return 1;
 }
 
 Element render_lyric_panel(const AppState &s) {
     int total = s.song_panel_width + 29;
-    int cw = total / 2 - 1;
-    if (cw < 12) cw = 12;
-    if (cw > 60) cw = 60;
+    int cw = cover_slot_width(s);
     int lw = total - cw - 1;
     if (lw < 20) lw = 20;
     /* The panel itself stays flexed to fill the main layout; the inner

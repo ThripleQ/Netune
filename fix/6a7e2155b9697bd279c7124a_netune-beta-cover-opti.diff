@@ -1,0 +1,690 @@
+diff --git a/src/app.cpp b/src/app.cpp
+index 02abb38..39a3e5f 100644
+--- a/src/app.cpp
++++ b/src/app.cpp
+@@ -592,7 +592,7 @@ static void ev_lyric_loaded(const BusEvent *ev, void *data) {
+ /* ── Cover downloaded in background thread ─────────── */
+ static void cover_download_worker(void *arg) {
+     char *url = (char*)arg;
+-    CoverData cd = {NULL, 0, 0, 0};
++    CoverData cd = {NULL, 0, 0, 0, 0};
+     if (url && cover_load(url, &cd) == 0)
+         event_bus_publish(EV_COVER_LOADED, &cd, sizeof(CoverData));
+     free(url);
+@@ -601,7 +601,7 @@ static void cover_download_worker(void *arg) {
+ /* ── Start cover download (shows spinner, clears old cover) ──── */
+ static void start_cover_download(const char *url) {
+     if (!url || !url[0]) return;
+-    CoverData empty = {NULL, 0, 0, 0};
++    CoverData empty = {NULL, 0, 0, 0, 0};
+     StateStore::instance().set_cover(empty);
+     StateStore::instance().set_cover_loading(true);
+     char *u = strdup(url);
+@@ -947,7 +947,7 @@ static void ev_track_changed(const BusEvent *ev, void *data) {
+     /* Always clear the old cover — a track without artwork must not leave
+        the previous cover lingering (the raw-image overlay would keep
+        showing it); a new cover_url triggers a fresh download. */
+-    CoverData empty = {NULL, 0, 0, 0};
++    CoverData empty = {NULL, 0, 0, 0, 0};
+     StateStore::instance().set_cover(empty);
+     StateStore::instance().set_cover_loading(false);
+     if (StateStore::instance().state().lyric_mode)
+@@ -2086,12 +2086,17 @@ int run_app(int argc, char **argv) {
+         ftxui::Loop loop(&screen, component);
+         /* Raw-image cover overlay (kitty graphics protocol):
+            - upload once per cover (fingerprinted inside term_gfx)
+-           - re-place every ~0.5s: terminal resizes / fullscreen toggles /
+-             window switches can drop or relocate placed images, and a
+-             periodic re-place heals that with no fragile resize detection
++           - re-place IMMEDIATELY whenever the geometry changed (terminal
++             resize, new cover, layout shift) so the image never lingers
++             at a stale position, then periodically (~0.5s wall clock) to
++             heal terminals that drop or relocate placed images on
++             fullscreen toggles / window switches
+            - clear when leaving lyric mode (edge-triggered) */
+         bool gfx_active = false;
+-        int  gfx_tick = 0;
++        auto gfx_last_place = std::chrono::steady_clock::time_point{};
++        int last_dimx = -1, last_dimy = -1;
++        int last_cw = -1, last_dw = -1, last_dh = -1;
++        uint64_t last_stamp = 0;
+         while (!loop.HasQuitted()) {
+             loop.RunOnceBlocking();
+             if (term_gfx_active()) {
+@@ -2099,31 +2104,54 @@ int run_app(int argc, char **argv) {
+                 bool active = st.lyric_mode && st.cover.pixels &&
+                               !st.show_help && st.login_state == 0;
+                 if (active) {
+-                    int cw = 0, dh = 0;
+-                    cover_layout(st, &cw, &dh);
+-                    if (cw > 0 && dh > 0) {
++                    int cw = 0, dw = 0, dh = 0;
++                    cover_layout(st, &cw, &dw, &dh);
++                    if (dw > 0 && dh > 0) {
+                         term_gfx_upload(&st.cover);
+-                        if (!gfx_active || ++gfx_tick >= 30) {
+-                            gfx_tick = 0;
+-                            /* The cover block is centered in the lyric
+-                               panel (which spans the screen below the
+-                               1-row top bar, above the 2+2 spectrum and
+-                               status rows) — place the image at the same
+-                               centered row so it overlays the blank
+-                               placeholder exactly. */
+-                            int panel_h = screen.dimy() - 1 - 2 - 2;
+-                            int row0 = 2;
+-                            if (panel_h > dh)
+-                                row0 += (panel_h - dh) / 2;
+-                            printf("\x1b[%d;%dH", row0,
+-                                   1 + cover_left_margin(st));
+-                            term_gfx_place(cw);
++                        /* The cover block is centered in the lyric panel,
++                           which spans the screen below the 1-row top bar
++                           and above the spectrum + 2-row status bar. The
++                           spectrum height is ADAPTIVE (2-4 rows, same
++                           formula as render_spectrum_bar) — the old fixed
++                           "- 2" misplaced the image on tall terminals. */
++                        int spec_rows = screen.dimy() / 12;
++                        if (spec_rows < 2) spec_rows = 2;
++                        if (spec_rows > 4) spec_rows = 4;
++                        int panel_h = screen.dimy() - 1 - spec_rows - 2;
++                        int row0 = 2;
++                        if (panel_h > dh)
++                            row0 += (panel_h - dh) / 2;
++                        /* The cover is centered inside its cw-column slot,
++                           mirroring the character renderer / placeholder */
++                        int col0 = 1 + cover_left_margin(st) + (cw - dw) / 2;
++
++                        auto now = std::chrono::steady_clock::now();
++                        bool geometry_changed =
++                            !gfx_active ||
++                            screen.dimx() != last_dimx ||
++                            screen.dimy() != last_dimy ||
++                            cw != last_cw || dw != last_dw || dh != last_dh ||
++                            st.cover.stamp != last_stamp;
++                        bool due =
++                            (now - gfx_last_place) >=
++                            std::chrono::milliseconds(500);
++                        if (geometry_changed || due) {
++                            gfx_last_place = now;
++                            last_dimx = screen.dimx();
++                            last_dimy = screen.dimy();
++                            last_cw = cw; last_dw = dw; last_dh = dh;
++                            last_stamp = st.cover.stamp;
++                            printf("\x1b[%d;%dH", row0, col0);
++                            term_gfx_place(dw, dh);
+                         }
+                     }
+                     gfx_active = true;
+                 } else if (gfx_active) {
+                     term_gfx_clear();
+                     gfx_active = false;
++                    last_dimx = last_dimy = -1;
++                    last_cw = last_dw = last_dh = -1;
++                    last_stamp = 0;
+                 }
+             }
+             fflush(stdout);
+diff --git a/src/core/cover.c b/src/core/cover.c
+index bf83dd5..46af411 100644
+--- a/src/core/cover.c
++++ b/src/core/cover.c
+@@ -14,22 +14,47 @@
+ #define STB_IMAGE_IMPLEMENTATION
+ #include "stb_image.h"
+ 
+-/* ── Nearest-neighbor downscale ──────────────────── */
++/* ── Area-average (box) downscale ─────────────────────
++   Every destination pixel averages the full source rectangle it maps to
++   (contiguous floor boundaries: no gaps, no overlap). Unlike the old
++   nearest-neighbor sampling this keeps thin outlines and high-contrast
++   edges visible when shrinking large covers, because no source pixel is
++   ever dropped. */
+ static void cover_scale(const uint8_t *src, int sw, int sh, int ch,
+                         uint8_t *dst, int dw, int dh)
+ {
+     for (int y = 0; y < dh; y++) {
+-        int sy = y * sh / dh;
++        int y0 = y * sh / dh;
++        int y1 = (y + 1) * sh / dh;
++        if (y1 <= y0) y1 = y0 + 1;
++        if (y1 > sh) y1 = sh;
+         for (int x = 0; x < dw; x++) {
+-            int sx = x * sw / dw;
+-            int si = (sy * sw + sx) * ch;
+-            int di = (y * dw + x) * ch;
++            int x0 = x * sw / dw;
++            int x1 = (x + 1) * sw / dw;
++            if (x1 <= x0) x1 = x0 + 1;
++            if (x1 > sw) x1 = sw;
++            long acc[4] = {0, 0, 0, 0};
++            long n = 0;
++            for (int sy = y0; sy < y1; sy++) {
++                const uint8_t *row = src + (size_t)sy * sw * ch;
++                for (int sx = x0; sx < x1; sx++) {
++                    const uint8_t *p = row + sx * ch;
++                    for (int c = 0; c < ch; c++)
++                        acc[c] += p[c];
++                    n++;
++                }
++            }
++            if (n == 0) n = 1;
++            uint8_t *o = dst + ((size_t)y * dw + x) * ch;
+             for (int c = 0; c < ch; c++)
+-                dst[di + c] = src[si + c];
++                o[c] = (uint8_t)(acc[c] / n);
+         }
+     }
+ }
+ 
++/* unique id source for CoverData.stamp */
++static uint64_t g_cover_seq = 0;
++
+ /* ── Run a program and capture stdout ────────────── */
+ static char *popen_read(const char *cmd, size_t *out_size) {
+     FILE *fp = POPEN(cmd, "r");
+@@ -132,10 +157,18 @@ int cover_load(const char *url, CoverData *out) {
+     /* Store the original image (within a sanity cap). The renderer samples
+        from it per frame, so keeping full resolution preserves detail —
+        2048px covers real-world covers (typically 300–800px) while capping
+-       memory against 4K+ edge cases. */
++       memory against 4K+ edge cases.
++
++       NOTE: images *below* the cap keep their native size. The previous
++       code resized everything to a 2048px longest side, nearest-neighbor
++       UPSCALING typical 300–800px covers: ~12MB of duplicated pixels per
++       cover, a ~17MB base64 kitty upload, and zero extra detail. */
+     int max_dim = 2048;
+-    int dw = (w > h) ? max_dim : (max_dim * w / h);
+-    int dh = (h > w) ? max_dim : (max_dim * h / w);
++    int dw = w, dh = h;
++    if (w > max_dim || h > max_dim) {
++        if (w >= h) { dw = max_dim; dh = max_dim * h / w; }
++        else        { dh = max_dim; dw = max_dim * w / h; }
++    }
+     if (dw < 1) dw = 1;
+     if (dh < 1) dh = 1;
+ 
+@@ -144,13 +177,17 @@ int cover_load(const char *url, CoverData *out) {
+         stbi_image_free(pixels);
+         return -1;
+     }
+-    cover_scale(pixels, w, h, 3, scaled, dw, dh);
++    if (dw == w && dh == h)
++        memcpy(scaled, pixels, (size_t)w * h * 3);
++    else
++        cover_scale(pixels, w, h, 3, scaled, dw, dh);
+     stbi_image_free(pixels);
+ 
+     out->pixels   = scaled;
+     out->width    = dw;
+     out->height   = dh;
+     out->channels = 3;
++    out->stamp    = ++g_cover_seq;
+     return 0;
+ }
+ 
+diff --git a/src/core/cover.h b/src/core/cover.h
+index f1e90b5..8eefce3 100644
+--- a/src/core/cover.h
++++ b/src/core/cover.h
+@@ -9,6 +9,12 @@ typedef struct {
+     int      width;
+     int      height;
+     int      channels; /* 3=RGB, 4=RGBA */
++    /* Monotonic id assigned by cover_load(); uniquely identifies the image
++       content. Used as the upload fingerprint by term_gfx — comparing the
++       pixel pointer alone is unsafe (the old buffer is freed and malloc
++       may hand out the same address for the next cover, which would skip
++       the re-upload and keep showing the previous cover). */
++    uint64_t stamp;
+ } CoverData;
+ 
+ /* ── API ──────────────────────────────────────── */
+diff --git a/src/core/term_gfx.c b/src/core/term_gfx.c
+index 05a4ed7..ae5ada8 100644
+--- a/src/core/term_gfx.c
++++ b/src/core/term_gfx.c
+@@ -9,7 +9,7 @@
+ TermGfxMode term_gfx_detect(void) { return TERM_GFX_NONE; }
+ int term_gfx_active(void) { return 0; }
+ void term_gfx_upload(const CoverData *cd) { (void)cd; }
+-void term_gfx_place(int cols) { (void)cols; }
++void term_gfx_place(int cols, int rows) { (void)cols; (void)rows; }
+ void term_gfx_clear(void) {}
+ #else
+ 
+@@ -17,14 +17,22 @@ void term_gfx_clear(void) {}
+ static TermGfxMode g_mode = TERM_GFX_NONE;
+ static int g_detected = 0;
+ 
+-/* fingerprint of the image currently uploaded */
+-static const uint8_t *g_uploaded_pixels = NULL;
++/* fingerprint of the image currently uploaded — the cover stamp, not the
++   pixel pointer: the old buffer is freed on cover change and malloc may
++   reuse the same address for same-dimension covers, which a pointer
++   compare cannot tell apart (stale cover would stay on screen) */
++static uint64_t g_uploaded_stamp = 0;
+ static int g_uploaded_w = 0;
+ static int g_uploaded_h = 0;
+ 
+ /* stable id handed out to the terminal (kitty i= parameter) */
+ static unsigned long g_img_id = 0;
+ 
++/* fixed placement id (kitty p= parameter): re-placing the same
++   (image id, placement id) pair atomically replaces the previous
++   placement instead of stacking a new one on top */
++#define TERM_GFX_PLACEMENT_ID 1
++
+ /* ── Base64 (RFC 4648) ──────────────────────────────── */
+ static const char B64[] =
+     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+@@ -117,32 +125,55 @@ void term_gfx_upload(const CoverData *cd) {
+     if (!term_gfx_active() || !cd || !cd->pixels) return;
+ 
+     /* skip re-transfer when nothing changed */
+-    if (g_uploaded_pixels == cd->pixels &&
++    if (cd->stamp != 0 && cd->stamp == g_uploaded_stamp &&
+         g_uploaded_w == cd->width && g_uploaded_h == cd->height)
+         return;
+ 
++    /* replacing the cover: drop the previous image's placements AND data
++       (uppercase d=I frees the data) so old artwork doesn't linger under
++       the new placement or eat the terminal's image quota */
++    if (g_img_id != 0) {
++        char seq[96];
++        snprintf(seq, sizeof(seq), "\x1b_Ga=d,d=I,i=%lu\x1b\\", g_img_id);
++        esc_write(seq);
++    }
++
+     g_img_id++;
+     if (g_img_id == 0) g_img_id = 1;  /* id 0 is invalid */
+ 
+     /* cover.c stores RGB24 (3 channels) */
+     kitty_upload_raw(cd->pixels, cd->width, cd->height, g_img_id);
+-    g_uploaded_pixels = cd->pixels;
++    g_uploaded_stamp = cd->stamp;
+     g_uploaded_w = cd->width;
+     g_uploaded_h = cd->height;
+-    LOG_DEBUG("term_gfx: uploaded cover %dx%d id=%lu",
+-              cd->width, cd->height, g_img_id);
++    LOG_DEBUG("term_gfx: uploaded cover %dx%d id=%lu stamp=%llu",
++              cd->width, cd->height, g_img_id,
++              (unsigned long long)cd->stamp);
+ }
+ 
+-void term_gfx_place(int cols) {
+-    if (!term_gfx_active() || g_img_id == 0 || cols <= 0)
++void term_gfx_place(int cols, int rows) {
++    if (!term_gfx_active() || g_img_id == 0 || cols <= 0 || rows <= 0)
+         return;
+-    char seq[128];
+-    /* a=p place, i=id, q=2 no response. Only c (columns) is given so the
+-       image scales keeping its aspect ratio; C=1 forbids kitty from moving
+-       the cursor after placement — otherwise the next FTXUI diff output
+-       would be written from the wrong cursor position. */
++    char seq[160];
++    /* Drop stale placements of this image first (lowercase d=i keeps the
++       uploaded data). Without this every a=p adds an additional
++       placement, and old ones linger after terminal resizes — the ghost
++       covers that corrupt the layout. Both escapes go out in one flush,
++       so the terminal applies them before the next frame: no flicker. */
++    snprintf(seq, sizeof(seq), "\x1b_Ga=d,d=i,i=%lu\x1b\\", g_img_id);
++    esc_write(seq);
++    /* a=p place, i=id, p= fixed placement id (re-placing the same
++       (image id, placement id) pair atomically replaces the previous
++       placement on terminals that support placement ids), q=2 no
++       response. Both c and r are given so the image fills exactly the
++       reserved placeholder rectangle (dw×dh from cover_layout) — with c
++       alone kitty scales by aspect and can overflow the placeholder when
++       the height cap kicked in. C=1 forbids kitty from moving the cursor
++       after placement — otherwise the next FTXUI diff output would be
++       written from the wrong cursor position. */
+     snprintf(seq, sizeof(seq),
+-             "\x1b_Ga=p,i=%lu,q=2,c=%d,C=1\x1b\\", g_img_id, cols);
++             "\x1b_Ga=p,i=%lu,p=%d,q=2,c=%d,r=%d,C=1\x1b\\",
++             g_img_id, TERM_GFX_PLACEMENT_ID, cols, rows);
+     esc_write(seq);
+ }
+ 
+@@ -150,7 +181,7 @@ void term_gfx_clear(void) {
+     if (!term_gfx_active()) return;
+     /* a=d delete, d=A deletes ALL images (and frees their data) */
+     esc_write("\x1b_Ga=d,d=A\x1b\\");
+-    g_uploaded_pixels = NULL;
++    g_uploaded_stamp = 0;
+     g_uploaded_w = g_uploaded_h = 0;
+ }
+ 
+diff --git a/src/core/term_gfx.h b/src/core/term_gfx.h
+index e34e922..bfa8cf5 100644
+--- a/src/core/term_gfx.h
++++ b/src/core/term_gfx.h
+@@ -12,11 +12,18 @@ extern "C" {
+    the cover is drawn as a real image placed over the UI after each frame;
+    otherwise the half-block character renderer is used.
+ 
+-   Placement strategy: upload once per cover (fingerprinted), then
+-   re-place periodically (~0.5s) from the caller — terminal resizes,
+-   fullscreen toggles and window switches can drop or relocate placed
+-   images, and a periodic re-place heals that within half a second with
+-   no fragile resize detection. */
++   Placement strategy: upload once per cover (fingerprinted by the cover
++   stamp), then re-place from the caller — immediately whenever the
++   layout geometry changes (terminal resize, new cover) and periodically
++   (~0.5s) otherwise. Terminal resizes, fullscreen toggles and window
++   switches can drop or relocate placed images; the periodic re-place
++   heals that with no fragile resize detection.
++
++   Every placement uses a stable placement id (p=1) and stale placements
++   of the image are deleted first, so re-placing REPLACES the previous
++   image instead of adding another one on top — repeated a=p without a
++   placement id creates a new placement each time, which leaves ghost
++   covers at old positions after a resize. */
+ 
+ typedef enum {
+     TERM_GFX_NONE,   /* fall back to half-block rendering */
+@@ -33,9 +40,11 @@ int term_gfx_active(void);
+ void term_gfx_upload(const CoverData *cd);
+ 
+ /* Place the uploaded image at the current cursor position, spanning
+-   `cols` terminal columns (kitty scales keeping the aspect ratio).
+-   C=1 keeps the cursor in place. */
+-void term_gfx_place(int cols);
++   `cols` terminal columns and `rows` rows (the image is scaled to fill
++   exactly that rectangle — pass the dw×dh computed by cover_layout so it
++   matches the reserved placeholder). Stale placements of the image are
++   replaced, not stacked. C=1 keeps the cursor in place. */
++void term_gfx_place(int cols, int rows);
+ 
+ /* Delete all placed images (e.g. when leaving lyric mode). */
+ void term_gfx_clear(void);
+diff --git a/src/ui/components/lyric_panel.cpp b/src/ui/components/lyric_panel.cpp
+index 9cc52ae..53b764a 100644
+--- a/src/ui/components/lyric_panel.cpp
++++ b/src/ui/components/lyric_panel.cpp
+@@ -7,8 +7,10 @@
+ #include "core/term_gfx.h"
+ #include <ftxui/screen/string.hpp>
+ #include <string>
++#include <vector>
+ #include <algorithm>
+ #include <cmath>
++#include <cstdint>
+ using namespace ftxui;
+ 
+ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
+@@ -76,47 +78,121 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
+ }
+ 
+ /* ── Cover ───────────────────────────────────────────────── */
+-void cover_layout(const AppState &s, int *cw, int *dh) {
++
++/* Cover display height cap (keeps the panel sane on tall covers; the
++   lyrics panel follows the same height). */
++#define COVER_MAX_ROWS 20
++
++/* Aspect-preserving fit of the cover into a `slot_w`-column slot.
++   Returns the display size dw×dh that shows the ENTIRE image with no
++   distortion and no crop: when the COVER_MAX_ROWS cap kicks in, the
++   width is reduced instead of squashing the image vertically. */
++static void cover_fit(const CoverData &cd, int slot_w, int *dw_out, int *dh_out) {
++    int dw = slot_w, dh = 0;
++    if (cd.pixels && cd.width > 0 && cd.height > 0) {
++        /* Probed cell aspect: source rows consumed per terminal row for an
++           undistorted rendering (2:1 cells → 2, the classic half-block
++           case). Keeps the cover square on any terminal font. */
++        double step = (double)cover_cell_height() / (double)cover_cell_width();
++        if (step < 1.0) step = 1.0;
++        if (dw > cd.width) dw = cd.width;   /* never upscale */
++        if (dw < 1) dw = 1;
++        dh = (int)(cd.height * (double)dw / (double)cd.width / step);
++        if (dh < 1) dh = 1;
++        if (dh > COVER_MAX_ROWS) {
++            dh = COVER_MAX_ROWS;
++            dw = (int)(cd.width * (double)dh * step / (double)cd.height);
++            if (dw < 1) dw = 1;
++        }
++    }
++    if (dw_out) *dw_out = dw;
++    if (dh_out) *dh_out = dh;
++}
++
++void cover_layout(const AppState &s, int *cw, int *dw, int *dh) {
+     int total = s.song_panel_width + 29;
+     int w = total / 2 - 1;
+     if (w < 12) w = 12;
+     if (w > 60) w = 60;
+     if (s.cover.width > 0 && w > s.cover.width) w = s.cover.width;
+-    int h = 0;
+-    if (s.cover.pixels && s.cover.width > 0 && s.cover.height > 0) {
+-        /* rows = source pixel rows / step, where step = cell_h/cell_w
+-           (source rows consumed per terminal row) */
+-        double step = (double)cover_cell_height() / cover_cell_width();
+-        if (step < 1.0) step = 1.0;
+-        h = (int)(s.cover.height * w / (double)s.cover.width / step);
+-        if (h % 2) h++;
+-    }
+-    if (h > 20) h = 20;   /* cover height cap (keeps the panel sane on
+-                             tall covers; lyrics follows the same height) */
+-    if (cw) *cw = w;
+-    if (dh) *dh = h;
++    int fw = 0, fh = 0;
++    cover_fit(s.cover, w, &fw, &fh);
++    if (cw) *cw = w;    /* slot width (lyrics layout follows this) */
++    if (dw) *dw = fw;   /* actual cover width, centered in the slot */
++    if (dh) *dh = fh;   /* actual cover rows (≤ COVER_MAX_ROWS) */
+ }
+ 
+-static Element render_cover(const CoverData &cd, int panel_w) {
+-    if (!cd.pixels || cd.width <= 0 || cd.height <= 0 || panel_w < 4)
+-        return vbox({text("")}) | center | flex;
++/* ── Half-block downsampling ────────────────────────────────
++   The full source image is mapped onto dw×dh terminal cells (two
++   vertical sub-pixels per cell via ▀). Boundaries are contiguous floors
++   over the FULL source extent — every source pixel contributes to
++   exactly one output sub-pixel, no gaps, no overlap.
++
++   The old code advanced the source by a cell-aspect "step" (≈2) rows per
++   terminal row, which is only correct at 1:1 scale. For any downscaled
++   cover it sampled just the top strip of the image (e.g. the top 40 of
++   300 rows), so the mosaic showed a horizontal band instead of the cover
++   and no outline of the original was recognizable. */
++
++/* Average one source rectangle. Accumulation happens in approximate
++   linear light (square law) instead of raw sRGB: plain sRGB averaging
++   darkens midtones and smears high-contrast edges — exactly where cover
++   art outlines live. */
++static void cover_avg_region(const CoverData &cd, int x0, int x1, int y0, int y1,
++                             uint8_t out[3]) {
++    uint64_t r = 0, g = 0, b = 0;
++    size_t n = 0;
++    int ch = cd.channels > 0 ? cd.channels : 3;
++    for (int sy = y0; sy < y1; sy++) {
++        const uint8_t *row = cd.pixels + (size_t)sy * cd.width * ch;
++        for (int sx = x0; sx < x1; sx++) {
++            const uint8_t *p = row + sx * ch;
++            r += (unsigned)p[0] * p[0];
++            g += (unsigned)p[1] * p[1];
++            b += (unsigned)p[2] * p[2];
++            n++;
++        }
++    }
++    if (n == 0) n = 1;
++    out[0] = (uint8_t)(sqrtf((float)(r / n)) + 0.5f);
++    out[1] = (uint8_t)(sqrtf((float)(g / n)) + 0.5f);
++    out[2] = (uint8_t)(sqrtf((float)(b / n)) + 0.5f);
++}
+ 
+-    int dw = panel_w;
+-    if (dw > cd.width) dw = cd.width;
++/* Resample the whole cover into dw×dh cells. `out` receives
++   dw*dh*2*3 bytes: top, then bottom half-block color per cell. */
++static void cover_resample(const CoverData &cd, int dw, int dh,
++                           std::vector<uint8_t> &out) {
++    int sw = cd.width, sh = cd.height;
++    out.assign((size_t)dw * dh * 2 * 3, 0);
++    const int sub_rows = dh * 2;   /* half-block sub-rows */
++    for (int y = 0; y < dh; y++) {
++        int t0 = (2 * y) * sh / sub_rows;
++        int t1 = (2 * y + 1) * sh / sub_rows;
++        int b1 = (2 * y + 2) * sh / sub_rows;
++        if (t1 <= t0) t1 = t0 + 1;
++        if (b1 <= t1) b1 = t1 + 1;
++        if (b1 > sh) b1 = sh;
++        for (int x = 0; x < dw; x++) {
++            int x0 = x * sw / dw;
++            int x1 = (x + 1) * sw / dw;
++            if (x1 <= x0) x1 = x0 + 1;
++            if (x1 > sw) x1 = sw;
++            uint8_t *cell = &out[(size_t)(y * dw + x) * 6];
++            cover_avg_region(cd, x0, x1, t0, t1, cell);      /* top */
++            cover_avg_region(cd, x0, x1, t1, b1, cell + 3);  /* bottom */
++        }
++    }
++}
+ 
+-    /* Source pixel rows consumed per terminal row, from the probed cell
+-       aspect (2:1 cell → step 2, the classic half-block case). This keeps
+-       the rendered cover square on any terminal font. */
+-    double step = (double)cover_cell_height() / cover_cell_width();
+-    if (step < 1.0) step = 1.0;
+-    int dh = (int)(cd.height * dw / (double)cd.width / step);
+-    if (dh < 1) dh = 1;
+-    if (dh % 2) dh++;
++static Element render_cover(const CoverData &cd, int dw, int dh) {
++    if (!cd.pixels || cd.width <= 0 || cd.height <= 0 || dw < 1 || dh < 1)
++        return vbox({text("")}) | center | flex;
+ 
+     /* Terminal supports the kitty graphics protocol: reserve the same
+        cell area as blank space — the real image is placed on top by the
+-       frame hook in app.cpp (periodic re-place, C=1), keeping the layout
+-       identical to the character fallback. */
++       frame hook in app.cpp, keeping the layout identical to the
++       character fallback. */
+     if (term_gfx_active()) {
+         Elements rows;
+         std::string blank((size_t)dw, ' ');
+@@ -125,51 +201,34 @@ static Element render_cover(const CoverData &cd, int panel_w) {
+         return vbox(std::move(rows)) | center | flex;
+     }
+ 
+-    int sw = cd.width, sh = cd.height;
+-
+-    /* Average the source region covered by each terminal half-block
+-       (box filter) instead of nearest-neighbor sampling — crisper result
+-       when the stored cover is larger than the panel. */
+-    auto avg = [&](int x0, int x1, int y0, int y1, uint8_t out[3]) {
+-        long r = 0, g = 0, b = 0, n = 0;
+-        for (int sy = y0; sy < y1; sy++) {
+-            const uint8_t *row = cd.pixels + (size_t)sy * sw * 3;
+-            for (int sx = x0; sx < x1; sx++) {
+-                const uint8_t *p = row + sx * 3;
+-                r += p[0]; g += p[1]; b += p[2]; n++;
+-            }
+-        }
+-        if (n == 0) n = 1;
+-        out[0] = (uint8_t)(r / n);
+-        out[1] = (uint8_t)(g / n);
+-        out[2] = (uint8_t)(b / n);
++    /* Downsampled cell colors, cached: the resample touches every source
++       pixel, so it only runs when the cover or the target size changed
++       (i.e. on window resize / new cover) — per-frame cost is just
++       emitting the characters. */
++    struct CellCache {
++        uint64_t stamp = 0;
++        int sw = 0, sh = 0, dw = 0, dh = 0;
++        std::vector<uint8_t> rgb;
+     };
++    static CellCache cache;
++    if (cache.stamp != cd.stamp || cache.sw != cd.width ||
++        cache.sh != cd.height || cache.dw != dw || cache.dh != dh) {
++        cover_resample(cd, dw, dh, cache.rgb);
++        cache.stamp = cd.stamp;
++        cache.sw = cd.width;
++        cache.sh = cd.height;
++        cache.dw = dw;
++        cache.dh = dh;
++    }
+ 
+     Elements rows;
+     for (int y = 0; y < dh; y++) {
+-        /* contiguous floor boundaries: row y covers source rows
+-           [floor(y*step), floor((y+1)*step)) — no gaps, no overlap,
+-           no cumulative drift (step=2 matches the classic 2:1 layout) */
+-        double y0f = y * step;
+-        double y1f = y0f + step;
+-        int y0 = (int)y0f;
+-        int y1 = (int)y1f;
+-        if (y1 <= y0) y1 = y0 + 1;
+-        if (y1 > sh) y1 = sh;
+-        int ymid = y0 + (y1 - y0) / 2;
+-        if (ymid <= y0) ymid = y0 + 1;
+-
+         Elements cells;
+         for (int x = 0; x < dw; x++) {
+-            int x0 = x * sw / dw;
+-            int x1 = (x + 1) * sw / dw;
+-            if (x1 <= x0) x1 = x0 + 1;
+-            uint8_t top[3], bot[3];
+-            avg(x0, x1, y0, ymid, top);
+-            avg(x0, x1, ymid, y1, bot);
++            const uint8_t *c = &cache.rgb[(size_t)(y * dw + x) * 6];
+             cells.push_back(bgcolor(
+-                Color::RGB(top[0], top[1], top[2]),
+-                color(Color::RGB(bot[0], bot[1], bot[2]),
++                Color::RGB(c[0], c[1], c[2]),
++                color(Color::RGB(c[3], c[4], c[5]),
+                     text("\u2580"))));
+         }
+         rows.push_back(hbox(std::move(cells)));
+@@ -178,11 +237,12 @@ static Element render_cover(const CoverData &cd, int panel_w) {
+ }
+ 
+ Element render_cover_only(const AppState &s) {
+-    int cw = 0;
+-    cover_layout(s, &cw, NULL);
++    int cw = 0, dw = 0, dh = 0;
++    cover_layout(s, &cw, &dw, &dh);
+ 
+-    if (s.cover.pixels && s.cover.width > 0 && s.cover.height > 0)
+-        return render_cover(s.cover, cw) | center | flex;
++    if (s.cover.pixels && s.cover.width > 0 && s.cover.height > 0 &&
++        dw > 0 && dh > 0)
++        return render_cover(s.cover, dw, dh) | center | flex;
+     if (s.cover_loading)
+         return render_spinner(s) | center | flex;
+     return vbox({text("")}) | center | flex;
+@@ -192,9 +252,9 @@ Element render_cover_only(const AppState &s) {
+    by side and share the same vertical extent); falls back to 20 rows
+    while no cover is loaded. */
+ static int cover_panel_height(const AppState &s) {
+-    int cw = 0, dh = 0;
+-    cover_layout(s, &cw, &dh);
+-    return dh > 0 ? dh : 20;
++    int dh = 0;
++    cover_layout(s, NULL, NULL, &dh);
++    return dh > 0 ? dh : COVER_MAX_ROWS;
+ }
+ 
+ Element render_lyrics_only(const AppState &s) {
+diff --git a/src/ui/components/lyric_panel.h b/src/ui/components/lyric_panel.h
+index 9f93034..7dae6ac 100644
+--- a/src/ui/components/lyric_panel.h
++++ b/src/ui/components/lyric_panel.h
+@@ -8,9 +8,13 @@ struct AppState;
+ ftxui::Element render_cover_only(const AppState &s);
+ 
+ /* Cover cell layout shared by the character renderer and the raw-image
+-   overlay: cw = panel width in columns (clamped 12-60), dh = rendered
+-   rows for the current cover (capped at the lyrics panel height 20). */
+-void cover_layout(const AppState &s, int *cw, int *dh);
++   overlay:
++   - cw = slot width in columns (clamped 12-60; lyrics layout follows it)
++   - dw = actual cover width in columns (≤ cw, centered inside the slot;
++          shrunk instead of distorting when the height cap kicks in)
++   - dh = rendered rows for the current cover (capped at 20)
++   Any output pointer may be NULL. */
++void cover_layout(const AppState &s, int *cw, int *dw, int *dh);
+ 
+ /* Left margin before the cover: 1/16 of the terminal width. */
+ int cover_left_margin(const AppState &s);
