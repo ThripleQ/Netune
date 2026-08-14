@@ -17,10 +17,12 @@
 extern "C" {
 #endif
 
-#ifndef _WIN32
-
 /* ── External control commands ────────────────────────
-   Delivered to the app via EV_MPRIS_COMMAND (int payload). */
+   Delivered to the app via EV_MPRIS_COMMAND (int payload).
+   Declared on ALL platforms so the shared event handler in
+   app.cpp compiles on Windows too — the event itself is only
+   ever published by the MPRIS/D-Bus module, which is built
+   only on Linux. */
 enum MprisCommand {
     MPRIS_CMD_PLAYPAUSE = 1,
     MPRIS_CMD_STOP,
@@ -28,6 +30,8 @@ enum MprisCommand {
     MPRIS_CMD_PREV,
     MPRIS_CMD_SEEK,     /* payload = target position in seconds */
 };
+
+#ifndef _WIN32
 
 int  mpris_init(void);
 void mpris_shutdown(void);
