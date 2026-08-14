@@ -79,15 +79,21 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
 
 /* ── Cover ───────────────────────────────────────────────── */
 
-/* Cover display height cap (keeps the panel sane on tall covers; the
-   lyrics panel follows the same height). */
-#define COVER_MAX_ROWS 20
+/* Dynamic cover height cap: follows the terminal height (2/5), so the
+   cover scales up on tall screens; 12 rows floor keeps small terminals
+   sane. The lyrics panel follows the same height. */
+static int cover_max_rows(const AppState &s) {
+    int m = s.screen_height * 2 / 5;
+    if (m < 12) m = 12;
+    return m;
+}
 
 /* Aspect-preserving fit of the cover into a `slot_w`-column slot.
    Returns the display size dw×dh that shows the ENTIRE image with no
-   distortion and no crop: when the COVER_MAX_ROWS cap kicks in, the
-   width is reduced instead of squashing the image vertically. */
-static void cover_fit(const CoverData &cd, int slot_w, int *dw_out, int *dh_out) {
+   distortion and no crop: when the height cap kicks in, the width is
+   reduced instead of squashing the image vertically. */
+static void cover_fit(const CoverData &cd, int slot_w, int max_rows,
+                      int *dw_out, int *dh_out) {
     int dw = slot_w, dh = 0;
     if (cd.pixels && cd.width > 0 && cd.height > 0) {
         /* Probed cell aspect: source rows consumed per terminal row for an
@@ -99,8 +105,8 @@ static void cover_fit(const CoverData &cd, int slot_w, int *dw_out, int *dh_out)
         if (dw < 1) dw = 1;
         dh = (int)(cd.height * (double)dw / (double)cd.width / step);
         if (dh < 1) dh = 1;
-        if (dh > COVER_MAX_ROWS) {
-            dh = COVER_MAX_ROWS;
+        if (dh > max_rows) {
+            dh = max_rows;
             dw = (int)(cd.width * (double)dh * step / (double)cd.height);
             if (dw < 1) dw = 1;
         }
@@ -109,17 +115,25 @@ static void cover_fit(const CoverData &cd, int slot_w, int *dw_out, int *dh_out)
     if (dh_out) *dh_out = dh;
 }
 
-void cover_layout(const AppState &s, int *cw, int *dw, int *dh) {
+/* Cover slot width (60% of the panel, 12-column floor) shared by the
+   cover/lyrics layout. */
+static int cover_slot_width(const AppState &s) {
     int total = s.song_panel_width + 29;
-    int w = total / 2 - 1;
+    int w = total * 6 / 10;
     if (w < 12) w = 12;
-    if (w > 60) w = 60;
+    return w;
+}
+
+void cover_layout(const AppState &s, int *cw, int *dw, int *dh) {
+    /* slot width = 60% of the panel, so the cover scales with the
+       terminal on wide screens (12-column floor for narrow ones) */
+    int w = cover_slot_width(s);
     if (s.cover.width > 0 && w > s.cover.width) w = s.cover.width;
     int fw = 0, fh = 0;
-    cover_fit(s.cover, w, &fw, &fh);
+    cover_fit(s.cover, w, cover_max_rows(s), &fw, &fh);
     if (cw) *cw = w;    /* slot width (lyrics layout follows this) */
     if (dw) *dw = fw;   /* actual cover width, centered in the slot */
-    if (dh) *dh = fh;   /* actual cover rows (≤ COVER_MAX_ROWS) */
+    if (dh) *dh = fh;   /* actual cover rows (≤ dynamic cap) */
 }
 
 /* ── Half-block downsampling ────────────────────────────────
@@ -249,19 +263,17 @@ Element render_cover_only(const AppState &s) {
 }
 
 /* Lyrics panel height follows the cover's rendered height (they sit side
-   by side and share the same vertical extent); falls back to 20 rows
-   while no cover is loaded. */
+   by side and share the same vertical extent); falls back to the dynamic
+   cap while no cover is loaded. */
 static int cover_panel_height(const AppState &s) {
     int dh = 0;
     cover_layout(s, NULL, NULL, &dh);
-    return dh > 0 ? dh : COVER_MAX_ROWS;
+    return dh > 0 ? dh : cover_max_rows(s);
 }
 
 Element render_lyrics_only(const AppState &s) {
     int total = s.song_panel_width + 29;
-    int cw = total / 2 - 1;
-    if (cw < 12) cw = 12;
-    if (cw > 60) cw = 60;
+    int cw = cover_slot_width(s);
     int lw = total - cw - 1;
     if (lw < 20) lw = 20;
     int h = cover_panel_height(s);
@@ -277,9 +289,7 @@ int cover_left_margin(const AppState &s) {
 
 Element render_lyric_panel(const AppState &s) {
     int total = s.song_panel_width + 29;
-    int cw = total / 2 - 1;
-    if (cw < 12) cw = 12;
-    if (cw > 60) cw = 60;
+    int cw = cover_slot_width(s);
     int lw = total - cw - 1;
     if (lw < 20) lw = 20;
     /* The panel itself stays flexed to fill the main layout; the inner
