@@ -285,10 +285,11 @@ Element render_lyrics_only(const AppState &s) {
            size(WIDTH, EQUAL, lw) | size(HEIGHT, EQUAL, h);
 }
 
-/* Left margin before the cover: 1/16 of the terminal width */
+/* Left margin before the cover: 1 column, mirroring the 1-row top bar
+   above so the cover sits flush with the layout edge. */
 int cover_left_margin(const AppState &s) {
-    int m = (s.song_panel_width + 29) / 16;
-    return m < 1 ? 1 : m;
+    (void)s;
+    return 1;
 }
 
 Element render_lyric_panel(const AppState &s) {
