@@ -79,11 +79,15 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
 
 /* ── Cover ───────────────────────────────────────────────── */
 
-/* Dynamic cover height cap: follows the terminal height (2/5), so the
-   cover scales up on tall screens; 12 rows floor keeps small terminals
-   sane. The lyrics panel follows the same height. */
+/* Dynamic cover height cap: the panel's usable height (terminal minus
+   the 1-row top bar, the adaptive spectrum bar and the 2-row status
+   bar) — the cover can grow as large as the layout physically allows.
+   12 rows floor keeps small terminals sane. */
 static int cover_max_rows(const AppState &s) {
-    int m = s.screen_height * 2 / 5;
+    int spec = s.screen_height / 12;
+    if (spec < 2) spec = 2;
+    if (spec > 4) spec = 4;
+    int m = s.screen_height - 1 - spec - 2;
     if (m < 12) m = 12;
     return m;
 }
@@ -91,7 +95,9 @@ static int cover_max_rows(const AppState &s) {
 /* Aspect-preserving fit of the cover into a `slot_w`-column slot.
    Returns the display size dw×dh that shows the ENTIRE image with no
    distortion and no crop: when the height cap kicks in, the width is
-   reduced instead of squashing the image vertically. */
+   reduced instead of squashing the image vertically. The display size is
+   decided by the layout alone — the source may be smaller (each cell
+   then averages fewer/more pixels), the mosaic stays sharp either way. */
 static void cover_fit(const CoverData &cd, int slot_w, int max_rows,
                       int *dw_out, int *dh_out) {
     int dw = slot_w, dh = 0;
@@ -101,7 +107,6 @@ static void cover_fit(const CoverData &cd, int slot_w, int max_rows,
            case). Keeps the cover square on any terminal font. */
         double step = (double)cover_cell_height() / (double)cover_cell_width();
         if (step < 1.0) step = 1.0;
-        if (dw > cd.width) dw = cd.width;   /* never upscale */
         if (dw < 1) dw = 1;
         dh = (int)(cd.height * (double)dw / (double)cd.width / step);
         if (dh < 1) dh = 1;
@@ -128,7 +133,6 @@ void cover_layout(const AppState &s, int *cw, int *dw, int *dh) {
     /* slot width = 60% of the panel, so the cover scales with the
        terminal on wide screens (12-column floor for narrow ones) */
     int w = cover_slot_width(s);
-    if (s.cover.width > 0 && w > s.cover.width) w = s.cover.width;
     int fw = 0, fh = 0;
     cover_fit(s.cover, w, cover_max_rows(s), &fw, &fh);
     if (cw) *cw = w;    /* slot width (lyrics layout follows this) */
