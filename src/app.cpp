@@ -388,7 +388,11 @@ static void activate_netease_menu_item(int idx) {
     } else if (type == 200) {
         start_login();
     } else if (type == 100) {
-        /* netease "search" menu entry — focus the top right search box */
+        /* netease "search" menu entry — clear the right list and any
+           stale query so the box switches to API search mode instead of
+           filtering the previous menu's songs, then focus the box */
+        StateStore::instance().set_playlist({}, 0);
+        StateStore::instance().set_top_right_query("");
         StateStore::instance().set_top_search_active(true, 1);
     } else if (!pl_id.empty()) {
         StateStore::instance().nav_push();
