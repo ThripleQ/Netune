@@ -592,7 +592,7 @@ static void ev_lyric_loaded(const BusEvent *ev, void *data) {
 /* ── Cover downloaded in background thread ─────────── */
 static void cover_download_worker(void *arg) {
     char *url = (char*)arg;
-    CoverData cd = {NULL, 0, 0, 0};
+    CoverData cd = {NULL, 0, 0, 0, 0};
     if (url && cover_load(url, &cd) == 0)
         event_bus_publish(EV_COVER_LOADED, &cd, sizeof(CoverData));
     free(url);
@@ -601,7 +601,7 @@ static void cover_download_worker(void *arg) {
 /* ── Start cover download (shows spinner, clears old cover) ──── */
 static void start_cover_download(const char *url) {
     if (!url || !url[0]) return;
-    CoverData empty = {NULL, 0, 0, 0};
+    CoverData empty = {NULL, 0, 0, 0, 0};
     StateStore::instance().set_cover(empty);
     StateStore::instance().set_cover_loading(true);
     char *u = strdup(url);
@@ -947,7 +947,7 @@ static void ev_track_changed(const BusEvent *ev, void *data) {
     /* Always clear the old cover — a track without artwork must not leave
        the previous cover lingering (the raw-image overlay would keep
        showing it); a new cover_url triggers a fresh download. */
-    CoverData empty = {NULL, 0, 0, 0};
+    CoverData empty = {NULL, 0, 0, 0, 0};
     StateStore::instance().set_cover(empty);
     StateStore::instance().set_cover_loading(false);
     if (StateStore::instance().state().lyric_mode)
@@ -2086,12 +2086,17 @@ int run_app(int argc, char **argv) {
         ftxui::Loop loop(&screen, component);
         /* Raw-image cover overlay (kitty graphics protocol):
            - upload once per cover (fingerprinted inside term_gfx)
-           - re-place every ~0.5s: terminal resizes / fullscreen toggles /
-             window switches can drop or relocate placed images, and a
-             periodic re-place heals that with no fragile resize detection
+           - re-place IMMEDIATELY whenever the geometry changed (terminal
+             resize, new cover, layout shift) so the image never lingers
+             at a stale position, then periodically (~0.5s wall clock) to
+             heal terminals that drop or relocate placed images on
+             fullscreen toggles / window switches
            - clear when leaving lyric mode (edge-triggered) */
         bool gfx_active = false;
-        int  gfx_tick = 0;
+        auto gfx_last_place = std::chrono::steady_clock::time_point{};
+        int last_dimx = -1, last_dimy = -1;
+        int last_cw = -1, last_dw = -1, last_dh = -1;
+        uint64_t last_stamp = 0;
         while (!loop.HasQuitted()) {
             loop.RunOnceBlocking();
             if (term_gfx_active()) {
@@ -2099,31 +2104,54 @@ int run_app(int argc, char **argv) {
                 bool active = st.lyric_mode && st.cover.pixels &&
                               !st.show_help && st.login_state == 0;
                 if (active) {
-                    int cw = 0, dh = 0;
-                    cover_layout(st, &cw, &dh);
-                    if (cw > 0 && dh > 0) {
+                    int cw = 0, dw = 0, dh = 0;
+                    cover_layout(st, &cw, &dw, &dh);
+                    if (dw > 0 && dh > 0) {
                         term_gfx_upload(&st.cover);
-                        if (!gfx_active || ++gfx_tick >= 30) {
-                            gfx_tick = 0;
-                            /* The cover block is centered in the lyric
-                               panel (which spans the screen below the
-                               1-row top bar, above the 2+2 spectrum and
-                               status rows) — place the image at the same
-                               centered row so it overlays the blank
-                               placeholder exactly. */
-                            int panel_h = screen.dimy() - 1 - 2 - 2;
-                            int row0 = 2;
-                            if (panel_h > dh)
-                                row0 += (panel_h - dh) / 2;
-                            printf("\x1b[%d;%dH", row0,
-                                   1 + cover_left_margin(st));
-                            term_gfx_place(cw);
+                        /* The cover block is centered in the lyric panel,
+                           which spans the screen below the 1-row top bar
+                           and above the spectrum + 2-row status bar. The
+                           spectrum height is ADAPTIVE (2-4 rows, same
+                           formula as render_spectrum_bar) — the old fixed
+                           "- 2" misplaced the image on tall terminals. */
+                        int spec_rows = screen.dimy() / 12;
+                        if (spec_rows < 2) spec_rows = 2;
+                        if (spec_rows > 4) spec_rows = 4;
+                        int panel_h = screen.dimy() - 1 - spec_rows - 2;
+                        int row0 = 2;
+                        if (panel_h > dh)
+                            row0 += (panel_h - dh) / 2;
+                        /* The cover is centered inside its cw-column slot,
+                           mirroring the character renderer / placeholder */
+                        int col0 = 1 + cover_left_margin(st) + (cw - dw) / 2;
+
+                        auto now = std::chrono::steady_clock::now();
+                        bool geometry_changed =
+                            !gfx_active ||
+                            screen.dimx() != last_dimx ||
+                            screen.dimy() != last_dimy ||
+                            cw != last_cw || dw != last_dw || dh != last_dh ||
+                            st.cover.stamp != last_stamp;
+                        bool due =
+                            (now - gfx_last_place) >=
+                            std::chrono::milliseconds(500);
+                        if (geometry_changed || due) {
+                            gfx_last_place = now;
+                            last_dimx = screen.dimx();
+                            last_dimy = screen.dimy();
+                            last_cw = cw; last_dw = dw; last_dh = dh;
+                            last_stamp = st.cover.stamp;
+                            printf("\x1b[%d;%dH", row0, col0);
+                            term_gfx_place(dw, dh);
                         }
                     }
                     gfx_active = true;
                 } else if (gfx_active) {
                     term_gfx_clear();
                     gfx_active = false;
+                    last_dimx = last_dimy = -1;
+                    last_cw = last_dw = last_dh = -1;
+                    last_stamp = 0;
                 }
             }
             fflush(stdout);
