@@ -42,12 +42,12 @@ apt install cmake pkg-config libavformat-dev libavcodec-dev libswresample-dev \
 
 ```bash
 cp build/netune ~/.local/bin/
-cp build/netease-cli ~/.local/bin/
-cp -r data ~/.local/bin/data/
+cp build/netease-cli ~/.local/bin/   # 存在时才复制（见下方说明）
 netune
 ```
 
-> `netease-cli` 在检测到 Go >= 1.22 时由 CMake 自动构建。验证：`ls -l build/netease-cli`
+> - 首次运行会自动生成默认配置和数据树到 `~/.config/netune/`，无需手动复制 `data/`。
+> - `netease-cli` 在检测到 Go >= 1.22 时由 CMake 自动构建；无 Go 时会从 GitHub Release 自动下载预编译二进制。两种情况都失败时该文件不存在，可跳过复制——网易云功能不可用，其余功能正常。
 
 ## 功能
 
