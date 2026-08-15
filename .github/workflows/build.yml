@@ -25,6 +25,11 @@ jobs:
             libavformat-dev libavcodec-dev libswresample-dev \
             libyaml-dev
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
       - name: Build
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -33,6 +38,13 @@ jobs:
       - name: Strip
         run: strip build/netune
 
+      - name: Package netease-cli
+        run: |
+          cd src/plugins/music_sources/netease/netease-cli
+          go build -ldflags="-s -w" -o "$GITHUB_WORKSPACE/build/netease-cli" .
+          cd "$GITHUB_WORKSPACE"
+          tar czf netease-cli-linux-x86_64.tar.gz -C build netease-cli
+
       - name: Upload
         uses: actions/upload-artifact@v4
         with:
@@ -40,6 +52,12 @@ jobs:
           path: |
             build/netune
             build/netease-cli
+
+      - name: Upload netease-cli
+        uses: actions/upload-artifact@v4
+        with:
+          name: netease-cli-linux
+          path: netease-cli-linux-x86_64.tar.gz
 
   windows:
     runs-on: windows-latest
@@ -112,6 +130,19 @@ jobs:
           name: netune-windows
           path: build\Release\*
 
+      - name: Package netease-cli
+        run: |
+          cd src/plugins/music_sources/netease/netease-cli
+          go build -ldflags="-s -w" -o "$env:GITHUB_WORKSPACE\build\netease-cli.exe" .
+          cd "$env:GITHUB_WORKSPACE"
+          Compress-Archive -Path build\netease-cli.exe -DestinationPath netease-cli-windows-x86_64.zip -Force
+
+      - name: Upload netease-cli
+        uses: actions/upload-artifact@v4
+        with:
+          name: netease-cli-windows
+          path: netease-cli-windows-x86_64.zip
+
   release:
     if: github.event_name == 'release'
     needs: [linux, windows]
@@ -123,6 +154,8 @@ jobs:
         run: |
           cd netune-linux && tar czf ../netune-linux.tar.gz * && cd ..
           cd netune-windows && zip -r ../netune-windows.zip * && cd ..
+          cp netease-cli-linux/netease-cli-linux-x86_64.tar.gz .
+          cp netease-cli-windows/netease-cli-windows-x86_64.zip .
 
       - name: Upload to release
         env:
@@ -132,3 +165,5 @@ jobs:
           files: |
             netune-linux.tar.gz
             netune-windows.zip
+            netease-cli-linux-x86_64.tar.gz
+            netease-cli-windows-x86_64.zip
