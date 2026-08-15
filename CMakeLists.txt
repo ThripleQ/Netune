@@ -53,7 +53,8 @@ netune_find_dep(ftxui 6.0.0
     GIT_TAG        ${NETUNE_FTXUI_TAG}
 )
 
-# ── yyjson (official CMake) ──────────────────────────netune_find_dep(yyjson 0.10.0
+# ── yyjson (official CMake) ──────────────────────────
+netune_find_dep(yyjson 0.10.0
   FETCH_CONTENT
     GIT_REPOSITORY https://github.com/ibireme/yyjson.git
     GIT_TAG        0.10.0
