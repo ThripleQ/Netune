@@ -9,6 +9,7 @@
 #define STDERR_REDIRECT " 2>/dev/null"
 #else
 #include <windows.h>
+#include <wchar.h>
 #define popen  _popen
 #define pclose _pclose
 #define STDERR_REDIRECT " 2>NUL"
@@ -16,8 +17,50 @@
 #include <stdarg.h>
 #include <yyjson.h>
 
-#define CLI "netease-cli"
+/* ── netease-cli binary resolution ───────────────────
+   Priority: (1) netease-cli sitting next to the netune executable
+   (that is where CMake builds it — build/netease-cli), (2) PATH.
+   Resolved once and cached; quoted when absolute so paths with
+   spaces survive the popen shell. */
+#define CLI cli_path()
+
+static char g_cli[1024] = "";
 static char g_name[128] = "";
+
+static const char *cli_path(void) {
+    if (g_cli[0]) return g_cli;
+#ifndef _WIN32
+    char exe[1024];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (n > 0) {
+        exe[n] = '\0';
+        char *slash = strrchr(exe, '/');
+        if (slash) {
+            *slash = '\0';
+            snprintf(g_cli, sizeof(g_cli), "\"%s/netease-cli\"", exe);
+            if (access(exe, F_OK) == 0 &&
+                access(g_cli + 1, X_OK) == 0) {  /* skip opening quote */
+                return g_cli;
+            }
+        }
+    }
+#else
+    wchar_t wbuf[MAX_PATH];
+    if (GetModuleFileNameW(NULL, wbuf, MAX_PATH) > 0) {
+        for (int i = (int)wcslen(wbuf) - 1; i >= 0; i--) {
+            if (wbuf[i] == L'\\' || wbuf[i] == L'/') { wbuf[i + 1] = L'\0'; break; }
+        }
+        char dir[MAX_PATH];
+        WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, dir, sizeof(dir), NULL, NULL);
+        snprintf(g_cli, sizeof(g_cli), "\"%snetease-cli.exe\"", dir);
+        if (GetFileAttributesA(g_cli + 1) != INVALID_FILE_ATTRIBUTES)
+            return g_cli;
+    }
+#endif
+    /* fallback: rely on PATH */
+    snprintf(g_cli, sizeof(g_cli), "netease-cli");
+    return g_cli;
+}
 
 /* ── shell escaping (prevents command injection) ────
    Wraps user/API-provided strings so they are safe to embed in a popen()
