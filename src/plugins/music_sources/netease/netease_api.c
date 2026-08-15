@@ -37,9 +37,11 @@ static const char *cli_path(void) {
         char *slash = strrchr(exe, '/');
         if (slash) {
             *slash = '\0';
-            snprintf(g_cli, sizeof(g_cli), "\"%s/netease-cli\"", exe);
-            if (access(exe, F_OK) == 0 &&
-                access(g_cli + 1, X_OK) == 0) {  /* skip opening quote */
+            /* bare path for the existence check, quoted for popen */
+            char bare[1024];
+            snprintf(bare, sizeof(bare), "%s/netease-cli", exe);
+            if (access(bare, X_OK) == 0) {
+                snprintf(g_cli, sizeof(g_cli), "\"%s\"", bare);
                 return g_cli;
             }
         }
@@ -52,9 +54,12 @@ static const char *cli_path(void) {
         }
         char dir[MAX_PATH];
         WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, dir, sizeof(dir), NULL, NULL);
-        snprintf(g_cli, sizeof(g_cli), "\"%snetease-cli.exe\"", dir);
-        if (GetFileAttributesA(g_cli + 1) != INVALID_FILE_ATTRIBUTES)
+        char bare[1024];
+        snprintf(bare, sizeof(bare), "%snetease-cli.exe", dir);
+        if (GetFileAttributesA(bare) != INVALID_FILE_ATTRIBUTES) {
+            snprintf(g_cli, sizeof(g_cli), "\"%s\"", bare);
             return g_cli;
+        }
     }
 #endif
     /* fallback: rely on PATH */
