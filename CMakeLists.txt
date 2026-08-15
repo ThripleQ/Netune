@@ -359,14 +359,28 @@ if(GO_EXECUTABLE)
     set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/netease-cli")
   endif()
 
-  add_custom_command(
-    OUTPUT  "${NETEASE_CLI_OUT}"
-    COMMAND "${GO_EXECUTABLE}" build "-ldflags=-s -w" -o "${NETEASE_CLI_OUT}" .
-    WORKING_DIRECTORY "${NETEASE_CLI_DIR}"
-    COMMENT "Building netease-cli (Go helper)..."
-  )
-  add_custom_target(netease-cli ALL DEPENDS "${NETEASE_CLI_OUT}")
-  add_dependencies(netune netease-cli)
+  # Build netease-cli, but never fail the whole build on Go errors — the
+  # netune runtime resolves the binary next to its own executable and
+  # degrades gracefully (Netease features off) when it is missing.
+  if(WIN32)
+    add_custom_command(
+      OUTPUT  "${NETEASE_CLI_OUT}"
+      COMMAND cmd /c "\"${GO_EXECUTABLE}\" build -ldflags=\"-s -w\" -o \"${NETEASE_CLI_OUT}\" . || echo netease-cli: build failed (Netease features unavailable)"
+      WORKING_DIRECTORY "${NETEASE_CLI_DIR}"
+      COMMENT "Building netease-cli (Go helper)..."
+      VERBATIM
+    )
+  else()
+    add_custom_command(
+      OUTPUT  "${NETEASE_CLI_OUT}"
+      COMMAND sh -c "\"${GO_EXECUTABLE}\" build -ldflags='-s -w' -o \"${NETEASE_CLI_OUT}\" . || echo \"netease-cli: build failed (Netease features unavailable)\""
+      WORKING_DIRECTORY "${NETEASE_CLI_DIR}"
+      COMMENT "Building netease-cli (Go helper)..."
+      VERBATIM
+    )
+  endif()
+  add_custom_target(netease-cli-build ALL DEPENDS "${NETEASE_CLI_OUT}")
+  add_dependencies(netune netease-cli-build)
 
   message(STATUS "netease-cli: Go found (${GO_EXECUTABLE}), will auto-build")
   install(PROGRAMS "${NETEASE_CLI_OUT}" DESTINATION bin)
