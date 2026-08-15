@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.18)
+﻿cmake_minimum_required(VERSION 3.18)
 project(netune VERSION 2.0.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
@@ -37,14 +37,23 @@ endmacro()
 # ── FTXUI ─────────────────────────────────────────────
 set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(FTXUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+# v6.1.9 fixes a Windows-only NULL deref in FTXUI Render() (focused.node is
+# NULL when the screen has no focus element, but FTXUI_MICROSOFT_TERMINAL_FALLBACK
+# defaults ON on Windows, so the Hidden-cursor branch still dereferences it).
+# Linux keeps v6.0.0 (the macro is OFF there, so the branch is never taken).
+if(WIN32)
+  set(NETUNE_FTXUI_TAG v6.1.9)
+else()
+  set(NETUNE_FTXUI_TAG v6.0.0)
+endif()
+
 netune_find_dep(ftxui 6.0.0
   FETCH_CONTENT
     GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
-    GIT_TAG        v6.0.0
+    GIT_TAG        ${NETUNE_FTXUI_TAG}
 )
 
-# ── yyjson (official CMake) ──────────────────────────
-netune_find_dep(yyjson 0.10.0
+# ── yyjson (official CMake) ──────────────────────────netune_find_dep(yyjson 0.10.0
   FETCH_CONTENT
     GIT_REPOSITORY https://github.com/ibireme/yyjson.git
     GIT_TAG        0.10.0
