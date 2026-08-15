@@ -5,8 +5,14 @@ A terminal-based music player with local file support and Netease Cloud Music in
 ## Build
 
 ```bash
+# Stable (master)
 git clone https://github.com/ThripleQ/Netune.git
 cd Netune
+
+# Or beta (new features first)
+git clone -b beta https://github.com/ThripleQ/Netune.git netune-beta
+cd netune-beta
+
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ./build/netune
