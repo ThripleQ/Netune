@@ -10,8 +10,8 @@
 #else
 #include <windows.h>
 #include <wchar.h>
-#define popen  _popen
-#define pclose _pclose
+#include <io.h>
+#include <process.h>
 #define STDERR_REDIRECT " 2>NUL"
 #endif
 #include <stdarg.h>
@@ -52,11 +52,14 @@ static const char *cli_path(void) {
         for (int i = (int)wcslen(wbuf) - 1; i >= 0; i--) {
             if (wbuf[i] == L'\\' || wbuf[i] == L'/') { wbuf[i + 1] = L'\0'; break; }
         }
-        char dir[MAX_PATH];
-        WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, dir, sizeof(dir), NULL, NULL);
-        char bare[1024];
-        snprintf(bare, sizeof(bare), "%snetease-cli.exe", dir);
-        if (GetFileAttributesA(bare) != INVALID_FILE_ATTRIBUTES) {
+        wchar_t wbare[MAX_PATH + 32];
+        _snwprintf(wbare, MAX_PATH + 32, L"%snetease-cli.exe", wbuf);
+        wbare[MAX_PATH + 32 - 1] = L'\0';
+        /* wide existence check — survives non-ASCII (e.g. Chinese
+           username) install paths that GetFileAttributesA would miss */
+        if (GetFileAttributesW(wbare) != INVALID_FILE_ATTRIBUTES) {
+            char bare[1024];
+            WideCharToMultiByte(CP_UTF8, 0, wbare, -1, bare, sizeof(bare), NULL, NULL);
             snprintf(g_cli, sizeof(g_cli), "\"%s\"", bare);
             return g_cli;
         }
@@ -68,8 +71,16 @@ static const char *cli_path(void) {
 }
 
 /* ── shell escaping (prevents command injection) ────
-   Wraps user/API-provided strings so they are safe to embed in a popen()
-   command line.  Returns a malloc'd string the caller must free(). */
+   Wraps user/API-provided strings so they are safe to embed in the
+   netease-cli command line.  Returns a malloc'd string the caller
+   must free().
+
+   POSIX  : single-quote wrapping for /bin/sh (used by popen()).
+   Windows: double-quote wrapping following the CreateProcess /
+            CommandLineToArgvW rules — backslashes are doubled only
+            when they precede a double quote (or end the argument),
+            embedded double quotes become \".  The result is passed to
+            CreateProcessW directly (see run()), NOT to cmd.exe. */
 static char *shell_escape(const char *s) {
     if (!s) s = "";
     size_t len = strlen(s);
@@ -91,8 +102,44 @@ static char *shell_escape(const char *s) {
     out[j] = '\0';
     return out;
 #else
-    /* Windows: wrap in double quotes, escape embedded double quotes and
-       carets.  Backslashes before quotes are doubled. */
+    /* Worst case every byte doubles (backslash run before a quote, or
+       the quote itself) plus the wrapping quotes and NUL. */
+    size_t cap = len * 2 + 3;
+    char *out = malloc(cap);
+    if (!out) return NULL;
+    size_t j = 0;
+    out[j++] = '"';
+    size_t i = 0;
+    while (i < len) {
+        if (s[i] == '\\') {
+            size_t nb = 0;
+            while (i < len && s[i] == '\\') { nb++; i++; }
+            /* Backslashes are literal unless followed by a quote (or the
+               end of the argument, right before our closing quote). */
+            int special = (i == len || s[i] == '"');
+            for (size_t k = 0; k < (special ? nb * 2 : nb); k++) out[j++] = '\\';
+            if (i < len && s[i] == '"') { out[j++] = '\\'; out[j++] = '"'; i++; }
+        } else if (s[i] == '"') {
+            out[j++] = '\\'; out[j++] = '"'; i++;
+        } else {
+            out[j++] = s[i]; i++;
+        }
+    }
+    out[j++] = '"';
+    out[j] = '\0';
+    return out;
+#endif
+}
+
+#ifndef _WIN32
+#define shell_escape_cmd shell_escape
+#else
+/* cmd.exe escaping — only for system() based commands (netease_download).
+   Do NOT use for the netease-cli invocation: that goes through
+   CreateProcessW, which needs shell_escape() above. */
+static char *shell_escape_cmd(const char *s) {
+    if (!s) s = "";
+    size_t len = strlen(s);
     size_t cap = len * 2 + 3;
     char *out = malloc(cap);
     if (!out) return NULL;
@@ -111,13 +158,112 @@ static char *shell_escape(const char *s) {
     out[j++] = '"';
     out[j] = '\0';
     return out;
-#endif
 }
+#endif
 
-/* ── popen helper ─────────────────────────────────── */
+/* ── CLI runner ─────────────────────────────────────
+   POSIX  : popen() through /bin/sh.
+   Windows: CreateProcessW with an anonymous stdout pipe.  Deliberately
+            does NOT go through cmd.exe (as _popen/system do): cmd's
+            quote-stripping rules mangle command lines of the form
+                "C:\...\netease-cli.exe" <subcmd> "<arg>"
+            (more than two quote characters → cmd strips the first and
+            last quote of the whole line), which made every netease-cli
+            invocation fail.  CreateProcessW parses the quoted executable
+            path itself and needs no shell.  stdin is pointed at NUL so
+            the child can never block waiting for input; stderr goes to
+            NUL as well (the old " 2>NUL" suffix is stripped below). */
+#ifdef _WIN32
+static char *run_createprocess(const char *cmd) {
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, cmd, -1, NULL, 0);
+    if (wlen <= 0) return NULL;
+    wchar_t *wcmd = (wchar_t*)malloc((size_t)wlen * sizeof(wchar_t));
+    if (!wcmd) return NULL;
+    MultiByteToWideChar(CP_UTF8, 0, cmd, -1, wcmd, wlen);
+
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof(sa);
+    sa.lpSecurityDescriptor = NULL;
+    sa.bInheritHandle = TRUE;
+
+    HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreatePipe(&hRead, &hWrite, &sa, 0)) { free(wcmd); return NULL; }
+    /* read end must not be inherited by the child */
+    SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
+
+    HANDLE hNulWr = CreateFileW(L"NUL", GENERIC_WRITE,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                        OPEN_EXISTING, 0, NULL);
+    HANDLE hNulRd = CreateFileW(L"NUL", GENERIC_READ,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE, &sa,
+                        OPEN_EXISTING, 0, NULL);
+
+    STARTUPINFOW si;
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput  = hNulRd ? hNulRd : GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = hWrite;
+    si.hStdError  = hNulWr ? hNulWr : hWrite;
+
+    PROCESS_INFORMATION pi;
+    memset(&pi, 0, sizeof(pi));
+    BOOL ok = CreateProcessW(NULL, wcmd, NULL, NULL, TRUE,
+                             CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+
+    CloseHandle(hWrite);
+    if (hNulWr) CloseHandle(hNulWr);
+    if (hNulRd) CloseHandle(hNulRd);
+
+    if (!ok) {
+        LOG_WARN("netease-cli CreateProcessW failed (err=%lu)", GetLastError());
+        CloseHandle(hRead); free(wcmd); return NULL;
+    }
+
+    size_t cap = 8192, len = 0;
+    char *b = (char*)malloc(cap);
+    if (!b) {
+        TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+        CloseHandle(hRead); free(wcmd);
+        return NULL;
+    }
+    char tmp[4096];
+    DWORD r = 0;
+    while (ReadFile(hRead, tmp, sizeof(tmp), &r, NULL) && r > 0) {
+        if (len + r + 1 >= cap) {
+            size_t ncap = cap * 2;
+            if (ncap < len + r + 1) ncap = len + r + 1;
+            char *t = (char*)realloc(b, ncap);
+            if (!t) { free(b); b = NULL; break; }
+            b = t; cap = ncap;
+        }
+        memcpy(b + len, tmp, r);
+        len += r;
+    }
+    if (b) b[len] = '\0';
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    CloseHandle(hRead);
+    free(wcmd);
+    return b;
+}
+#endif
+
 static char *run(const char *fmt, ...) {
     char cmd[4096]; va_list ap;
     va_start(ap, fmt); vsnprintf(cmd, sizeof(cmd), fmt, ap); va_end(ap);
+#ifdef _WIN32
+    /* drop the cmd.exe-style stderr redirect; run_createprocess()
+       already routes the child's stderr to NUL */
+    size_t clen = strlen(cmd);
+    const char redir[] = " 2>NUL";
+    const size_t rlen = sizeof(redir) - 1;
+    if (clen >= rlen && strcmp(cmd + clen - rlen, redir) == 0)
+        cmd[clen - rlen] = '\0';
+    return run_createprocess(cmd);
+#else
     FILE *fp = popen(cmd, "r"); if (!fp) return NULL;
     size_t cap = 8192, len = 0; char *b = malloc(cap); if (!b) { pclose(fp); return NULL; }
     while (!feof(fp)) {
@@ -125,6 +271,7 @@ static char *run(const char *fmt, ...) {
         size_t r=fread(b+len,1,cap-len-1,fp); if(r>0)len+=r; else break;
     }
     b[len]=0; pclose(fp); return b;
+#endif
 }
 
 /* ── JSON extraction helpers (yyjson-based) ───────── */
@@ -483,8 +630,8 @@ char* netease_download(const char *id, const char *url) {
                       ? "" : "/";
     snprintf(path, sizeof(path), "%s%snetune_%s.mp3", tmpdir, sep, id);
     remove_utf8(path);
-    char *esc_url = shell_escape(url);
-    char *esc_path = shell_escape(path);
+    char *esc_url = shell_escape_cmd(url);
+    char *esc_path = shell_escape_cmd(path);
     char cmd[4096]; snprintf(cmd,sizeof(cmd),"curl -sL --max-time 60 %s -o %s",esc_url,esc_path);
     free(esc_url); free(esc_path);
     int rc = system(cmd);
