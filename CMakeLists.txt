@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.18)
 project(netune VERSION 2.0.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
@@ -385,6 +385,30 @@ if(GO_EXECUTABLE)
   message(STATUS "netease-cli: Go found (${GO_EXECUTABLE}), will auto-build")
   install(PROGRAMS "${NETEASE_CLI_OUT}" DESTINATION bin)
 else()
-  message(WARNING "netease-cli: Go not found. Netease features won't work. "
-                  "Install Go >= 1.22 and rebuild.")
+  # No Go toolchain: fetch the prebuilt netease-cli from the GitHub
+  # release (built by CI) so Netease features work without Go. Falls
+  # back to a warning (features off) when the download is unavailable.
+  if(WIN32)
+    set(NETEASE_CLI_ASSET "netease-cli-windows-x86_64.zip")
+  elseif(APPLE)
+    set(NETEASE_CLI_ASSET "netease-cli-macos-x86_64.tar.gz")
+  else()
+    set(NETEASE_CLI_ASSET "netease-cli-linux-x86_64.tar.gz")
+  endif()
+  set(NETEASE_CLI_URL
+      "https://github.com/ThripleQ/Netune/releases/latest/download/${NETEASE_CLI_ASSET}")
+  set(NETEASE_CLI_ARCHIVE "${CMAKE_BINARY_DIR}/${NETEASE_CLI_ASSET}")
+  file(DOWNLOAD "${NETEASE_CLI_URL}" "${NETEASE_CLI_ARCHIVE}"
+       STATUS _netease_cli_dl_status TLS_VERIFY ON)
+  list(GET _netease_cli_dl_status 0 _netease_cli_dl_rc)
+  if(_netease_cli_dl_rc EQUAL 0 AND EXISTS "${NETEASE_CLI_ARCHIVE}")
+    file(ARCHIVE_EXTRACT INPUT "${NETEASE_CLI_ARCHIVE}"
+         DESTINATION "${CMAKE_BINARY_DIR}")
+    message(STATUS "netease-cli: downloaded prebuilt binary (${NETEASE_CLI_ASSET})")
+  else()
+    message(WARNING
+            "netease-cli: Go not found and prebuilt download failed. "
+            "Netease features won't work. Install Go >= 1.22 or run "
+            "cmake with network access and rebuild.")
+  endif()
 endif()
