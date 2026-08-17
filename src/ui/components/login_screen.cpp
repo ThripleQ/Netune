@@ -63,7 +63,7 @@ Element render_login_screen(const AppState &s) {
     Elements col;
 
     /* Title */
-    col.push_back(text(" Netease Login ") | bold | center | underlined);
+    col.push_back(text(" Netease Login ") | bold | center);
 
     switch (s.login_state) {
     case 1:
