@@ -33,6 +33,10 @@ struct NavState {
     int                        search_scope     = 0;
     bool                       search_active    = false;
     std::string                search_query;
+    /* Restore the right-panel list on pop. Set when entering a playlist
+       from a playlist list (recommend/my/favorite): Esc then returns to
+       the playlist list instead of leaving it behind. */
+    bool                       restore_playlist = false;
 };
 
 /* ── Loop mode ─────────────────────────────────────── */
@@ -231,6 +235,10 @@ public:
 
     /* nav stack push/pop for Esc-back */
     void nav_push(void);
+    /* push with restore_playlist=true: the right-panel list snapshot is
+       restored on pop (used when entering a playlist's songs from a
+       playlist list, so Esc lands back on the playlist list) */
+    void nav_push_restore_playlist(void);
     bool nav_pop(void);  /* returns true if state restored */
     bool nav_peek(NavState &out) const;  /* shallow copy of top; false if empty */
     void clear_nav_stack(void);

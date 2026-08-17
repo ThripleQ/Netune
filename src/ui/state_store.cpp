@@ -421,6 +421,12 @@ void StateStore::nav_push(void) {
     state_.nav_stack.push_back(std::move(ns));
 }
 
+void StateStore::nav_push_restore_playlist(void) {
+    nav_push();
+    if (!state_.nav_stack.empty())
+        state_.nav_stack.back().restore_playlist = true;
+}
+
 bool StateStore::nav_peek(NavState &out) const {
     if (state_.nav_stack.empty()) return false;
     out = state_.nav_stack.back();  /* shallow: caller must not free songs */
@@ -436,10 +442,22 @@ bool StateStore::nav_pop(void) {
     /* Restore navigation state only (left panel menu + focus). The right
        panel list is intentionally NOT restored: its content is replaced
        only by newly loaded content (playlist/menu loads), never by a
-       back-navigation. This keeps the visible list stable on Esc. */
+       back-navigation. This keeps the visible list stable on Esc.
+       EXCEPTION: playlist lists (recommend/my/favorite) push with
+       restore_playlist — popping them restores the playlist list so the
+       three-level nav (menu → playlist list → playlist songs) is
+       closed cleanly. */
     state_.active_panel     = 0;                 /* back to the menu layer */
     state_.netease_menu     = std::move(ns.netease_menu);
     state_.netease_selected = ns.netease_selected;
+    if (ns.restore_playlist) {
+        state_.playlist = std::move(ns.playlist);
+        state_.active_panel = 1;  /* land on the restored playlist list */
+    } else {
+        for (auto &s : ns.playlist)
+            song_info_free(&s);
+    }
+    state_.selected_index = 0;
     /* Esc always exits search mode, never restores it */
     state_.search_active    = false;
     state_.search_query     = "";

@@ -546,7 +546,9 @@ static void activate_netease_menu_item(int idx) {
         StateStore::instance().set_netease_menu({});
         StateStore::instance().set_music_mode(MusicMode::Netease);
     } else if (!pl_id.empty()) {
-        StateStore::instance().nav_push();
+        /* entering a playlist's songs from a playlist list — push with
+           playlist restore so Esc lands back on the playlist list */
+        StateStore::instance().nav_push_restore_playlist();
         StateStore::instance().set_loading(true);
         std::string _pl_id = pl_id;
         std::thread([_pl_id]() {
