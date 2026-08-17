@@ -106,6 +106,10 @@ Element render_login_screen(const AppState &s) {
         col.push_back(text(" Login successful! ") | bold | center);
         if (!s.login_status.empty())
             col.push_back(theme_accent(text(" " + s.login_status + " ")) | center);
+        col.push_back(hbox({
+            login_spinner_el(),
+            text(" Loading your playlists... ") | dim,
+        }) | center);
         col.push_back(filler());
         break;
     }

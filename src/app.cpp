@@ -1542,23 +1542,42 @@ int run_app(int argc, char **argv) {
         state.set_screen_height(screen.dimy());
         state.set_top_row_width(screen.dimx());
 
-        /* Login polling: every ~2s while waiting for QR scan;
-           auto-close 2s after successful login */
+        /* Login polling: wall-clock based (the render loop runs at
+           200ms/frame when idle — tick counting would slow polling to
+           tens of seconds). Poll every 1s, auto-close the success
+           overlay 10s after login (or sooner when data loading ends). */
+        static auto last_poll = std::chrono::steady_clock::now();
+        static auto login_done_at = std::chrono::steady_clock::now();
         if (s.login_state == 3) {
-            static int close_tick = 0;
-            if (++close_tick >= 125) {
-                close_tick = 0;
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - login_done_at).count() >= 10000)
                 StateStore::instance().set_login_state(0, "", "");
-            }
         }
-        if (s.login_state == 2 && ++g_login_poll_tick % 62 == 0) {
+        if (s.login_state == 2 &&
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - last_poll).count() >= 1000) {
+            last_poll = std::chrono::steady_clock::now();
             int rc = netease_qr_poll(g_login_unikey.c_str());
             LOG_INFO("LOGIN POLL: rc=%d", rc);
             if (rc == 0) {
                 /* 803: authorized, login successful */
+                login_done_at = std::chrono::steady_clock::now();
                 StateStore::instance().set_login_state(3,
                     netease_account_name() ? netease_account_name() : "Logged in", "");
                 update_login_menu();
+                /* Data-loading phase: warm up the user's playlists in
+                   the background; the success overlay closes when this
+                   finishes (or after the 10s timeout above). */
+                std::thread([]() {
+                    SongInfo *pl = NULL; int pc = 0;
+                    netease_playlists(false, &pl, &pc);
+                    if (pl) {
+                        for (int i = 0; i < pc; i++)
+                            song_info_free(&pl[i]);
+                        free(pl);
+                    }
+                    StateStore::instance().set_login_state(0, "", "");
+                }).detach();
             } else if (rc == 2) {
                 /* 800: expired — restart */
                 g_login_unikey.clear();
