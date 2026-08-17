@@ -24,6 +24,7 @@ void netease_search_free(NSSearchResult *r);
 /* ── Login ─────────────────────────────────────────── */
 int  netease_qr_key(char *unikey, size_t uk_sz, char *url, size_t url_sz);
 char* netease_qr_render(const char *url);
+char* netease_qr_image(const char *url);
 int  netease_qr_poll(const char *unikey);
 bool netease_is_logged_in(void);
 

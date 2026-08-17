@@ -46,6 +46,7 @@ extern "C" {
 #include "core/search_manager.h"
 #include "core/cache_manager.h"
 #include "core/term_gfx.h"
+#include "stb_image.h"
 #include "plugins/music_sources/local/local_source.h"
 #include "plugins/music_sources/netease/netease_source.h"
 #include "plugins/music_sources/netease/netease_api.h"
@@ -187,6 +188,37 @@ static void on_signal(int sig) { (void)sig; g_running = false; }
 static std::string g_login_unikey;
 static int         g_login_poll_tick = 0;
 
+/* High-resolution QR image (kitty graphics path). Fetched in the
+   background when the QR screen opens; the render loop places it over
+   the login layout when ready. */
+static CoverData    g_login_qr = {0};
+static volatile int g_login_qr_ready = 0;
+static uint64_t     g_login_qr_stamp = 0;
+
+/* Minimal base64 decoder (the qr-image command emits base64 PNG) */
+static std::vector<uint8_t> b64_decode(const char *s) {
+    std::vector<uint8_t> out;
+    int val = 0, bits = -8;
+    for (; *s; ++s) {
+        if (*s == '=') break;
+        unsigned char c = (unsigned char)*s;
+        int d;
+        if (c >= 'A' && c <= 'Z')      d = c - 'A';
+        else if (c >= 'a' && c <= 'z') d = c - 'a' + 26;
+        else if (c >= '0' && c <= '9') d = c - '0' + 52;
+        else if (c == '+')             d = 62;
+        else if (c == '/')             d = 63;
+        else continue;
+        val = (val << 6) + d;
+        bits += 6;
+        if (bits >= 0) {
+            out.push_back((uint8_t)((val >> bits) & 0xFF));
+            bits -= 8;
+        }
+    }
+    return out;
+}
+
 /* Generate QR code text using netease-cli's built-in qr-render */
 static std::string gen_qr(const char *url) {
     char *qr = netease_qr_render(url);
@@ -211,6 +243,32 @@ static void start_login(void) {
         /* unikey is valid for ~2 minutes; count down from there */
         StateStore::instance().set_login_deadline((long)time(NULL) + 120);
         StateStore::instance().set_login_net_error(0);
+
+        /* Fetch the high-resolution QR image in the background for
+           terminals with kitty graphics support. */
+        g_login_qr_ready = 0;
+        if (g_login_qr.pixels) {
+            free(g_login_qr.pixels);
+            g_login_qr.pixels = NULL;
+        }
+        std::string qr_url_copy = qr_url;
+        std::thread([](std::string url) {
+            char *b64 = netease_qr_image(url.c_str());
+            if (!b64) return;
+            std::vector<uint8_t> png = b64_decode(b64);
+            free(b64);
+            if (png.empty()) return;
+            int w = 0, h = 0, ch = 0;
+            uint8_t *px = stbi_load_from_memory(png.data(), (int)png.size(),
+                                                &w, &h, &ch, 3);
+            if (!px) return;
+            g_login_qr.pixels = px;
+            g_login_qr.width = w;
+            g_login_qr.height = h;
+            g_login_qr.channels = 3;
+            g_login_qr.stamp = ++g_login_qr_stamp;
+            g_login_qr_ready = 1;
+        }, qr_url_copy).detach();
     } else {
         StateStore::instance().set_login_state(-1,
             "Failed to get QR code", "");
@@ -2275,6 +2333,50 @@ int run_app(int argc, char **argv) {
                     last_dimx = last_dimy = -1;
                     last_cw = last_dw = last_dh = -1;
                     last_stamp = 0;
+                }
+
+                /* QR login image: placed over the login layout when the
+                   QR screen is up (mutually exclusive with the lyric
+                   cover above). Rows are reserved by login_screen as a
+                   placeholder starting at row 3; cols = 2x rows keeps
+                   the square aspect (half-block cells are 2:1). */
+                static bool qr_gfx_placed = false;
+                static auto qr_gfx_last = std::chrono::steady_clock::time_point{};
+                static int qr_ldx = -1, qr_ldy = -1, qr_lrows = -1;
+                static uint64_t qr_lstamp = 0;
+                if (g_login_qr_ready && st.login_state == 2) {
+                    int rows = st.screen_height - 8;
+                    if (rows < 4) rows = 4;
+                    if (rows > 12) rows = 12;
+                    int cols = rows * 2;
+                    int row0 = 3;
+                    int col0 = 1 + (screen.dimx() - cols) / 2;
+                    if (col0 < 1) col0 = 1;
+                    auto now = std::chrono::steady_clock::now();
+                    bool changed = !qr_gfx_placed ||
+                                   screen.dimx() != qr_ldx ||
+                                   screen.dimy() != qr_ldy ||
+                                   rows != qr_lrows ||
+                                   g_login_qr.stamp != qr_lstamp;
+                    bool due = (now - qr_gfx_last) >=
+                               std::chrono::milliseconds(500);
+                    if (changed || due) {
+                        qr_gfx_last = now;
+                        qr_ldx = screen.dimx();
+                        qr_ldy = screen.dimy();
+                        qr_lrows = rows;
+                        qr_lstamp = g_login_qr.stamp;
+                        term_gfx_upload(&g_login_qr);
+                        printf("\x1b[%d;%dH", row0, col0);
+                        term_gfx_place(cols, rows);
+                    }
+                    qr_gfx_placed = true;
+                } else if (qr_gfx_placed) {
+                    term_gfx_clear();
+                    qr_gfx_placed = false;
+                    qr_ldx = qr_ldy = -1;
+                    qr_lrows = -1;
+                    qr_lstamp = 0;
                 }
             }
             fflush(stdout);

@@ -475,6 +475,19 @@ char* netease_qr_render(const char *url) {
     return r;
 }
 
+/* High-resolution QR PNG as base64 (for the kitty graphics renderer).
+   Caller frees the returned string. */
+char* netease_qr_image(const char *url) {
+    char *esc = shell_escape(url);
+    char *r = run("%s qr-image %s%s",CLI,esc,STDERR_REDIRECT);
+    free(esc);
+    if (r) {
+        size_t l = strlen(r);
+        while (l > 0 && (r[l-1] == '\n' || r[l-1] == '\r')) r[--l] = 0;
+    }
+    return r;
+}
+
 int netease_qr_poll(const char *uk) {
     char *esc = shell_escape(uk);
     char *j=run("%s qr-check %s%s",CLI,esc,STDERR_REDIRECT);

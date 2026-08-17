@@ -1,6 +1,7 @@
 #include "ui/components/login_screen.h"
 #include "ui/components/theme_util.h"
 #include "ui/theme.h"
+#include "core/term_gfx.h"
 #include <cstdio>
 #include <string>
 #include <sstream>
@@ -51,14 +52,19 @@ Element render_login_screen(const AppState &s) {
         break;
 
     case 2: {
-        /* QR code — centered, boxed */
-        col.push_back(filler());
-        if (!s.login_qr.empty()) {
+        /* QR code — centered, boxed. With kitty graphics the real image
+           is placed by app.cpp at row 3; reserve an invisible fixed
+           placeholder so the countdown stays anchored. */
+        if (!s.login_qr.empty() && term_gfx_active()) {
+            int rows = s.screen_height - 8;
+            if (rows < 4) rows = 4;
+            if (rows > 12) rows = 12;
+            col.push_back(vbox(Elements{}) | size(HEIGHT, EQUAL, rows));
+        } else if (!s.login_qr.empty()) {
             col.push_back(qr_box(s.login_qr) | center);
         } else {
             col.push_back(theme_fg(text(" No QR code available ")) | center);
         }
-        col.push_back(filler());
 
         /* Countdown below the code */
         long remain = s.login_qr_deadline - (long)time(NULL);

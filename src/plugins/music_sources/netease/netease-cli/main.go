@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -220,6 +221,22 @@ func main() {
 			die(fmt.Sprintf("qr error: %v", err))
 		}
 		fmt.Print(qr.ToSmallString(false))
+
+	case "qr-image":
+		// High-resolution PNG as base64 — for terminals that support the
+		// kitty graphics protocol (crisp scaling, no module loss).
+		if len(os.Args) < 3 {
+			die("usage: netease-cli qr-image <url>")
+		}
+		qr, err := qrcode.New(os.Args[2], qrcode.Medium)
+		if err != nil {
+			die(fmt.Sprintf("qr error: %v", err))
+		}
+		png, err := qr.PNG(480)
+		if err != nil {
+			die(fmt.Sprintf("qr png error: %v", err))
+		}
+		fmt.Println(base64.StdEncoding.EncodeToString(png))
 
 	case "qr-key":
 		s := service.LoginQRService{}
