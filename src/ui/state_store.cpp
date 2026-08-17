@@ -270,6 +270,7 @@ void StateStore::set_music_mode(MusicMode mode) {
                 state_.netease_menu[0].name = name;
             else
                 state_.netease_menu[0].name = "\u5df2\u767b\u5f55";
+            state_.netease_menu[0].type = 300;  /* account page entry */
         }
     }
     state_.netease_selected = 0;

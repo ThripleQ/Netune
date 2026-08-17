@@ -493,6 +493,36 @@ int netease_qr_poll(const char *uk) {
 }
 bool netease_is_logged_in(void) { return g_name[0]!=0; }
 
+/* ── Login refresh ────────────────────────────────── */
+int netease_login_refresh(void) {
+    char *j = run("%s login-refresh%s", CLI, STDERR_REDIRECT);
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    long long c = root ? jget_int(root, "code") : 0;
+    yyjson_doc_free(doc);
+    return c == 200 ? 0 : -1;
+}
+
+/* ── Logout: drop the cached cookie file ──────────── */
+int netease_logout(void) {
+    const char *home = getenv_utf8("HOME");
+#ifdef _WIN32
+    if (!home || !home[0]) home = getenv_utf8("USERPROFILE");
+#endif
+    if (!home || !home[0]) return -1;
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/.cache/netune/cookies.txt", home);
+    if (remove_utf8(path) == 0) {
+        g_name[0] = 0;
+        return 0;
+    }
+    /* file already gone counts as logged out */
+    return g_name[0] ? -1 : 0;
+}
+
 /* ── Playlists ────────────────────────────────────── */
 int netease_playlists(bool favorited, SongInfo **out, int *count) {
     char *j=run("%s playlists%s",CLI,STDERR_REDIRECT); if(!j)return -1;

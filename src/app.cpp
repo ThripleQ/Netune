@@ -227,6 +227,7 @@ static void update_login_menu(void) {
     std::string label = "";
     label += name;
     menu[0].name = label;
+    menu[0].type = 300;  /* account page entry */
     StateStore::instance().set_netease_menu(menu);
 }
 
@@ -398,6 +399,81 @@ static void activate_netease_menu_item(int idx) {
         StateStore::instance().set_playlist({}, 0);
         StateStore::instance().set_top_right_query("");
         StateStore::instance().set_top_search_active(true, 1);
+    } else if (type == 300) {
+        /* account page: submenu of the logged-in user */
+        StateStore::instance().set_netease_menu({
+            {"<< \u8FD4\u56DE", -1, ""},
+            {"\u6211\u7684\u6B4C\u5355", 301, ""},
+            {"\u6211\u559C\u6B22\u7684\u97F3\u4E50", 302, ""},
+            {"\u5237\u65B0\u767B\u5F55", 303, ""},
+            {"\u9000\u51FA\u767B\u5F55", 304, ""},
+        });
+        StateStore::instance().set_netease_selected(0);
+    } else if (type == 301) {
+        /* my playlists */
+        StateStore::instance().nav_push();
+        StateStore::instance().set_loading(true);
+        std::thread([]() {
+            SongInfo *pl = NULL; int pc = 0;
+            int ret = netease_playlists(false, &pl, &pc);
+            LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
+            if (ret == 0 && pc > 0) {
+                ld->songs = pl; ld->count = pc;
+            } else {
+                ld->songs = NULL; ld->count = 0;
+                free(pl);
+            }
+            if (event_bus_publish(EV_PLAYLIST_LIST_LOADED, ld, sizeof(*ld)) != 0) {
+                if (ld->songs) {
+                    for (int i = 0; i < ld->count; i++)
+                        song_info_free(&ld->songs[i]);
+                    free(ld->songs);
+                }
+                free(ld);
+            }
+        }).detach();
+    } else if (type == 302 || type == 4) {
+        /* liked songs (account page 302 / main menu 4) */
+        StateStore::instance().nav_push();
+        StateStore::instance().set_loading(true);
+        std::thread([]() {
+            SongInfo *ms = NULL; int mc = 0;
+            int ret = netease_liked_songs(&ms, &mc);
+            LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
+            if (ret == 0 && mc > 0) {
+                ld->songs = ms; ld->count = mc;
+            } else {
+                ld->songs = NULL; ld->count = 0;
+                free(ms);
+            }
+            if (event_bus_publish(EV_PLAYLIST_LOADED, ld, sizeof(*ld)) != 0) {
+                if (ld->songs) {
+                    for (int i = 0; i < ld->count; i++)
+                        song_info_free(&ld->songs[i]);
+                    free(ld->songs);
+                }
+                free(ld);
+            }
+        }).detach();
+    } else if (type == 303) {
+        /* refresh login */
+        std::thread([]() {
+            int ok = netease_login_refresh();
+            if (ok == 0) {
+                const char *name = netease_account_name();
+                StateStore::instance().set_login_state(3,
+                    name ? name : "Logged in", "");
+            } else {
+                StateStore::instance().set_login_state(-1,
+                    "Refresh login failed", "");
+            }
+        }).detach();
+    } else if (type == 304) {
+        /* logout: drop cookies, rebuild the default (logged-out) menu */
+        netease_logout();
+        StateStore::instance().set_netease_menu({});
+        StateStore::instance().set_music_mode(MusicMode::Local);
+        StateStore::instance().set_music_mode(MusicMode::Netease);
     } else if (!pl_id.empty()) {
         StateStore::instance().nav_push();
         StateStore::instance().set_loading(true);

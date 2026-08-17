@@ -34,6 +34,8 @@ int  netease_playlist_songs(const char *id,        /* songs in a playlist */
 int  netease_liked_songs(SongInfo **out, int *count);   /* liked songs */
 int  netease_menu_songs(int type, int limit,            /* daily etc */
                         SongInfo **out, int *count);
+int  netease_login_refresh(void);                       /* 0 = ok */
+int  netease_logout(void);                              /* 0 = ok */
 
 /* ── Play URL + Download ──────────────────────────── */
 /* Get streaming URL.                                      */
