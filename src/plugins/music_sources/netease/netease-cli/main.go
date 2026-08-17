@@ -241,6 +241,16 @@ func main() {
 	case "qr-key":
 		s := service.LoginQRService{}
 		code, body, qrUrl, err := s.GetKey()
+		if err != nil || code != 200 || s.UniKey == "" {
+			// 风控(-462 "网络环境存在风险"): 旧 jar 里残留的失效登录碎片
+			// cookie (os/appver/__remember_me/旧 sDeviceId/假 NMTID) 会触发
+			// 风控 — 删除缓存文件、换一个全新的空 jar 重试一次。
+			os.Remove(cookiePath)
+			jar2, _ := cookiejar.NewFileJar(cookiePath, nil)
+			util.SetGlobalCookieJar(jar2)
+			s = service.LoginQRService{}
+			code, body, qrUrl, err = s.GetKey()
+		}
 		if err != nil {
 			die(fmt.Sprintf("get qr key failed: %v", err))
 		}
@@ -469,6 +479,11 @@ func saveNeteaseCookies(cookieStr string) {
 			strings.EqualFold(n, "Expires") || strings.EqualFold(n, "Max-Age") ||
 			strings.EqualFold(n, "Secure") || strings.EqualFold(n, "HttpOnly") ||
 			strings.EqualFold(n, "SameSite") {
+			continue
+		}
+		// ApplyRequestStrategy 注入的固定假 NMTID 不持久化 —
+		// 它会与请求级的随机 NMTID 同时发送（重复 Cookie 头，风控嫌疑）
+		if strings.EqualFold(n, "NMTID") && kv[1] == "some_random_id_from_strategy" {
 			continue
 		}
 		line := fmt.Sprintf("music.163.com\tFALSE\t/\tFALSE\t253402300799\t%s\t%s", n, kv[1])
