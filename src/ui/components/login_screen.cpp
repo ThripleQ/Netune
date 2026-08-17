@@ -79,17 +79,22 @@ Element render_login_screen(const AppState &s) {
         col.push_back(filler());
         if (scanned) {
             auto &th = ThemeManager::instance().current();
+            /* full-body feedback: replace the steps with a prominent
+               "scanned" state so the phone confirmation is obvious */
             col.push_back(hbox({
                 login_spinner_el(),
-                text(" Scanned! Confirm in Netease Music App... ") | bold
+                text(" Scanned! ") | bold
                     | color(Color::RGB(th.accent.r, th.accent.g, th.accent.b)),
             }) | center);
+            col.push_back(text(" Confirm login in the app on your phone ") | bold | center);
+            col.push_back(separator());
+            col.push_back(text(" 扫码成功，请在手机上点击确认 ") | dim | center);
         } else {
             col.push_back(theme_accent(text(" Scan with Netease Music App ") | bold) | center);
+            col.push_back(text(" 1. Open the app on your phone ") | dim | center);
+            col.push_back(text(" 2. Tap the scan icon (top-right) ") | dim | center);
+            col.push_back(text(" 3. Scan this code ") | dim | center);
         }
-        col.push_back(text(" 1. Open the app on your phone ") | dim | center);
-        col.push_back(text(" 2. Tap the scan icon (top-right) ") | dim | center);
-        col.push_back(text(" 3. Scan this code ") | dim | center);
         break;
     }
 

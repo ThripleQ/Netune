@@ -400,7 +400,9 @@ static void activate_netease_menu_item(int idx) {
         StateStore::instance().set_top_right_query("");
         StateStore::instance().set_top_search_active(true, 1);
     } else if (type == 300) {
-        /* account page: submenu of the logged-in user */
+        /* account page: submenu of the logged-in user.
+           nav_push so Esc (and the snapshot) can restore the main menu */
+        StateStore::instance().nav_push();
         StateStore::instance().set_netease_menu({
             {"<< \u8FD4\u56DE", -1, ""},
             {"\u6211\u7684\u6B4C\u5355", 301, ""},
@@ -469,10 +471,11 @@ static void activate_netease_menu_item(int idx) {
             }
         }).detach();
     } else if (type == 304) {
-        /* logout: drop cookies, rebuild the default (logged-out) menu */
+        /* logout: drop cookies, rebuild the default (logged-out) menu
+           without leaving Netease mode (no flicker to Local) */
         netease_logout();
+        StateStore::instance().clear_nav_stack();
         StateStore::instance().set_netease_menu({});
-        StateStore::instance().set_music_mode(MusicMode::Local);
         StateStore::instance().set_music_mode(MusicMode::Netease);
     } else if (!pl_id.empty()) {
         StateStore::instance().nav_push();
@@ -1408,6 +1411,10 @@ int run_app(int argc, char **argv) {
     local_source_register();
     netease_source_register();
 
+    /* Open on the Netease homepage by default: rebuild its default menu
+       now that netease_init has resolved the account name. */
+    StateStore::instance().set_music_mode(MusicMode::Netease);
+
     /* auto-scan */
     {
         std::vector<std::string> scan_dirs;
@@ -1544,7 +1551,7 @@ int run_app(int argc, char **argv) {
                 StateStore::instance().set_login_state(0, "", "");
             }
         }
-        if (s.login_state == 2 && ++g_login_poll_tick % 125 == 0) {
+        if (s.login_state == 2 && ++g_login_poll_tick % 62 == 0) {
             int rc = netease_qr_poll(g_login_unikey.c_str());
             LOG_INFO("LOGIN POLL: rc=%d", rc);
             if (rc == 0) {

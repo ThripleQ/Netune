@@ -87,8 +87,9 @@ struct AppState {
     /* play mode */
     LoopMode loop_mode = LoopMode::None;
 
-    /* source mode */
-    MusicMode music_mode = MusicMode::Local;
+    /* source mode — default to Netease so the app opens on the music
+       service homepage (local files remain reachable via the menu) */
+    MusicMode music_mode = MusicMode::Netease;
 
     /* netease menu (shown in left panel when music_mode == Netease) */
     std::vector<NeteaseMenuItem> netease_menu;
