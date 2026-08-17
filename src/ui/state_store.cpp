@@ -453,11 +453,13 @@ bool StateStore::nav_pop(void) {
     if (ns.restore_playlist) {
         state_.playlist = std::move(ns.playlist);
         state_.active_panel = 1;  /* land on the restored playlist list */
+        /* keep the highlight on the playlist that was just entered */
+        state_.selected_index = ns.selected_index;
     } else {
         for (auto &s : ns.playlist)
             song_info_free(&s);
+        state_.selected_index = 0;
     }
-    state_.selected_index = 0;
     /* Esc always exits search mode, never restores it */
     state_.search_active    = false;
     state_.search_query     = "";
