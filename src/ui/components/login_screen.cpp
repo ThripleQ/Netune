@@ -28,8 +28,8 @@ bool qr_min_dims(const std::string &qr_text, int *cols, int *rows) {
     int h = 1;
     for (size_t i = 0; i < qr_text.size(); i++)
         if (qr_text[i] == '\n') h++;
-    *cols = w + 4;  /* 2-space indent + border */
-    *rows = h + 2;  /* border */
+    *cols = w;       /* no indent/border anymore */
+    *rows = h;
     return true;
 }
 
@@ -56,7 +56,7 @@ static Element qr_box(const std::string &qr_text) {
     Elements qr_els;
     for (auto &ln : qr_lines)
         qr_els.push_back(text(ln));
-    return vbox(std::move(qr_els)) | borderRounded;
+    return vbox(std::move(qr_els));
 }
 
 Element render_login_screen(const AppState &s) {
