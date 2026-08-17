@@ -290,6 +290,14 @@ void StateStore::set_login_state(int st, const std::string &status,
     state_.login_qr = qr;
 }
 
+void StateStore::set_login_deadline(long unix_ts) {
+    state_.login_qr_deadline = unix_ts;
+}
+
+void StateStore::set_login_net_error(int on) {
+    state_.login_net_error = on;
+}
+
 void StateStore::set_show_help(bool show) {
     state_.show_help = show;
 }

@@ -98,6 +98,8 @@ struct AppState {
     int  login_state = 0; /* 0=idle, 1=get_key, 2=wait_scan, 3=done, -1=error */
     std::string login_status; /* status message displayed in overlay */
     std::string login_qr;     /* QR code text for terminal display */
+    long login_qr_deadline = 0; /* unix ts when the QR expires (0 = unknown) */
+    int  login_net_error = 0;   /* non-zero while polling keeps failing */
 
     /* help screen */
     bool show_help = false;
@@ -178,6 +180,8 @@ public:
     void set_netease_menu(const std::vector<NeteaseMenuItem> &items);
     void set_netease_selected(int idx);
     void set_login_state(int state, const std::string &status, const std::string &qr);
+    void set_login_deadline(long unix_ts);
+    void set_login_net_error(int on);
 
     /* playback queue */
     /* snapshot current playlist into the playback queue (call when a song

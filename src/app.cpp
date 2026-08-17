@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <cstring>
 #include "compat/utf8.h"   /* UTF-8 aware getenv/fopen/access/mkdir for Windows */
 #include <vector>
@@ -207,6 +208,9 @@ static void start_login(void) {
         std::string qr = gen_qr(qr_url);
         StateStore::instance().set_login_state(2,
             "Scan with Netease Music App", qr);
+        /* unikey is valid for ~2 minutes; count down from there */
+        StateStore::instance().set_login_deadline((long)time(NULL) + 120);
+        StateStore::instance().set_login_net_error(0);
     } else {
         StateStore::instance().set_login_state(-1,
             "Failed to get QR code", "");
@@ -1480,6 +1484,10 @@ int run_app(int argc, char **argv) {
                 /* 802: scanned, waiting for phone confirm */
                 StateStore::instance().set_login_state(2,
                     "Scanned. Confirm in Netease Music App...", s.login_qr);
+                StateStore::instance().set_login_net_error(0);
+            } else {
+                /* -1: poll failed (network/cli) — show it, keep retrying */
+                StateStore::instance().set_login_net_error(1);
             }
         }
 
