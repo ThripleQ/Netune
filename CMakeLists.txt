@@ -41,17 +41,23 @@ set(FTXUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 # NULL when the screen has no focus element, but FTXUI_MICROSOFT_TERMINAL_FALLBACK
 # defaults ON on Windows, so the Hidden-cursor branch still dereferences it).
 # Linux keeps v6.0.0 (the macro is OFF there, so the branch is never taken).
+# On Windows the system-package lookup is skipped entirely: a found v6.0.0
+# would satisfy find_package() yet still carry the NULL deref bug.
 if(WIN32)
   set(NETUNE_FTXUI_TAG v6.1.9)
-else()
-  set(NETUNE_FTXUI_TAG v6.0.0)
-endif()
-
-netune_find_dep(ftxui 6.0.0
-  FETCH_CONTENT
+  FetchContent_Declare(ftxui
     GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
     GIT_TAG        ${NETUNE_FTXUI_TAG}
-)
+  )
+  FetchContent_MakeAvailable(ftxui)
+else()
+  set(NETUNE_FTXUI_TAG v6.0.0)
+  netune_find_dep(ftxui 6.0.0
+    FETCH_CONTENT
+      GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
+      GIT_TAG        ${NETUNE_FTXUI_TAG}
+  )
+endif()
 
 # ── yyjson (official CMake) ──────────────────────────
 netune_find_dep(yyjson 0.10.0
@@ -124,7 +130,7 @@ function(netune_build_ffmpeg_from_source out_target)
 
   ExternalProject_Add(ffmpeg_external
     PREFIX ${CMAKE_BINARY_DIR}/ffmpeg-prefix
-    GIT_REPOSITORY https://git.ffmpeg.org/ffmpeg.git
+    GIT_REPOSITORY https://github.com/FFmpeg/FFmpeg.git
     GIT_TAG n6.1
     CONFIGURE_COMMAND <SOURCE_DIR>/configure
       --prefix=${FFMPEG_INSTALL_DIR}
@@ -133,10 +139,11 @@ function(netune_build_ffmpeg_from_source out_target)
       --disable-doc
       --disable-programs
       --disable-everything
-      --enable-protocol=file
+      --enable-protocol=file,http,https,tcp,tls
       --enable-demuxer=mp3,flac,wav
       --enable-decoder=mp3,flac,pcm_s16le
       --enable-encoder=pcm_s16le
+      --enable-openssl
       --enable-swresample
       --enable-avformat
       --enable-avcodec
