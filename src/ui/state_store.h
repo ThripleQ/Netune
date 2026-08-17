@@ -101,6 +101,7 @@ struct AppState {
     std::string login_qr;     /* QR code text for terminal display */
     long login_qr_deadline = 0; /* unix ts when the QR expires (0 = unknown) */
     int  login_net_error = 0;   /* non-zero while polling keeps failing */
+    int  qr_gfx_ready = 0;      /* kitty QR image decoded & ready to place */
 
     /* help screen */
     bool show_help = false;
@@ -183,6 +184,7 @@ public:
     void set_login_state(int state, const std::string &status, const std::string &qr);
     void set_login_deadline(long unix_ts);
     void set_login_net_error(int on);
+    void set_qr_gfx_ready(int ready);
 
     /* playback queue */
     /* snapshot current playlist into the playback queue (call when a song

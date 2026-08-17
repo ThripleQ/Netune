@@ -299,6 +299,10 @@ void StateStore::set_login_net_error(int on) {
     state_.login_net_error = on;
 }
 
+void StateStore::set_qr_gfx_ready(int ready) {
+    state_.qr_gfx_ready = ready;
+}
+
 void StateStore::set_show_help(bool show) {
     state_.show_help = show;
 }

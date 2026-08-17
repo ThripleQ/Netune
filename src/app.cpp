@@ -247,6 +247,7 @@ static void start_login(void) {
         /* Fetch the high-resolution QR image in the background for
            terminals with kitty graphics support. */
         g_login_qr_ready = 0;
+        StateStore::instance().set_qr_gfx_ready(0);
         if (g_login_qr.pixels) {
             free(g_login_qr.pixels);
             g_login_qr.pixels = NULL;
@@ -268,6 +269,7 @@ static void start_login(void) {
             g_login_qr.channels = 3;
             g_login_qr.stamp = ++g_login_qr_stamp;
             g_login_qr_ready = 1;
+            StateStore::instance().set_qr_gfx_ready(1);
         }, qr_url_copy).detach();
     } else {
         StateStore::instance().set_login_state(-1,
@@ -1613,7 +1615,10 @@ int run_app(int argc, char **argv) {
         }
         if (s.login_state == 2 &&
             std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - last_poll).count() >= 1000) {
+                std::chrono::steady_clock::now() - last_poll).count() >=
+                /* poll every 2s before the scan; once scanned (802)
+                   speed up to 1s for a snappy confirm */
+                (s.login_status.find("Scanned") != std::string::npos ? 1000 : 2000)) {
             last_poll = std::chrono::steady_clock::now();
             int rc = netease_qr_poll(g_login_unikey.c_str());
             LOG_INFO("LOGIN POLL: rc=%d", rc);

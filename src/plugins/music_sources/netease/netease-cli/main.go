@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,35 @@ import (
 	"github.com/skip2/go-qrcode"
 	"github.com/telanflow/cookiejar"
 )
+
+/* filterJar blocks locally-injected anti-fraud strategy cookies from
+   being persisted. ApplyRequestStrategy() (called by CheckQR and
+   login-refresh) writes a FIXED fake NMTID into the jar; the FileJar
+   persists every SetCookies call, so the fake value ends up on disk and
+   is sent on every later request — triggering the -462 "network risk"
+   ban. Real server-issued cookies (MUSIC_U etc.) pass through. */
+type filterJar struct {
+	inner http.CookieJar
+}
+
+func (f *filterJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
+	keep := make([]*http.Cookie, 0, len(cookies))
+	for _, c := range cookies {
+		if c == nil {
+			continue
+		}
+		if strings.EqualFold(c.Name, "NMTID") &&
+			c.Value == "some_random_id_from_strategy" {
+			continue
+		}
+		keep = append(keep, c)
+	}
+	f.inner.SetCookies(u, keep)
+}
+
+func (f *filterJar) Cookies(u *url.URL) []*http.Cookie {
+	return f.inner.Cookies(u)
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -26,7 +57,7 @@ func main() {
 	os.MkdirAll(cacheDir, 0755)
 	cookiePath := filepath.Join(cacheDir, "cookies.txt")
 	jar, _ := cookiejar.NewFileJar(cookiePath, nil)
-	util.SetGlobalCookieJar(jar)
+	util.SetGlobalCookieJar(&filterJar{inner: jar})
 
 	cmd := os.Args[1]
 	switch cmd {

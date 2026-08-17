@@ -69,11 +69,10 @@ Element render_login_screen(const AppState &s) {
 
     case 2: {
         /* QR code — centered, boxed. With kitty graphics the real image
-           is placed by app.cpp at row 3; reserve an invisible fixed
-           placeholder so the countdown stays anchored. The kitty path
-           resamples the full-resolution PNG, so it never loses modules
-           at any size — only the character path has a hard minimum. */
-        if (!s.login_qr.empty() && term_gfx_active()) {
+           is placed by app.cpp at row 3; until it is decoded the
+           character QR is shown instead (never a blank placeholder), so
+           a slow/failed image fetch degrades gracefully. */
+        if (!s.login_qr.empty() && term_gfx_active() && s.qr_gfx_ready) {
             int rows = s.screen_height - 8;
             if (rows < 4) rows = 4;
             if (rows > 12) rows = 12;
