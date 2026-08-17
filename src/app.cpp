@@ -1628,6 +1628,14 @@ int run_app(int argc, char **argv) {
                    speed up to 1s for a snappy confirm */
                 (s.login_status.find("Scanned") != std::string::npos ? 1000 : 2000)) {
             last_poll = std::chrono::steady_clock::now();
+            /* A window too small to render the QR also pauses polling:
+               the "network error" banner is driven by poll failures and
+               must not be triggered by a small terminal. */
+            int qneed_w = 0, qneed_h = 0;
+            bool qr_fits =
+                qr_min_dims(s.login_qr, &qneed_w, &qneed_h) &&
+                s.top_row_width >= qneed_w && s.screen_height >= qneed_h;
+            if (qr_fits) {
             int rc = netease_qr_poll(g_login_unikey.c_str());
             LOG_INFO("LOGIN POLL: rc=%d", rc);
             if (rc == 0) {
@@ -1662,6 +1670,7 @@ int run_app(int argc, char **argv) {
                 /* -1: poll failed (network/cli) — show it, keep retrying */
                 StateStore::instance().set_login_net_error(1);
             }
+            }  /* if (qr_fits) */
         }
 
         Element main;

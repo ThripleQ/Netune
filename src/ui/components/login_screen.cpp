@@ -11,6 +11,28 @@
 using namespace ftxui;
 using namespace std::chrono;
 
+bool qr_min_dims(const std::string &qr_text, int *cols, int *rows) {
+    if (qr_text.empty()) return false;
+    /* Display width, NOT byte width: the half-block chars (█▀▄) are
+       UTF-8 3-byte sequences — counting bytes would inflate a 57-module
+       QR to 171 columns and falsely reject every terminal. */
+    size_t first = qr_text.find('\n');
+    auto disp_w = [](const char *s, size_t n) {
+        size_t w = 0;
+        for (size_t i = 0; i < n; i++)
+            if (((unsigned char)s[i] & 0xC0) != 0x80) w++;
+        return w;
+    };
+    size_t n0 = (first == std::string::npos) ? qr_text.size() : first;
+    int w = (int)disp_w(qr_text.c_str(), n0);
+    int h = 1;
+    for (size_t i = 0; i < qr_text.size(); i++)
+        if (qr_text[i] == '\n') h++;
+    *cols = w + 4;  /* 2-space indent + border */
+    *rows = h + 2;  /* border */
+    return true;
+}
+
 /* Split QR code string into lines */
 static std::vector<std::string> split_lines(const std::string &s) {
     std::vector<std::string> lines;
@@ -22,8 +44,7 @@ static std::vector<std::string> split_lines(const std::string &s) {
 }
 
 /* Time-based spinner frame (independent of the song-loading spinner) */
-static Element login_spinner_el(void) {
-    static auto start = steady_clock::now();
+static Element login_spinner_el(void) {    static auto start = steady_clock::now();
     int elapsed = (int)duration_cast<milliseconds>(steady_clock::now() - start).count();
     int idx = (elapsed / 16) % 10;
     static const char *frames[] = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"};
@@ -39,32 +60,6 @@ static Element qr_box(const std::string &qr_text) {
 }
 
 Element render_login_screen(const AppState &s) {
-    /* Natural size of the character QR in terminal cells (indent +
-       border included). Module rows collapse 2:1 into half-block text
-       rows, so this is the MINIMUM window size that renders every
-       module — below it the code is clipped and cannot be scanned. */
-    auto qr_min_dims = [](const std::string &qr_text, int *cols, int *rows) {
-        if (qr_text.empty()) return false;
-        /* Display width, NOT byte width: the half-block chars (█▀▄) are
-           UTF-8 3-byte sequences — counting bytes would inflate a 57-
-           module QR to 171 columns and falsely reject every terminal. */
-        size_t first = qr_text.find('\n');
-        auto disp_w = [](const char *s, size_t n) {
-            size_t w = 0;
-            for (size_t i = 0; i < n; i++)
-                if (((unsigned char)s[i] & 0xC0) != 0x80) w++;  /* count chars, not continuation bytes */
-            return w;
-        };
-        size_t n0 = (first == std::string::npos) ? qr_text.size() : first;
-        int w = (int)disp_w(qr_text.c_str(), n0);
-        int h = 1;
-        for (size_t i = 0; i < qr_text.size(); i++)
-            if (qr_text[i] == '\n') h++;
-        *cols = w + 4;  /* 2-space indent + border */
-        *rows = h + 2;  /* border */
-        return true;
-    };
-
     Elements col;
 
     /* Title */
