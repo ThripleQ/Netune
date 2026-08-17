@@ -64,7 +64,6 @@ Element render_login_screen(const AppState &s) {
 
     /* Title */
     col.push_back(text(" Netease Login ") | bold | center | underlined);
-    col.push_back(separator());
 
     switch (s.login_state) {
     case 1:
@@ -142,7 +141,6 @@ Element render_login_screen(const AppState &s) {
                     | color(Color::RGB(th.accent.r, th.accent.g, th.accent.b)),
             }) | center);
             col.push_back(text(" Confirm login in the app on your phone ") | bold | center);
-            col.push_back(separator());
             col.push_back(text(" 扫码成功，请在手机上点击确认 ") | dim | center);
         } else {
             col.push_back(theme_accent(text(" Scan with Netease Music App ") | bold) | center);
@@ -180,7 +178,6 @@ Element render_login_screen(const AppState &s) {
     }
 
     /* Bottom status */
-    col.push_back(separator());
     if (s.login_state == 2) {
         auto &th = ThemeManager::instance().current();
         if (s.login_net_error) {
