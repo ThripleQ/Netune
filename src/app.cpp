@@ -1399,8 +1399,17 @@ int run_app(int argc, char **argv) {
     std::thread refresh_timer([&]() {
         while (timer_active.load()) {
             auto &st = StateStore::instance().state();
+            /* Animation frame interval. Windows keeps 33ms (~30fps):
+               conhost renders each frame slowly, so 60fps only burned CPU
+               without visible smoothness. Linux/macOS keep the original
+               16ms (60fps) — terminal rendering there is fast enough. */
+#ifdef _WIN32
+            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading)
+                      ? 33 : 200;
+#else
             int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading)
                       ? 16 : 200;
+#endif
             std::this_thread::sleep_for(std::chrono::milliseconds(ms));
             screen.RequestAnimationFrame();
         }
