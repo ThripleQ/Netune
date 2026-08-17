@@ -596,6 +596,41 @@ int netease_menu_songs(int type, int limit, SongInfo **out, int *count) {
         int r = parselist(j, "songs", out, count);
         free(j); return r;
     }
+    if (type == 1) {
+        /* personalized playlist recommendations (推荐歌单) */
+        char *j=run("%s recommend-playlists%s",CLI,STDERR_REDIRECT); if(!j)return -1;
+        yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+        free(j);
+        if (!doc) { *out=NULL; *count=0; return -1; }
+        yyjson_val *root = yyjson_doc_get_root(doc);
+        yyjson_val *pl = jget_arr(root, "result");
+        if (!pl) { yyjson_doc_free(doc); *out=NULL; *count=0; return -1; }
+
+        size_t n = yyjson_arr_size(pl);
+        if (n == 0) { yyjson_doc_free(doc); *out=NULL; *count=0; return -1; }
+
+        *out = calloc(n, sizeof(SongInfo));
+        int oi = 0;
+        yyjson_arr_iter iter = yyjson_arr_iter_with(pl);
+        yyjson_val *v;
+        while ((v = yyjson_arr_iter_next(&iter))) {
+            if (!yyjson_is_obj(v)) continue;
+            SongInfo *s = &(*out)[oi];
+            memset(s,0,sizeof(*s));
+            s->source    = strdup("netease");
+            s->cover_url = strdup("");
+            s->aux_label = strdup("歌单");
+            int64_t sid = jget_sint64(v, "id");
+            char id_str[32];
+            snprintf(id_str, sizeof(id_str), "%ld", (long)sid);
+            s->id = strdup(id_str);
+            const char *nm  = jget_str(v, "name"); s->title = nm  ? strdup(nm)  : strdup("");
+            oi++;
+        }
+        *count = oi;
+        yyjson_doc_free(doc);
+        return oi > 0 ? 0 : -1;
+    }
     return -1;
 }
 

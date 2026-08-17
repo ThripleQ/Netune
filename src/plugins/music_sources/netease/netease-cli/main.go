@@ -243,6 +243,11 @@ func main() {
 		_, body := s.RecommendSongs()
 		output(body)
 
+	case "recommend-playlists":
+		s := service.PersonalizedService{Limit: "30"}
+		_, body := s.Personalized()
+		output(body)
+
 	case "qr-render":
 		if len(os.Args) < 3 {
 			die("usage: netease-cli qr-render <url>")
