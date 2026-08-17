@@ -38,6 +38,22 @@ static Element qr_box(const std::string &qr_text) {
 }
 
 Element render_login_screen(const AppState &s) {
+    /* Natural size of the character QR in terminal cells (indent +
+       border included). Module rows collapse 2:1 into half-block text
+       rows, so this is the MINIMUM window size that renders every
+       module — below it the code is clipped and cannot be scanned. */
+    auto qr_min_dims = [](const std::string &qr_text, int *cols, int *rows) {
+        if (qr_text.empty()) return false;
+        size_t first = qr_text.find('\n');
+        int w = (first == std::string::npos) ? (int)qr_text.size() : (int)first;
+        int h = 1;
+        for (size_t i = 0; i < qr_text.size(); i++)
+            if (qr_text[i] == '\n') h++;
+        *cols = w + 4;  /* 2-space indent + border */
+        *rows = h + 2;  /* border */
+        return true;
+    };
+
     Elements col;
 
     /* Title */
@@ -54,14 +70,29 @@ Element render_login_screen(const AppState &s) {
     case 2: {
         /* QR code — centered, boxed. With kitty graphics the real image
            is placed by app.cpp at row 3; reserve an invisible fixed
-           placeholder so the countdown stays anchored. */
+           placeholder so the countdown stays anchored. The kitty path
+           resamples the full-resolution PNG, so it never loses modules
+           at any size — only the character path has a hard minimum. */
         if (!s.login_qr.empty() && term_gfx_active()) {
             int rows = s.screen_height - 8;
             if (rows < 4) rows = 4;
             if (rows > 12) rows = 12;
             col.push_back(vbox(Elements{}) | size(HEIGHT, EQUAL, rows));
         } else if (!s.login_qr.empty()) {
-            col.push_back(qr_box(s.login_qr) | center);
+            int need_w = 0, need_h = 0;
+            if (!qr_min_dims(s.login_qr, &need_w, &need_h) ||
+                s.top_row_width < need_w || s.screen_height < need_h) {
+                /* too small: rendering would clip modules — refuse and
+                   tell the user the minimum size instead of showing a
+                   broken code */
+                std::string msg = " Terminal too small: QR needs ";
+                if (need_w > 0 || need_h > 0)
+                    msg += std::to_string(need_w) + "x" + std::to_string(need_h);
+                msg += " — enlarge the window ";
+                col.push_back(theme_fg(text(msg)) | center);
+            } else {
+                col.push_back(qr_box(s.login_qr) | center);
+            }
         } else {
             col.push_back(theme_fg(text(" No QR code available ")) | center);
         }
