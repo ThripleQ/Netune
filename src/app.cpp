@@ -1017,18 +1017,21 @@ static void ev_playlist_list_loaded(const BusEvent *ev, void *data) {
         /* ev->data freed by event_bus_poll, do NOT free(ld) */
         return;
     }
-    std::vector<NeteaseMenuItem> items;
-    items.push_back({"<< \u8FD4\u56DE", -1, ""});
+    /* Playlist list goes to the RIGHT panel (like a song list), each
+       item tagged as a playlist via aux_label so Enter opens the
+       playlist instead of playing it. */
+    std::vector<SongInfo> vec;
+    vec.reserve(ld->count);
     for (int i = 0; i < ld->count; i++) {
-        char id_buf[32];
-        snprintf(id_buf, sizeof(id_buf), "%s", ld->songs[i].id);
-        items.push_back({ld->songs[i].title, 1000, id_buf});
+        SongInfo copy = {};
+        song_info_copy(&copy, &ld->songs[i]);
+        vec.push_back(copy);
         song_info_free(&ld->songs[i]);
     }
     free(ld->songs);
     /* Note: ev->data is freed by event_bus_poll, do NOT free(ld) */
-    StateStore::instance().set_netease_menu(items);
-    StateStore::instance().set_netease_selected(0);
+    StateStore::instance().set_playlist(vec, 0);
+    StateStore::instance().set_active_panel(1);
 }
 
 static void ev_volume_changed(const BusEvent *ev, void *data) {
@@ -2179,9 +2182,38 @@ int run_app(int argc, char **argv) {
                 }
                 return true;
             }
-            /* Right panel: play selected song */
-            if (cur.active_panel == 1)
-                play_from_playlist(cur.selected_index);
+            /* Right panel: play selected song — unless it's a playlist
+               item (playlist lists render in the right panel); those
+               open the playlist's songs instead. */
+            if (cur.active_panel == 1) {
+                const auto &song = cur.playlist[cur.selected_index];
+                if (song.aux_label && strcmp(song.aux_label, "歌单") == 0) {
+                    StateStore::instance().nav_push_restore_playlist();
+                    StateStore::instance().set_loading(true);
+                    std::string _pl_id = song.id ? song.id : "";
+                    std::thread([_pl_id]() {
+                        SongInfo *songs = NULL; int sc = 0;
+                        int ret = netease_playlist_songs(_pl_id.c_str(), &songs, &sc);
+                        LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
+                        if (ret == 0 && sc > 0) {
+                            ld->songs = songs; ld->count = sc;
+                        } else {
+                            ld->songs = NULL; ld->count = 0;
+                            free(songs);
+                        }
+                        if (event_bus_publish(EV_PLAYLIST_LOADED, ld, sizeof(*ld)) != 0) {
+                            if (ld->songs) {
+                                for (int i = 0; i < ld->count; i++)
+                                    song_info_free(&ld->songs[i]);
+                                free(ld->songs);
+                            }
+                            free(ld);
+                        }
+                    }).detach();
+                } else {
+                    play_from_playlist(cur.selected_index);
+                }
+            }
             return true;
 
         case Action::NextTrack: {
