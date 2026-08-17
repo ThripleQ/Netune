@@ -572,29 +572,6 @@ static void activate_netease_menu_item(int idx) {
             }
         }).detach();
 
-    } else if (type >= 0 && type <= 1) {
-        StateStore::instance().nav_push();
-        StateStore::instance().set_loading(true);
-        int _type = type;
-        std::thread([_type]() {
-            SongInfo *ms = NULL; int mc = 0;
-            int ret = netease_menu_songs(_type, 200, &ms, &mc);
-            LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
-            if (ret == 0 && mc > 0) {
-                ld->songs = ms; ld->count = mc;
-            } else {
-                ld->songs = NULL; ld->count = 0;
-                free(ms);
-            }
-            if (event_bus_publish(EV_MENU_LOADED, ld, sizeof(*ld)) != 0) {
-                if (ld->songs) {
-                    for (int i = 0; i < ld->count; i++)
-                        song_info_free(&ld->songs[i]);
-                    free(ld->songs);
-                }
-                free(ld);
-            }
-        }).detach();
     } else if (type == 0 || type == 1) {
         /* 每日推荐 (0, songs) / 推荐歌单 (1, playlists) */
         if (!netease_is_logged_in() && type == 0) {
