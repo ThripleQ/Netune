@@ -288,15 +288,6 @@ set(ALL_SOURCES
 
 # ── Executable ───────────────────────────────────────
 add_executable(netune ${ALL_SOURCES})
-# ── netease-cli ──────────────────────────────────────
-# Pre-built binary for the host platform; fall back to PATH otherwise
-if(EXISTS "${CMAKE_SOURCE_DIR}/bin/netease-cli")
-  configure_file("${CMAKE_SOURCE_DIR}/bin/netease-cli" "${CMAKE_BINARY_DIR}/netease-cli" COPYONLY)
-  message(STATUS "netease-cli: using pre-built binary")
-endif()
-if(EXISTS "${CMAKE_BINARY_DIR}/netease-cli")
-  message(STATUS "netease-cli: pre-built copied to build dir")
-endif()
 
 target_include_directories(netune PRIVATE src)
 if(NOT WIN32)
@@ -360,44 +351,61 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 
 # ── netease-cli (Go helper for Netease Cloud Music) ───
+# The binary is built from source when a Go toolchain is available, or
+# downloaded prebuilt from GitHub releases otherwise. Both paths run as
+# build-time custom commands via `cmake -P` scripts, so a failure never
+# aborts the build and is retried on the next build. The output lands in
+# the build directory next to netune.exe, where cli_path() looks for it.
 find_program(GO_EXECUTABLE go)
-if(GO_EXECUTABLE)
-  set(NETEASE_CLI_DIR "${CMAKE_SOURCE_DIR}/src/plugins/music_sources/netease/netease-cli")
-  if(WIN32)
-    set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/netease-cli.exe")
-  else()
-    set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/netease-cli")
-  endif()
-
-  # Build netease-cli, but never fail the whole build on Go errors — the
-  # netune runtime resolves the binary next to its own executable and
-  # degrades gracefully (Netease features off) when it is missing.
-  if(WIN32)
-    add_custom_command(
-      OUTPUT  "${NETEASE_CLI_OUT}"
-      COMMAND cmd /c "\"${GO_EXECUTABLE}\" build -ldflags=\"-s -w\" -o \"${NETEASE_CLI_OUT}\" . || echo netease-cli: build failed (Netease features unavailable)"
-      WORKING_DIRECTORY "${NETEASE_CLI_DIR}"
-      COMMENT "Building netease-cli (Go helper)..."
-      VERBATIM
-    )
-  else()
-    add_custom_command(
-      OUTPUT  "${NETEASE_CLI_OUT}"
-      COMMAND sh -c "\"${GO_EXECUTABLE}\" build -ldflags='-s -w' -o \"${NETEASE_CLI_OUT}\" . || echo \"netease-cli: build failed (Netease features unavailable)\""
-      WORKING_DIRECTORY "${NETEASE_CLI_DIR}"
-      COMMENT "Building netease-cli (Go helper)..."
-      VERBATIM
-    )
-  endif()
-  add_custom_target(netease-cli-build ALL DEPENDS "${NETEASE_CLI_OUT}")
-  add_dependencies(netune netease-cli-build)
-
-  message(STATUS "netease-cli: Go found (${GO_EXECUTABLE}), will auto-build")
-  install(PROGRAMS "${NETEASE_CLI_OUT}" DESTINATION bin)
+set(NETEASE_CLI_DIR "${CMAKE_SOURCE_DIR}/src/plugins/music_sources/netease/netease-cli")
+if(WIN32)
+  set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/netease-cli.exe")
 else()
-  # No Go toolchain: fetch the prebuilt netease-cli from the GitHub
-  # release (built by CI) so Netease features work without Go. Falls
-  # back to a warning (features off) when the download is unavailable.
+  set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/netease-cli")
+endif()
+
+# netease-cli's Go module requires go >= 1.22 (uses math/rand/v2). A too-old
+# go binary silently fails the build, which would leave Netease features dead
+# on Linux/macOS. Verify the version and fall back to the prebuilt download
+# when the toolchain is absent or too old.
+set(GO_MEETS_VERSION FALSE)
+if(GO_EXECUTABLE)
+  execute_process(
+    COMMAND "${GO_EXECUTABLE}" version
+    OUTPUT_VARIABLE _go_ver_out
+    ERROR_VARIABLE _go_ver_err
+    RESULT_VARIABLE _go_ver_rc
+  )
+  if(_go_ver_rc EQUAL 0 AND _go_ver_out MATCHES "go([0-9]+)\\.([0-9]+)")
+    set(_go_major "${CMAKE_MATCH_1}")
+    set(_go_minor "${CMAKE_MATCH_2}")
+    if(_go_major GREATER 1 OR (_go_major EQUAL 1 AND _go_minor GREATER_EQUAL 22))
+      set(GO_MEETS_VERSION TRUE)
+    endif()
+  endif()
+endif()
+
+if(GO_MEETS_VERSION)
+  add_custom_command(
+    OUTPUT  "${NETEASE_CLI_OUT}"
+    COMMAND ${CMAKE_COMMAND}
+            -DGO_EXECUTABLE=${GO_EXECUTABLE}
+            -DNETEASE_CLI_OUT=${NETEASE_CLI_OUT}
+            -DNETEASE_CLI_DIR=${NETEASE_CLI_DIR}
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-netease-cli.cmake"
+    WORKING_DIRECTORY "${NETEASE_CLI_DIR}"
+    COMMENT "Building netease-cli (Go helper)..."
+    VERBATIM
+  )
+  message(STATUS "netease-cli: Go ${GO_EXECUTABLE} found and >= 1.22, will auto-build")
+else()
+  if(GO_EXECUTABLE)
+    message(STATUS "netease-cli: Go found but too old (need >= 1.22), will download prebuilt binary")
+  else()
+    message(STATUS "netease-cli: Go not found, will download prebuilt binary")
+  endif()
+  # No (usable) Go toolchain: fetch the prebuilt netease-cli from the
+  # GitHub release (built by CI) so Netease features work without Go.
   if(WIN32)
     set(NETEASE_CLI_ASSET "netease-cli-windows-x86_64.zip")
   elseif(APPLE)
@@ -407,18 +415,24 @@ else()
   endif()
   set(NETEASE_CLI_URL
       "https://github.com/ThripleQ/Netune/releases/latest/download/${NETEASE_CLI_ASSET}")
-  set(NETEASE_CLI_ARCHIVE "${CMAKE_BINARY_DIR}/${NETEASE_CLI_ASSET}")
-  file(DOWNLOAD "${NETEASE_CLI_URL}" "${NETEASE_CLI_ARCHIVE}"
-       STATUS _netease_cli_dl_status TLS_VERIFY ON)
-  list(GET _netease_cli_dl_status 0 _netease_cli_dl_rc)
-  if(_netease_cli_dl_rc EQUAL 0 AND EXISTS "${NETEASE_CLI_ARCHIVE}")
-    file(ARCHIVE_EXTRACT INPUT "${NETEASE_CLI_ARCHIVE}"
-         DESTINATION "${CMAKE_BINARY_DIR}")
-    message(STATUS "netease-cli: downloaded prebuilt binary (${NETEASE_CLI_ASSET})")
-  else()
-    message(WARNING
-            "netease-cli: Go not found and prebuilt download failed. "
-            "Netease features won't work. Install Go >= 1.22 or run "
-            "cmake with network access and rebuild.")
-  endif()
+  add_custom_command(
+    OUTPUT  "${NETEASE_CLI_OUT}"
+    COMMAND ${CMAKE_COMMAND}
+            -DNETEASE_CLI_URL=${NETEASE_CLI_URL}
+            -DNETEASE_CLI_ASSET=${NETEASE_CLI_ASSET}
+            -DNETEASE_CLI_BIN_DIR=${CMAKE_BINARY_DIR}
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/fetch-netease-cli.cmake"
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
+    COMMENT "Downloading prebuilt netease-cli (${NETEASE_CLI_ASSET})..."
+    VERBATIM
+  )
 endif()
+
+add_custom_target(netease-cli-build ALL DEPENDS "${NETEASE_CLI_OUT}")
+add_dependencies(netune netease-cli-build)
+
+# Install netune and netease-cli side by side so cli_path() finds the
+# helper next to the main executable. OPTIONAL: if the helper failed to
+# build/download, installation still succeeds.
+install(TARGETS netune RUNTIME DESTINATION bin)
+install(PROGRAMS "${NETEASE_CLI_OUT}" DESTINATION bin OPTIONAL)

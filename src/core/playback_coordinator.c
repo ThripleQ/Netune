@@ -332,12 +332,17 @@ static void* playback_thread(void *arg) {
             case CMD_PAUSE:
                 if (state == PS_PLAYING) {
                     state = PS_PAUSED;
+                    if (audio) {
+                        audio_output_flush(audio);
+                        audio_output_pause(audio);
+                    }
                     event_bus_publish(EV_PLAYBACK_PAUSE, NULL, 0);
                 }
                 continue;
             case CMD_RESUME:
                 if (state == PS_PAUSED) {
                     state = PS_PLAYING;
+                    if (audio) audio_output_resume(audio);
                     event_bus_publish(EV_PLAYBACK_RESUME, NULL, 0);
                 }
                 continue;
@@ -374,6 +379,10 @@ static void* playback_thread(void *arg) {
                 switch (icmd.type) {
                 case CMD_PAUSE:
                     state = PS_PAUSED;
+                    if (audio) {
+                        audio_output_flush(audio);
+                        audio_output_pause(audio);
+                    }
                     event_bus_publish(EV_PLAYBACK_PAUSE, NULL, 0);
                     goto next_song;
                 case CMD_RESUME:

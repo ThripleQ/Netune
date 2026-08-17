@@ -114,6 +114,13 @@ AudioOutput* audio_output_create(int sample_rate, int channels) {
     }
     ao->volume = g_last_volume;
     g_active_ao = ao;
+
+    /* Start the device immediately.  SDL opens audio devices paused, so
+       without this call the backend never produces sound and the write
+       loop (which waits for the hardware queue to drain) spins forever. */
+    if (g_active->start && g_active->start() != 0)
+        LOG_WARN("Audio backend %s start failed", g_active->name);
+
     return ao;
 }
 
@@ -167,6 +174,24 @@ int audio_output_flush(AudioOutput *ao) {
     if (!g_active) return -1;
     if (g_active->flush) return g_active->flush();
     return -1;
+}
+
+int audio_output_start(AudioOutput *ao) {
+    (void)ao;
+    if (!g_active || !g_active->start) return -1;
+    return g_active->start();
+}
+
+int audio_output_pause(AudioOutput *ao) {
+    (void)ao;
+    if (!g_active || !g_active->pause) return -1;
+    return g_active->pause();
+}
+
+int audio_output_resume(AudioOutput *ao) {
+    (void)ao;
+    if (!g_active || !g_active->resume) return -1;
+    return g_active->resume();
 }
 
 /* Volume is stored in the AudioOutput struct and applied as
