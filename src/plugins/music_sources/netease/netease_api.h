@@ -37,6 +37,9 @@ int  netease_menu_songs(int type, int limit,            /* daily etc */
                         SongInfo **out, int *count);
 int  netease_login_refresh(void);                       /* 0 = ok */
 int  netease_logout(void);                              /* 0 = ok */
+int  netease_like_song(const char *song_id, bool like); /* 0 = ok */
+int  netease_subscribe_playlist(const char *pl_id, bool sub); /* 0 = ok */
+int  netease_toplist(SongInfo **out, int *count);       /* chart list */
 
 /* ── Play URL + Download ──────────────────────────── */
 /* Get streaming URL.                                      */

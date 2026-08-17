@@ -237,7 +237,49 @@ func main() {
 			fmt.Println()
 		}
 	}
-	
+
+	case "like":
+		// like <song_id> [true|false] — 喜欢/取消喜欢歌曲
+		if len(os.Args) < 3 {
+			die("usage: netease-cli like <song_id> [true|false]")
+		}
+		like := "true"
+		if len(os.Args) > 3 {
+			like = os.Args[3]
+		}
+		data := map[string]string{
+			"trackId": os.Args[2],
+			"like":    like,
+		}
+		opts := &util.Options{
+			Crypto: "weapi",
+			Cookies: []*http.Cookie{
+				{Name: "os", Value: "pc"},
+				{Name: "appver", Value: "2.7.1.198277"},
+			},
+		}
+		code, body, _ := util.CreateRequest("POST", `https://music.163.com/weapi/song/like`, data, opts)
+		output([]byte(fmt.Sprintf("{\"code\":%.0f,\"body\":%s}", code, string(body))))
+
+	case "subscribe":
+		// subscribe <playlist_id> [1|0] — 收藏(1)/取消收藏(0)歌单
+		if len(os.Args) < 3 {
+			die("usage: netease-cli subscribe <playlist_id> [1|0]")
+		}
+		t := "0"
+		if len(os.Args) > 3 {
+			t = os.Args[3]
+		}
+		svc := service.PlaylistSubscribeService{T: t, ID: os.Args[2]}
+		code, body := svc.PlaylistSubscribe()
+		output([]byte(fmt.Sprintf("{\"code\":%.0f,\"body\":%s}", code, string(body))))
+
+	case "toplist":
+		// 排行榜列表（含内置榜单和各歌单）
+		svc := service.ToplistDetailService{}
+		_, body := svc.ToplistDetail()
+		output(body)
+
 	case "recommend-songs":
 		s := service.RecommendSongsService{}
 		_, body := s.RecommendSongs()

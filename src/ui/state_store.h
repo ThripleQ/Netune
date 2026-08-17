@@ -110,6 +110,10 @@ struct AppState {
     /* help screen */
     bool show_help = false;
 
+    /* action sheet (Ctrl+X): like song / subscribe playlist */
+    bool action_sheet_open = false;
+    int  action_sheet_selected = 0;
+
     /* spectrum */
     float spectrum[SPECTRUM_BANDS] = {0};
 
@@ -216,6 +220,7 @@ public:
 
     /* help screen */
     void set_show_help(bool show);
+    void set_action_sheet(bool open, int selected);
 
     /* loading */
     void set_loading(bool v);

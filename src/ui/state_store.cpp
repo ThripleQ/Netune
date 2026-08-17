@@ -261,6 +261,7 @@ void StateStore::set_music_mode(MusicMode mode) {
             {"\u6211\u7684\u6B4C\u5355",   2, ""},          /* 我的歌单 */
             {"\u6536\u85CF\u6B4C\u5355",   3, ""},          /* 收藏歌单 */
             {"\u6211\u559C\u6B22\u7684\u97F3\u4E50", 4, ""},  /* 我喜欢的音乐 */
+            {"\u6392\u884C\u699C",       5, ""},          /* 排行榜 */
             {"\u641C\u7D22\u7F51\u6613\u4E91", 100, ""},  /* 搜索网易云 */
         };
         /* If already logged in from a previous session, show account name */
@@ -305,6 +306,11 @@ void StateStore::set_qr_gfx_ready(int ready) {
 
 void StateStore::set_show_help(bool show) {
     state_.show_help = show;
+}
+
+void StateStore::set_action_sheet(bool open, int selected) {
+    state_.action_sheet_open = open;
+    state_.action_sheet_selected = selected;
 }
 
 void StateStore::set_loading(bool v) {

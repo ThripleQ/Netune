@@ -62,6 +62,7 @@ extern "C" {
 #include "ui/components/song_list.h"
 #include "ui/components/help_screen.h"
 #include "ui/components/login_screen.h"
+#include "ui/components/action_sheet.h"
 #include "ui/components/lyric_panel.h"
 
 extern "C" {
@@ -572,8 +573,8 @@ static void activate_netease_menu_item(int idx) {
             }
         }).detach();
 
-    } else if (type == 0 || type == 1) {
-        /* 每日推荐 (0, songs) / 推荐歌单 (1, playlists) */
+    } else if (type == 0 || type == 1 || type == 5) {
+        /* 每日推荐 (0, songs) / 推荐歌单 (1, playlists) / 排行榜 (5, playlists) */
         if (!netease_is_logged_in() && type == 0) {
             start_login();  /* daily recommends need a session */
         } else {
@@ -581,7 +582,9 @@ static void activate_netease_menu_item(int idx) {
             StateStore::instance().set_loading(true);
             std::thread([type]() {
                 SongInfo *songs = NULL; int sc = 0;
-                int ret = netease_menu_songs(type, 30, &songs, &sc);
+                int ret = (type == 5) ? netease_toplist(&songs, &sc)
+                                      : netease_menu_songs(type, 30, &songs, &sc);
+                LOG_INFO("MENU SONGS: type=%d ret=%d count=%d", type, ret, sc);
                 LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
                 if (ret == 0 && sc > 0) {
                     ld->songs = songs; ld->count = sc;
@@ -589,7 +592,7 @@ static void activate_netease_menu_item(int idx) {
                     ld->songs = NULL; ld->count = 0;
                     free(songs);
                 }
-                EventType ev = (type == 1) ? EV_PLAYLIST_LIST_LOADED : EV_PLAYLIST_LOADED;
+                EventType ev = (type == 1 || type == 5) ? EV_PLAYLIST_LIST_LOADED : EV_PLAYLIST_LOADED;
                 if (event_bus_publish(ev, ld, sizeof(*ld)) != 0) {
                     if (ld->songs) {
                         for (int i = 0; i < ld->count; i++)
@@ -1013,6 +1016,7 @@ static void ev_playlist_list_loaded(const BusEvent *ev, void *data) {
     StateStore::instance().set_loading(false);
     if (!ev->data) return;
     auto *ld = (LoadedSongs*)ev->data;
+    LOG_INFO("PLAYLIST LIST LOADED: count=%d", ld->count);
     if (ld->count <= 0 || !ld->songs) {
         /* ev->data freed by event_bus_poll, do NOT free(ld) */
         return;
@@ -1706,11 +1710,51 @@ int run_app(int argc, char **argv) {
             /* full-page help screen, reflects user keybindings */
             return render_help_screen(s, g_keybindings);
         }
+        if (s.action_sheet_open) {
+            /* Ctrl+X action sheet overlays the normal UI */
+            return dbox({main, render_action_sheet(s)});
+        }
 
         return main;
     });
 
     component |= CatchEvent([&](ftxui::Event event) -> bool {
+        /* ── Action sheet (Ctrl+X) modal handling ── */
+        {
+            const AppState &as = state.state();
+            if (as.action_sheet_open) {
+                std::string k;
+                if (event.is_character()) k = event.character();
+                else k = event_to_key_name(event);
+                if (k == "j" || k == "down" || k == "k" || k == "up") {
+                    state.set_action_sheet(true, (as.action_sheet_selected + 1) % 2);
+                    return true;
+                }
+                if (k == "enter" || k == "\r") {
+                    int sel = as.action_sheet_selected;
+                    const auto &item = as.playlist[as.selected_index];
+                    bool is_pl = item.aux_label &&
+                                 std::string(item.aux_label) == "歌单";
+                    std::string id = item.id ? item.id : "";
+                    state.set_action_sheet(false, 0);
+                    if (id.empty()) return true;
+                    std::thread([id, is_pl, sel]() {
+                        int rv = is_pl
+                            ? netease_subscribe_playlist(id.c_str(), sel == 0)
+                            : netease_like_song(id.c_str(), sel == 0);
+                        LOG_INFO("ACTION SHEET: %s %s -> %d",
+                                 is_pl ? "subscribe" : "like", id.c_str(), rv);
+                    }).detach();
+                    return true;
+                }
+                if (k == "escape") {
+                    state.set_action_sheet(false, 0);
+                    return true;
+                }
+                return true;  /* swallow all keys while open */
+            }
+        }
+
         /* ── Non-seek key → discard pending seek ── */
         if (g_seek_accum != 0 && event != ftxui::Event::ArrowLeft && event != ftxui::Event::ArrowRight) {
             g_seek_accum = 0;
@@ -2292,6 +2336,13 @@ int run_app(int argc, char **argv) {
 
         case Action::ShowHelp:
             StateStore::instance().set_show_help(!cur.show_help);
+            return true;
+
+        case Action::ShowActions:
+            /* open the action sheet for the selected right-panel item */
+            if (!cur.playlist.empty()) {
+                StateStore::instance().set_action_sheet(true, 0);
+            }
             return true;
 
         case Action::CycleLoop: {
