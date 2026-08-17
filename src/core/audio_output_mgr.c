@@ -86,7 +86,7 @@ AudioOutput* audio_output_create(int sample_rate, int channels) {
     cfg.sample_rate = sample_rate;
     cfg.channels = channels;
     cfg.bits_per_sample = 16;
-    cfg.buffer_frames = gcfg ? config_get_int(gcfg, "audio.buffer_frames", 4096) : 4096;
+    cfg.buffer_frames = gcfg ? config_get_int(gcfg, "audio.buffer_frames", 2048) : 2048;
 
     if (chosen->init && chosen->init(&cfg) != 0) {
         LOG_ERROR("Backend %s init failed", chosen->name);
