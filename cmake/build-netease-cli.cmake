@@ -23,6 +23,17 @@ execute_process(
 )
 
 if(NOT _rc EQUAL 0)
+  # Remove any half-written binary so the runtime never picks up a
+  # truncated helper; the missing OUTPUT file also triggers a retry
+  # on the next build.
+  file(REMOVE "${NETEASE_CLI_OUT}")
   message(WARNING
-    "netease-cli: build failed (Netease features unavailable)\n${_err}")
+    "============================================================\n"
+    "  netease-cli: Go 源码构建失败 — 网易云功能不可用\n"
+    "  go 命令: ${GO_EXECUTABLE}\n"
+    "  错误信息: ${_err}\n"
+    "  修复方法:\n"
+    "    - 确认 go >= 1.22 且可离线拉取模块依赖（go env GOPROXY）\n"
+    "    - 修复后重新运行 cmake --build（会自动重试）\n"
+    "============================================================")
 endif()

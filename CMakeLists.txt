@@ -422,12 +422,18 @@ else()
   endif()
   set(NETEASE_CLI_URL
       "https://github.com/ThripleQ/Netune/releases/latest/download/${NETEASE_CLI_ASSET}")
+  # GitHub release mirrors for the prebuilt download; candidates are
+  # speed-probed at build time and the fastest one is used.
+  set(NETEASE_CLI_MIRRORS
+      "https://gh-proxy.com/;https://ghfast.top/"
+      CACHE STRING "Semicolon-list of mirror prefixes for netease-cli downloads")
   add_custom_command(
     OUTPUT  "${NETEASE_CLI_OUT}"
     COMMAND ${CMAKE_COMMAND}
             -DNETEASE_CLI_URL=${NETEASE_CLI_URL}
             -DNETEASE_CLI_ASSET=${NETEASE_CLI_ASSET}
             -DNETEASE_CLI_BIN_DIR=${CMAKE_BINARY_DIR}
+            -DNETEASE_CLI_MIRRORS=${NETEASE_CLI_MIRRORS}
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/fetch-netease-cli.cmake"
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     COMMENT "Downloading prebuilt netease-cli (${NETEASE_CLI_ASSET})..."
