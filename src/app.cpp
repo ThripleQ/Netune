@@ -237,7 +237,15 @@ static void start_login(void) {
         && unikey[0]) {
         g_login_unikey = unikey;
         g_login_poll_tick = 0;
+        LOG_INFO("LOGIN KEY: url_len=%zu url='%.120s'", strlen(qr_url), qr_url);
         std::string qr = gen_qr(qr_url);
+        int qr_nl = 0;
+        for (size_t i = 0; i < qr.size(); i++)
+            if (qr[i] == '\n') qr_nl++;
+        LOG_INFO("LOGIN QR: text_len=%zu lines=%d head='%.40s' mid='%.40s' tail='%.40s'",
+                 qr.size(), qr_nl, qr.c_str(),
+                 qr.size() > 200 ? qr.c_str() + 200 : "",
+                 qr.size() > 80 ? qr.c_str() + qr.size() - 80 : "");
         StateStore::instance().set_login_state(2,
             "Scan with Netease Music App", qr);
         /* unikey is valid for ~2 minutes; count down from there */

@@ -2,6 +2,7 @@
 #include "ui/components/theme_util.h"
 #include "ui/theme.h"
 #include "core/term_gfx.h"
+#include "infra/log.h"
 #include <cstdio>
 #include <string>
 #include <sstream>
@@ -44,8 +45,18 @@ Element render_login_screen(const AppState &s) {
        module — below it the code is clipped and cannot be scanned. */
     auto qr_min_dims = [](const std::string &qr_text, int *cols, int *rows) {
         if (qr_text.empty()) return false;
+        /* Display width, NOT byte width: the half-block chars (█▀▄) are
+           UTF-8 3-byte sequences — counting bytes would inflate a 57-
+           module QR to 171 columns and falsely reject every terminal. */
         size_t first = qr_text.find('\n');
-        int w = (first == std::string::npos) ? (int)qr_text.size() : (int)first;
+        auto disp_w = [](const char *s, size_t n) {
+            size_t w = 0;
+            for (size_t i = 0; i < n; i++)
+                if (((unsigned char)s[i] & 0xC0) != 0x80) w++;  /* count chars, not continuation bytes */
+            return w;
+        };
+        size_t n0 = (first == std::string::npos) ? qr_text.size() : first;
+        int w = (int)disp_w(qr_text.c_str(), n0);
         int h = 1;
         for (size_t i = 0; i < qr_text.size(); i++)
             if (qr_text[i] == '\n') h++;
@@ -79,8 +90,21 @@ Element render_login_screen(const AppState &s) {
             col.push_back(vbox(Elements{}) | size(HEIGHT, EQUAL, rows));
         } else if (!s.login_qr.empty()) {
             int need_w = 0, need_h = 0;
-            if (!qr_min_dims(s.login_qr, &need_w, &need_h) ||
-                s.top_row_width < need_w || s.screen_height < need_h) {
+            static bool need_logged = false;
+            bool too_small = false;
+            if (qr_min_dims(s.login_qr, &need_w, &need_h)) {
+                if (!need_logged) {
+                    LOG_INFO("QR RENDER: need=%dx%d have=%dx%d qrlen=%zu",
+                             need_w, need_h, s.top_row_width,
+                             s.screen_height, s.login_qr.size());
+                    need_logged = true;
+                }
+                too_small = s.top_row_width < need_w ||
+                            s.screen_height < need_h;
+            } else {
+                need_logged = true;  /* nothing to log */
+            }
+            if (too_small) {
                 /* too small: rendering would clip modules — refuse and
                    tell the user the minimum size instead of showing a
                    broken code */
