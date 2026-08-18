@@ -1571,12 +1571,14 @@ int run_app(int argc, char **argv) {
             /* Animation frame interval. Windows keeps 33ms (~30fps):
                conhost renders each frame slowly, so 60fps only burned CPU
                without visible smoothness. Linux/macOS keep the original
-               16ms (60fps) — terminal rendering there is fast enough. */
+               16ms (60fps) — terminal rendering there is fast enough.
+               The action sheet (Ctrl+X) also gets fast frames so its
+               status query / state flips feel responsive. */
 #ifdef _WIN32
-            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading)
+            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open)
                       ? 33 : 200;
 #else
-            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading)
+            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open)
                       ? 16 : 200;
 #endif
             std::this_thread::sleep_for(std::chrono::milliseconds(ms));

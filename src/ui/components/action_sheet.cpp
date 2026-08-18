@@ -31,8 +31,11 @@ Element render_action_sheet(const AppState &s) {
         text(" " + title + " ") | bold,
         separator(),
         hbox({
-            text(btn) | (s.action_sheet_active < 0 ? dim : bold),
-        }),
+            text(" \u203A "),   /* ▸ */
+            text(btn),
+        }) | bold
+          | bgcolor(Color::RGB(th.accent.r, th.accent.g, th.accent.b))
+          | color(Color::RGB(0, 0, 0)),
         separator(),
         text(" Enter \u6267\u884C  Esc \u5173\u95ED ") | dim,
     }) | borderRounded
