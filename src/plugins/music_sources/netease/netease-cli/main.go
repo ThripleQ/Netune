@@ -238,6 +238,41 @@ func main() {
 		}
 	}
 
+	case "liked-check":
+		// liked-check <song_id> — 判断歌曲是否在红心列表 (轻量, 不拉歌曲详情)
+		if len(os.Args) < 3 {
+			die("usage: netease-cli liked-check <song_id>")
+		}
+		acctSvc := service.UserAccountService{}
+		_, acctBody := acctSvc.AccountInfo()
+		var acctData map[string]interface{}
+		if err := json.Unmarshal(acctBody, &acctData); err != nil {
+			die(fmt.Sprintf("parse account failed: %v", err))
+		}
+		uid := int64(0)
+		if acct, ok := acctData["account"].(map[string]interface{}); ok {
+			if id, ok := acct["id"].(float64); ok {
+				uid = int64(id)
+			}
+		}
+		if uid == 0 {
+			die("failed to get uid, need login first")
+		}
+		likeSvc := service.LikeListService{UID: fmt.Sprintf("%d", uid)}
+		_, body := likeSvc.LikeList()
+		var likeData map[string]interface{}
+		json.Unmarshal(body, &likeData)
+		liked := false
+		if ids, ok := likeData["ids"].([]interface{}); ok {
+			for _, id := range ids {
+				if f, ok := id.(float64); ok && fmt.Sprintf("%.0f", f) == os.Args[2] {
+					liked = true
+					break
+				}
+			}
+		}
+		output([]byte(fmt.Sprintf("{\"code\":200,\"liked\":%t}", liked)))
+
 	case "like":
 		// like <song_id> [true|false] — 喜欢/取消喜欢歌曲
 		if len(os.Args) < 3 {

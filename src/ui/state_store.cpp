@@ -311,6 +311,11 @@ void StateStore::set_show_help(bool show) {
 void StateStore::set_action_sheet(bool open, int selected) {
     state_.action_sheet_open = open;
     state_.action_sheet_selected = selected;
+    if (open) state_.action_sheet_active = -1;  /* re-query on open */
+}
+
+void StateStore::set_action_sheet_active(int active) {
+    state_.action_sheet_active = active;
 }
 
 void StateStore::set_loading(bool v) {

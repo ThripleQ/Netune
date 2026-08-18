@@ -1726,24 +1726,21 @@ int run_app(int argc, char **argv) {
                 std::string k;
                 if (event.is_character()) k = event.character();
                 else k = event_to_key_name(event);
-                if (k == "j" || k == "down" || k == "k" || k == "up") {
-                    state.set_action_sheet(true, (as.action_sheet_selected + 1) % 2);
-                    return true;
-                }
                 if (k == "enter" || k == "\r") {
-                    int sel = as.action_sheet_selected;
                     const auto &item = as.playlist[as.selected_index];
                     bool is_pl = item.aux_label &&
                                  std::string(item.aux_label) == "歌单";
                     std::string id = item.id ? item.id : "";
-                    state.set_action_sheet(false, 0);
-                    if (id.empty()) return true;
-                    std::thread([id, is_pl, sel]() {
+                    bool active = as.action_sheet_active == 1;
+                    if (id.empty() || as.action_sheet_active < 0) return true;
+                    std::thread([id, is_pl, active]() {
                         int rv = is_pl
-                            ? netease_subscribe_playlist(id.c_str(), sel == 0)
-                            : netease_like_song(id.c_str(), sel == 0);
-                        LOG_INFO("ACTION SHEET: %s %s -> %d",
-                                 is_pl ? "subscribe" : "like", id.c_str(), rv);
+                            ? netease_subscribe_playlist(id.c_str(), !active)
+                            : netease_like_song(id.c_str(), !active);
+                        LOG_INFO("ACTION SHEET: %s %s toggle->%d = %d",
+                                 is_pl ? "subscribe" : "like", id.c_str(), !active, rv);
+                        if (rv == 0)
+                            StateStore::instance().set_action_sheet_active(active ? 0 : 1);
                     }).detach();
                     return true;
                 }
@@ -2342,6 +2339,33 @@ int run_app(int argc, char **argv) {
             /* open the action sheet for the selected right-panel item */
             if (!cur.playlist.empty()) {
                 StateStore::instance().set_action_sheet(true, 0);
+                const auto &item = cur.playlist[cur.selected_index];
+                bool is_pl = item.aux_label &&
+                             std::string(item.aux_label) == "歌单";
+                std::string id = item.id ? item.id : "";
+                if (!id.empty()) {
+                    std::thread([id, is_pl]() {
+                        int active = -1;
+                        if (is_pl) {
+                            SongInfo *pls = NULL; int pc = 0;
+                            if (netease_playlists(true, &pls, &pc) == 0) {
+                                for (int i = 0; i < pc; i++) {
+                                    if (pls[i].id && strcmp(pls[i].id, id.c_str()) == 0) {
+                                        active = 1; break;
+                                    }
+                                }
+                                if (active < 0) active = 0;
+                                for (int i = 0; i < pc; i++) song_info_free(&pls[i]);
+                                free(pls);
+                            }
+                        } else {
+                            bool liked = false;
+                            if (netease_liked_check(id.c_str(), &liked) == 0)
+                                active = liked ? 1 : 0;
+                        }
+                        StateStore::instance().set_action_sheet_active(active);
+                    }).detach();
+                }
             }
             return true;
 

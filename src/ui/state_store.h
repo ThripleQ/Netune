@@ -113,6 +113,8 @@ struct AppState {
     /* action sheet (Ctrl+X): like song / subscribe playlist */
     bool action_sheet_open = false;
     int  action_sheet_selected = 0;
+    /* -1 = status querying, 0 = not liked/subscribed, 1 = liked/subscribed */
+    int  action_sheet_active = -1;
 
     /* spectrum */
     float spectrum[SPECTRUM_BANDS] = {0};
@@ -221,6 +223,7 @@ public:
     /* help screen */
     void set_show_help(bool show);
     void set_action_sheet(bool open, int selected);
+    void set_action_sheet_active(int active);
 
     /* loading */
     void set_loading(bool v);

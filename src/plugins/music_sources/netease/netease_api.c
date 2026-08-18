@@ -551,6 +551,24 @@ int netease_like_song(const char *song_id, bool like) {
     return code == 200 ? 0 : -1;
 }
 
+int netease_liked_check(const char *song_id, bool *liked) {
+    char *esc = shell_escape(song_id);
+    char *j = run("%s liked-check %s%s", CLI, esc, STDERR_REDIRECT);
+    free(esc);
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    long long code = root ? jget_int(root, "code") : 0;
+    if (code == 200) {
+        yyjson_val *v = root ? yyjson_obj_get(root, "liked") : NULL;
+        *liked = v ? yyjson_get_bool(v) : false;
+    }
+    yyjson_doc_free(doc);
+    return code == 200 ? 0 : -1;
+}
+
 int netease_subscribe_playlist(const char *pl_id, bool sub) {
     char *esc = shell_escape(pl_id);
     char *j = run("%s subscribe %s %s%s", CLI, esc, sub ? "1" : "0", STDERR_REDIRECT);
