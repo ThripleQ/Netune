@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.18)
+﻿cmake_minimum_required(VERSION 3.20)
 project(netune VERSION 2.0.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
@@ -366,8 +366,15 @@ endif()
 # the build directory next to netune.exe, where cli_path() looks for it.
 find_program(GO_EXECUTABLE go)
 set(NETEASE_CLI_DIR "${CMAKE_SOURCE_DIR}/src/plugins/music_sources/netease/netease-cli")
+# Multi-config generators (Visual Studio) put netune.exe in a per-config
+# subdir, so netease-cli must follow it there for CI to upload both together.
+# Single-config generators (Ninja/Makefiles) output to the build root.
 if(WIN32)
-  set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/netease-cli.exe")
+  if(CMAKE_CONFIGURATION_TYPES)
+    set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/$<CONFIG>/netease-cli.exe")
+  else()
+    set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/netease-cli.exe")
+  endif()
 else()
   set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/netease-cli")
 endif()
@@ -449,4 +456,5 @@ add_dependencies(netune netease-cli-build)
 # helper next to the main executable. OPTIONAL: if the helper failed to
 # build/download, installation still succeeds.
 install(TARGETS netune RUNTIME DESTINATION bin)
-install(PROGRAMS "${NETEASE_CLI_OUT}" DESTINATION bin OPTIONAL)
+# install(PROGRAMS) rejects generator expressions, so wrap in install(CODE).
+install(CODE "install(PROGRAMS \"${NETEASE_CLI_OUT}\" DESTINATION bin OPTIONAL)")

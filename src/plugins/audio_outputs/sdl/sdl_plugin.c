@@ -1,4 +1,4 @@
-#include "core/audio_output.h"
+﻿#include "core/audio_output.h"
 #include "infra/log.h"
 #include <stdlib.h>
 #include <SDL2/SDL.h>
@@ -16,12 +16,6 @@ static bool sdl_probe(void) {
     return true;
 }
 
-static void sdl_audio_cb(void *userdata, Uint8 *stream, int len) {
-    (void)userdata;
-    /* We use SDL_QueueAudio for push model, so this callback
-       is for the pull model (not used). Keep it silent. */
-    SDL_memset(stream, 0, (size_t)len);
-}
 
 static int sdl_init(const AudioConfig *cfg) {
     g_sample_rate = cfg->sample_rate;
@@ -33,7 +27,10 @@ static int sdl_init(const AudioConfig *cfg) {
     want.format = AUDIO_S16SYS;
     want.channels = (Uint8)g_channels;
     want.samples = (Uint16)(cfg->buffer_frames > 0 ? cfg->buffer_frames : 4096);
-    want.callback = sdl_audio_cb;
+    /* No callback: the device must stay in push mode so SDL_QueueAudio
+       (used by sdl_write_blocking) is allowed. Setting a callback switches
+       SDL to pull mode and SDL_QueueAudio then fails with
+       "Audio device has a callback, queueing not allowed". */
 
     g_dev = SDL_OpenAudioDevice(NULL, 0, &want, &have, 0);
     if (!g_dev) {
