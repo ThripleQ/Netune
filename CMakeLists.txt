@@ -45,6 +45,7 @@ set(FTXUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 # would satisfy find_package() yet still carry the NULL deref bug.
 if(WIN32)
   set(NETUNE_FTXUI_TAG v6.1.9)
+  message(STATUS "FTXUI: fetching/building from source (v${NETUNE_FTXUI_TAG}, Windows)")
   FetchContent_Declare(ftxui
     GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
     GIT_TAG        ${NETUNE_FTXUI_TAG}
@@ -78,7 +79,13 @@ endif()
 # libyaml only ships .pc files, no CMake config → must use pkg-config.
 # On Windows, vcpkg's pkgconf provides this.
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(YAML   REQUIRED IMPORTED_TARGET yaml-0.1)
+pkg_check_modules(YAML   QUIET IMPORTED_TARGET yaml-0.1)
+if(NOT YAML_FOUND)
+  message(FATAL_ERROR
+    "libyaml (yaml-0.1) not found. "
+    "Linux: apt install libyaml-dev (or your distro library). "
+    "Windows: vcpkg install libyaml (declared in vcpkg.json).")
+endif()
 pkg_check_modules(DBUS   QUIET IMPORTED_TARGET dbus-1)
 pkg_check_modules(ALSA   QUIET IMPORTED_TARGET alsa)
 pkg_check_modules(PULSE  QUIET IMPORTED_TARGET libpulse-simple)
@@ -119,6 +126,12 @@ function(netune_build_ffmpeg_from_source out_target)
     endif()
   endif()
 
+  if(NOT CMAKE_BUILD_PARALLEL_LEVEL)
+    set(_ffmpeg_jobs 2)
+  else()
+    set(_ffmpeg_jobs ${CMAKE_BUILD_PARALLEL_LEVEL})
+  endif()
+
   include(ExternalProject)
   set(FFMPEG_INSTALL_DIR ${CMAKE_BINARY_DIR}/ffmpeg-install)
 
@@ -152,7 +165,7 @@ function(netune_build_ffmpeg_from_source out_target)
       --enable-avformat
       --enable-avcodec
       --enable-avutil
-    BUILD_COMMAND ${MAKE_EXECUTABLE} -j${CMAKE_BUILD_PARALLEL_LEVEL}
+    BUILD_COMMAND ${MAKE_EXECUTABLE} -j${_ffmpeg_jobs}
     INSTALL_COMMAND ${MAKE_EXECUTABLE} install
     BUILD_BYPRODUCTS
       ${FFMPEG_INSTALL_DIR}/lib/libavformat.so
@@ -473,3 +486,30 @@ add_dependencies(netune netease-cli-build)
 install(TARGETS netune RUNTIME DESTINATION bin)
 # install(PROGRAMS) rejects generator expressions, so wrap in install(CODE).
 install(CODE "install(PROGRAMS \"${NETEASE_CLI_OUT}\" DESTINATION bin OPTIONAL)")
+
+
+# ── Build summary ─────────────────────────────────────
+# States plainly what this configure run produced.
+message(STATUS "")
+message(STATUS "netune ${CMAKE_PROJECT_VERSION} build summary")
+if(NETUNE_FFMPEG_TARGET STREQUAL "PkgConfig::FFMPEG_NETUNE_BUILT")
+  message(STATUS "  FFmpeg       : built from source")
+else()
+  message(STATUS "  FFmpeg       : system package")
+endif()
+if(WIN32)
+  message(STATUS "  FTXUI        : v${NETUNE_FTXUI_TAG} (fetched from source)")
+else()
+  message(STATUS "  FTXUI        : v${NETUNE_FTXUI_TAG} (system or fetched)")
+endif()
+message(STATUS "  ALSA         : ${ALSA_FOUND}")
+message(STATUS "  PulseAudio   : ${PULSE_FOUND}")
+message(STATUS "  SDL2         : ${SDL2_FOUND}")
+if(NOT WIN32)
+  message(STATUS "  MPRIS        : ${DBUS_FOUND}")
+endif()
+if(GO_MEETS_VERSION)
+  message(STATUS "  netease-cli  : auto-built from source with Go (>= 1.22)")
+else()
+  message(STATUS "  netease-cli  : prebuilt binary downloaded from release")
+endif()
