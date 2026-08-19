@@ -66,7 +66,8 @@ static int sdl_write_blocking(const uint8_t *data, size_t bytes) {
     while (SDL_GetQueuedAudioSize(g_dev) > 65536) {
         SDL_Delay(8);
     }
-    return (int)bytes;
+    /* return FRAME count (not bytes) — playback progress counts frames */
+    return (int)(bytes / (g_channels * 2));
 }
 
 static int sdl_start(void) {

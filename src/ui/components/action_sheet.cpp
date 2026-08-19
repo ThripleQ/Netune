@@ -9,7 +9,7 @@ Element render_action_sheet(const AppState &s) {
 
     const auto &item = s.playlist.empty() ? SongInfo{} :
                        s.playlist[s.selected_index];
-    bool is_playlist = item.aux_label && std::string(item.aux_label) == "歌单";
+    bool is_playlist = item.is_playlist;
     std::string title = item.title ? item.title : "(nothing selected)";
 
     /* single toggling button: shows the current state and flips on Enter */

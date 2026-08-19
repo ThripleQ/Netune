@@ -23,6 +23,7 @@ typedef struct {
     int   fee;          /* netease: 0=free 1=vip 4=paid 8=vip */
     char *cover_url;
     char *aux_label;    /* e.g. bitrate / format hint  */
+    int   is_playlist;  /* 1 = a playlist item (right-panel Enter opens it) */
 } SongInfo;
 
 /* ── Search result ─────────────────────────────────── */

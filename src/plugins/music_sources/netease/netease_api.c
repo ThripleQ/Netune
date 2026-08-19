@@ -606,6 +606,7 @@ int netease_toplist(SongInfo **out, int *count) {
         s->source    = strdup("netease");
         s->cover_url = strdup("");
         s->aux_label = strdup("歌单");
+        s->is_playlist = 1;
         int64_t sid = jget_sint64(v, "id");
         char id_str[32];
         snprintf(id_str, sizeof(id_str), "%ld", (long)sid);
@@ -644,6 +645,7 @@ int netease_playlists(bool favorited, SongInfo **out, int *count) {
         s->source    = strdup("netease");
         s->cover_url = strdup("");
         s->aux_label = strdup("歌单");
+        s->is_playlist = 1;
         int64_t sid = jget_sint64(v, "id");
         char id_str[32];
         snprintf(id_str, sizeof(id_str), "%ld", (long)sid);
@@ -702,6 +704,7 @@ int netease_menu_songs(int type, int limit, SongInfo **out, int *count) {
             s->source    = strdup("netease");
             s->cover_url = strdup("");
             s->aux_label = strdup("歌单");
+        s->is_playlist = 1;
             int64_t sid = jget_sint64(v, "id");
             char id_str[32];
             snprintf(id_str, sizeof(id_str), "%ld", (long)sid);
