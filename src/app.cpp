@@ -1730,8 +1730,7 @@ int run_app(int argc, char **argv) {
                 else k = event_to_key_name(event);
                 if (k == "enter" || k == "\r") {
                     const auto &item = as.playlist[as.selected_index];
-                    bool is_pl = item.aux_label &&
-                                 std::string(item.aux_label) == "歌单";
+                    bool is_pl = item.is_playlist;
                     std::string id = item.id ? item.id : "";
                     bool active = as.action_sheet_active == 1;
                     if (id.empty() || as.action_sheet_active < 0) return true;
@@ -2230,7 +2229,7 @@ int run_app(int argc, char **argv) {
                open the playlist's songs instead. */
             if (cur.active_panel == 1) {
                 const auto &song = cur.playlist[cur.selected_index];
-                if (song.aux_label && strcmp(song.aux_label, "歌单") == 0) {
+                if (song.is_playlist) {
                     StateStore::instance().nav_push_restore_playlist();
                     StateStore::instance().set_loading(true);
                     std::string _pl_id = song.id ? song.id : "";
@@ -2342,8 +2341,7 @@ int run_app(int argc, char **argv) {
             if (!cur.playlist.empty()) {
                 StateStore::instance().set_action_sheet(true, 0);
                 const auto &item = cur.playlist[cur.selected_index];
-                bool is_pl = item.aux_label &&
-                             std::string(item.aux_label) == "歌单";
+                bool is_pl = item.is_playlist;
                 std::string id = item.id ? item.id : "";
                 if (!id.empty()) {
                     std::thread([id, is_pl]() {

@@ -1,4 +1,4 @@
-﻿cmake_minimum_required(VERSION 3.18)
+﻿cmake_minimum_required(VERSION 3.20)
 project(netune VERSION 2.0.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
@@ -45,9 +45,11 @@ set(FTXUI_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 # would satisfy find_package() yet still carry the NULL deref bug.
 if(WIN32)
   set(NETUNE_FTXUI_TAG v6.1.9)
+  message(STATUS "FTXUI: fetching/building from source (v${NETUNE_FTXUI_TAG}, Windows)")
   FetchContent_Declare(ftxui
     GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
     GIT_TAG        ${NETUNE_FTXUI_TAG}
+    GIT_SHALLOW    TRUE
   )
   FetchContent_MakeAvailable(ftxui)
 else()
@@ -56,6 +58,7 @@ else()
     FETCH_CONTENT
       GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
       GIT_TAG        ${NETUNE_FTXUI_TAG}
+      GIT_SHALLOW    TRUE
   )
 endif()
 
@@ -64,6 +67,7 @@ netune_find_dep(yyjson 0.10.0
   FETCH_CONTENT
     GIT_REPOSITORY https://github.com/ibireme/yyjson.git
     GIT_TAG        0.10.0
+    GIT_SHALLOW    TRUE
 )
 # FetchContent builds the plain target 'yyjson'; provide the namespaced
 # alias that the rest of the project expects.
@@ -75,11 +79,30 @@ endif()
 # libyaml only ships .pc files, no CMake config → must use pkg-config.
 # On Windows, vcpkg's pkgconf provides this.
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(YAML   REQUIRED IMPORTED_TARGET yaml-0.1)
+pkg_check_modules(YAML   QUIET IMPORTED_TARGET yaml-0.1)
+if(NOT YAML_FOUND)
+  message(FATAL_ERROR
+    "libyaml (yaml-0.1) not found. "
+    "Linux: apt install libyaml-dev (or your distro library). "
+    "Windows: vcpkg install libyaml (declared in vcpkg.json).")
+endif()
 pkg_check_modules(DBUS   QUIET IMPORTED_TARGET dbus-1)
 pkg_check_modules(ALSA   QUIET IMPORTED_TARGET alsa)
 pkg_check_modules(PULSE  QUIET IMPORTED_TARGET libpulse-simple)
-pkg_check_modules(SDL2   QUIET IMPORTED_TARGET sdl2)
+# SDL2: prefer a CMake config package (covers prebuilt SDL2 dirs, distro
+# packages and vcpkg), fall back to pkg-config when no config package exists.
+find_package(SDL2 CONFIG QUIET)
+if(SDL2_FOUND)
+  set(NETUNE_SDL2_TARGET SDL2::SDL2)
+  message(STATUS "SDL2: found via CMake config package")
+else()
+  pkg_check_modules(SDL2 QUIET IMPORTED_TARGET sdl2)
+  if(SDL2_FOUND)
+    set(NETUNE_SDL2_TARGET PkgConfig::SDL2)
+  else()
+    set(NETUNE_SDL2_TARGET "")
+  endif()
+endif()
 find_package(Threads REQUIRED)
 
 # ── FFmpeg (system first, then build from source) ────
@@ -99,6 +122,18 @@ function(netune_find_system_ffmpeg out_target)
   if(FFMPEG_SYSTEM_FOUND)
     set(${out_target} PkgConfig::FFMPEG_SYSTEM PARENT_SCOPE)
   else()
+    pkg_check_modules(FFMPEG_OLD QUIET IMPORTED_TARGET
+      libavformat
+      libavcodec
+      libswresample
+      libavutil)
+    if(FFMPEG_OLD_FOUND)
+      message(WARNING
+        "FFmpeg ${FFMPEG_OLD_VERSION} is older than 5.1 (needs libavformat>=59.27.100); "
+        "falling back to building FFmpeg from source.")
+    else()
+      message(STATUS "FFmpeg: no existing system/vcpkg FFmpeg found")
+    endif()
     set(${out_target} "" PARENT_SCOPE)
   endif()
 endfunction()
@@ -114,6 +149,12 @@ function(netune_build_ffmpeg_from_source out_target)
     if(NOT YASM_EXECUTABLE)
       message(FATAL_ERROR "FFmpeg: nasm or yasm is required to build from source")
     endif()
+  endif()
+
+  if(NOT CMAKE_BUILD_PARALLEL_LEVEL)
+    set(_ffmpeg_jobs 2)
+  else()
+    set(_ffmpeg_jobs ${CMAKE_BUILD_PARALLEL_LEVEL})
   endif()
 
   include(ExternalProject)
@@ -132,6 +173,7 @@ function(netune_build_ffmpeg_from_source out_target)
     PREFIX ${CMAKE_BINARY_DIR}/ffmpeg-prefix
     GIT_REPOSITORY https://github.com/FFmpeg/FFmpeg.git
     GIT_TAG n6.1
+    GIT_SHALLOW TRUE
     CONFIGURE_COMMAND <SOURCE_DIR>/configure
       --prefix=${FFMPEG_INSTALL_DIR}
       --enable-shared
@@ -148,7 +190,7 @@ function(netune_build_ffmpeg_from_source out_target)
       --enable-avformat
       --enable-avcodec
       --enable-avutil
-    BUILD_COMMAND ${MAKE_EXECUTABLE} -j${CMAKE_BUILD_PARALLEL_LEVEL}
+    BUILD_COMMAND ${MAKE_EXECUTABLE} -j${_ffmpeg_jobs}
     INSTALL_COMMAND ${MAKE_EXECUTABLE} install
     BUILD_BYPRODUCTS
       ${FFMPEG_INSTALL_DIR}/lib/libavformat.so
@@ -172,7 +214,8 @@ function(netune_build_ffmpeg_from_source out_target)
     INTERFACE_INCLUDE_DIRECTORIES ${FFMPEG_INSTALL_DIR}/include
   )
 
-  list(APPEND CMAKE_BUILD_RPATH ${FFMPEG_INSTALL_DIR}/lib)
+  set(CMAKE_BUILD_RPATH ${CMAKE_BUILD_RPATH} ${FFMPEG_INSTALL_DIR}/lib PARENT_SCOPE)
+  set(NETUNE_FFMPEG_INSTALL_RPATH "${FFMPEG_INSTALL_DIR}/lib" PARENT_SCOPE)
   set(${out_target} PkgConfig::FFMPEG_NETUNE_BUILT PARENT_SCOPE)
 endfunction()
 
@@ -244,8 +287,12 @@ endif()
 if(SDL2_FOUND)
   list(APPEND PLUGIN_AUDIO_SOURCES src/plugins/audio_outputs/sdl/sdl_plugin.c)
   message(STATUS "SDL2 found: building SDL audio backend")
+elseif(WIN32)
+  message(FATAL_ERROR
+    "SDL2 not found. The SDL audio backend is required on Windows. "
+    "Install SDL2 via vcpkg: sdl2:x64-windows (declared in vcpkg.json).")
 else()
-  message(STATUS "SDL2 not found: skipping SDL (needed on Windows)")
+  message(STATUS "SDL2 not found: skipping SDL on non-Windows")
 endif()
 
 set(PLUGIN_LYRIC_SOURCES
@@ -328,7 +375,7 @@ if(PULSE_FOUND)
   target_link_libraries(netune PRIVATE PkgConfig::PULSE)
 endif()
 if(SDL2_FOUND)
-  target_link_libraries(netune PRIVATE PkgConfig::SDL2)
+  target_link_libraries(netune PRIVATE ${NETUNE_SDL2_TARGET})
 endif()
 if(DBUS_FOUND AND NOT WIN32)
   target_link_libraries(netune PRIVATE PkgConfig::DBUS)
@@ -366,8 +413,15 @@ endif()
 # the build directory next to netune.exe, where cli_path() looks for it.
 find_program(GO_EXECUTABLE go)
 set(NETEASE_CLI_DIR "${CMAKE_SOURCE_DIR}/src/plugins/music_sources/netease/netease-cli")
+# Multi-config generators (Visual Studio) put netune.exe in a per-config
+# subdir, so netease-cli must follow it there for CI to upload both together.
+# Single-config generators (Ninja/Makefiles) output to the build root.
 if(WIN32)
-  set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/netease-cli.exe")
+  if(CMAKE_CONFIGURATION_TYPES)
+    set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/$<CONFIG>/netease-cli.exe")
+  else()
+    set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/netease-cli.exe")
+  endif()
 else()
   set(NETEASE_CLI_OUT "${CMAKE_BINARY_DIR}/netease-cli")
 endif()
@@ -421,6 +475,13 @@ else()
   else()
     set(NETEASE_CLI_ASSET "netease-cli-linux-x86_64.tar.gz")
   endif()
+  # Multi-config generators put netune.exe in a per-config subdir, so the
+  # download must extract there too (matches the build branch NETEASE_CLI_OUT).
+  if(WIN32 AND CMAKE_CONFIGURATION_TYPES)
+    set(NETEASE_CLI_BIN "${CMAKE_BINARY_DIR}/$<CONFIG>")
+  else()
+    set(NETEASE_CLI_BIN "${CMAKE_BINARY_DIR}")
+  endif()
   set(NETEASE_CLI_URL
       "https://github.com/ThripleQ/Netune/releases/latest/download/${NETEASE_CLI_ASSET}")
   # GitHub release mirrors for the prebuilt download; candidates are
@@ -433,7 +494,7 @@ else()
     COMMAND ${CMAKE_COMMAND}
             -DNETEASE_CLI_URL=${NETEASE_CLI_URL}
             -DNETEASE_CLI_ASSET=${NETEASE_CLI_ASSET}
-            -DNETEASE_CLI_BIN_DIR=${CMAKE_BINARY_DIR}
+            -DNETEASE_CLI_BIN_DIR=${NETEASE_CLI_BIN}
             -DNETEASE_CLI_MIRRORS=${NETEASE_CLI_MIRRORS}
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/fetch-netease-cli.cmake"
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
@@ -448,5 +509,38 @@ add_dependencies(netune netease-cli-build)
 # Install netune and netease-cli side by side so cli_path() finds the
 # helper next to the main executable. OPTIONAL: if the helper failed to
 # build/download, installation still succeeds.
-install(TARGETS netune RUNTIME DESTINATION bin)
-install(PROGRAMS "${NETEASE_CLI_OUT}" DESTINATION bin OPTIONAL)
+# When FFmpeg was built from source (build/ffmpeg-install), the installed netune
+# still needs to find those .so files at runtime.
+if(NETUNE_FFMPEG_INSTALL_RPATH)
+  set_target_properties(netune PROPERTIES INSTALL_RPATH "${NETUNE_FFMPEG_INSTALL_RPATH}")
+endif()
+install(TARGETS netune RUNTIME DESTINATION bin CONFIGURATIONS Release)
+# install(PROGRAMS) rejects generator expressions, so wrap in install(CODE).
+install(CODE "install(PROGRAMS \"${NETEASE_CLI_OUT}\" DESTINATION bin OPTIONAL)")
+
+
+# ── Build summary ─────────────────────────────────────
+# States plainly what this configure run produced.
+message(STATUS "")
+message(STATUS "netune ${CMAKE_PROJECT_VERSION} build summary")
+if(NETUNE_FFMPEG_TARGET STREQUAL "PkgConfig::FFMPEG_NETUNE_BUILT")
+  message(STATUS "  FFmpeg       : built from source")
+else()
+  message(STATUS "  FFmpeg       : system package")
+endif()
+if(WIN32)
+  message(STATUS "  FTXUI        : v${NETUNE_FTXUI_TAG} (fetched from source)")
+else()
+  message(STATUS "  FTXUI        : v${NETUNE_FTXUI_TAG} (system or fetched)")
+endif()
+message(STATUS "  ALSA         : ${ALSA_FOUND}")
+message(STATUS "  PulseAudio   : ${PULSE_FOUND}")
+message(STATUS "  SDL2         : ${SDL2_FOUND}")
+if(NOT WIN32)
+  message(STATUS "  MPRIS        : ${DBUS_FOUND}")
+endif()
+if(GO_MEETS_VERSION)
+  message(STATUS "  netease-cli  : auto-built from source with Go (>= 1.22)")
+else()
+  message(STATUS "  netease-cli  : prebuilt binary downloaded from release")
+endif()

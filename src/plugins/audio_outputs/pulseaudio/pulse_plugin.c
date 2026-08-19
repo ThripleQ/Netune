@@ -53,7 +53,8 @@ static int pulse_write_blocking(const uint8_t *data, size_t bytes) {
         LOG_WARN("PulseAudio write error: %s", pa_strerror(error));
         return -1;
     }
-    return (int)bytes;
+    /* return FRAME count (not bytes) — playback progress counts frames */
+    return (int)(bytes / (g_channels * 2));
 }
 
 static int pulse_start(void) { return 0; }
