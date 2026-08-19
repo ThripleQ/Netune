@@ -176,7 +176,7 @@ function(netune_build_ffmpeg_from_source out_target)
     INTERFACE_INCLUDE_DIRECTORIES ${FFMPEG_INSTALL_DIR}/include
   )
 
-  list(APPEND CMAKE_BUILD_RPATH ${FFMPEG_INSTALL_DIR}/lib)
+  set(CMAKE_BUILD_RPATH ${CMAKE_BUILD_RPATH} ${FFMPEG_INSTALL_DIR}/lib PARENT_SCOPE)
   set(${out_target} PkgConfig::FFMPEG_NETUNE_BUILT PARENT_SCOPE)
 endfunction()
 
@@ -248,8 +248,12 @@ endif()
 if(SDL2_FOUND)
   list(APPEND PLUGIN_AUDIO_SOURCES src/plugins/audio_outputs/sdl/sdl_plugin.c)
   message(STATUS "SDL2 found: building SDL audio backend")
+elseif(WIN32)
+  message(FATAL_ERROR
+    "SDL2 not found. The SDL audio backend is required on Windows. "
+    "Install SDL2 via vcpkg: sdl2:x64-windows (declared in vcpkg.json).")
 else()
-  message(STATUS "SDL2 not found: skipping SDL (needed on Windows)")
+  message(STATUS "SDL2 not found: skipping SDL on non-Windows")
 endif()
 
 set(PLUGIN_LYRIC_SOURCES
