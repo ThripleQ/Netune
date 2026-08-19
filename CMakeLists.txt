@@ -48,6 +48,7 @@ if(WIN32)
   FetchContent_Declare(ftxui
     GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
     GIT_TAG        ${NETUNE_FTXUI_TAG}
+    GIT_SHALLOW    TRUE
   )
   FetchContent_MakeAvailable(ftxui)
 else()
@@ -56,6 +57,7 @@ else()
     FETCH_CONTENT
       GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI.git
       GIT_TAG        ${NETUNE_FTXUI_TAG}
+      GIT_SHALLOW    TRUE
   )
 endif()
 
@@ -64,6 +66,7 @@ netune_find_dep(yyjson 0.10.0
   FETCH_CONTENT
     GIT_REPOSITORY https://github.com/ibireme/yyjson.git
     GIT_TAG        0.10.0
+    GIT_SHALLOW    TRUE
 )
 # FetchContent builds the plain target 'yyjson'; provide the namespaced
 # alias that the rest of the project expects.
@@ -132,6 +135,7 @@ function(netune_build_ffmpeg_from_source out_target)
     PREFIX ${CMAKE_BINARY_DIR}/ffmpeg-prefix
     GIT_REPOSITORY https://github.com/FFmpeg/FFmpeg.git
     GIT_TAG n6.1
+    GIT_SHALLOW TRUE
     CONFIGURE_COMMAND <SOURCE_DIR>/configure
       --prefix=${FFMPEG_INSTALL_DIR}
       --enable-shared
@@ -428,6 +432,13 @@ else()
   else()
     set(NETEASE_CLI_ASSET "netease-cli-linux-x86_64.tar.gz")
   endif()
+  # Multi-config generators put netune.exe in a per-config subdir, so the
+  # download must extract there too (matches the build branch NETEASE_CLI_OUT).
+  if(WIN32 AND CMAKE_CONFIGURATION_TYPES)
+    set(NETEASE_CLI_BIN "${CMAKE_BINARY_DIR}/$<CONFIG>")
+  else()
+    set(NETEASE_CLI_BIN "${CMAKE_BINARY_DIR}")
+  endif()
   set(NETEASE_CLI_URL
       "https://github.com/ThripleQ/Netune/releases/latest/download/${NETEASE_CLI_ASSET}")
   # GitHub release mirrors for the prebuilt download; candidates are
@@ -440,7 +451,7 @@ else()
     COMMAND ${CMAKE_COMMAND}
             -DNETEASE_CLI_URL=${NETEASE_CLI_URL}
             -DNETEASE_CLI_ASSET=${NETEASE_CLI_ASSET}
-            -DNETEASE_CLI_BIN_DIR=${CMAKE_BINARY_DIR}
+            -DNETEASE_CLI_BIN_DIR=${NETEASE_CLI_BIN}
             -DNETEASE_CLI_MIRRORS=${NETEASE_CLI_MIRRORS}
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/fetch-netease-cli.cmake"
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
