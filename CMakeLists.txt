@@ -89,7 +89,20 @@ endif()
 pkg_check_modules(DBUS   QUIET IMPORTED_TARGET dbus-1)
 pkg_check_modules(ALSA   QUIET IMPORTED_TARGET alsa)
 pkg_check_modules(PULSE  QUIET IMPORTED_TARGET libpulse-simple)
-pkg_check_modules(SDL2   QUIET IMPORTED_TARGET sdl2)
+# SDL2: prefer a CMake config package (covers prebuilt SDL2 dirs, distro
+# packages and vcpkg), fall back to pkg-config when no config package exists.
+find_package(SDL2 CONFIG QUIET)
+if(SDL2_FOUND)
+  set(NETUNE_SDL2_TARGET SDL2::SDL2)
+  message(STATUS "SDL2: found via CMake config package")
+else()
+  pkg_check_modules(SDL2 QUIET IMPORTED_TARGET sdl2)
+  if(SDL2_FOUND)
+    set(NETUNE_SDL2_TARGET PkgConfig::SDL2)
+  else()
+    set(NETUNE_SDL2_TARGET "")
+  endif()
+endif()
 find_package(Threads REQUIRED)
 
 # ── FFmpeg (system first, then build from source) ────
@@ -109,6 +122,18 @@ function(netune_find_system_ffmpeg out_target)
   if(FFMPEG_SYSTEM_FOUND)
     set(${out_target} PkgConfig::FFMPEG_SYSTEM PARENT_SCOPE)
   else()
+    pkg_check_modules(FFMPEG_OLD QUIET IMPORTED_TARGET
+      libavformat
+      libavcodec
+      libswresample
+      libavutil)
+    if(FFMPEG_OLD_FOUND)
+      message(WARNING
+        "FFmpeg ${FFMPEG_OLD_VERSION} is older than 5.1 (needs libavformat>=59.27.100); "
+        "falling back to building FFmpeg from source.")
+    else()
+      message(STATUS "FFmpeg: no existing system/vcpkg FFmpeg found")
+    endif()
     set(${out_target} "" PARENT_SCOPE)
   endif()
 endfunction()
@@ -349,7 +374,7 @@ if(PULSE_FOUND)
   target_link_libraries(netune PRIVATE PkgConfig::PULSE)
 endif()
 if(SDL2_FOUND)
-  target_link_libraries(netune PRIVATE PkgConfig::SDL2)
+  target_link_libraries(netune PRIVATE ${NETUNE_SDL2_TARGET})
 endif()
 if(DBUS_FOUND AND NOT WIN32)
   target_link_libraries(netune PRIVATE PkgConfig::DBUS)
