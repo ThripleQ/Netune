@@ -34,6 +34,7 @@ KeybindingManager::KeybindingManager() {
     impl_->map["m"]      = Action::ToggleMute;
     impl_->map["?"]      = Action::ShowHelp;
     impl_->map["escape"] = Action::ShowHelp;
+    impl_->map["ctrl+x"] = Action::ShowActions;
     impl_->map["/"]      = Action::OpenSearch;
     impl_->map["q"]      = Action::Quit;
 }
@@ -88,6 +89,7 @@ bool KeybindingManager::load(const std::string &yaml_path) {
         if (name == "toggle_mute")   return Action::ToggleMute;
         if (name == "open_search")   return Action::OpenSearch;
         if (name == "show_help")     return Action::ShowHelp;
+        if (name == "show_actions")  return Action::ShowActions;
         if (name == "quit")          return Action::Quit;
         return Action::None;
     };

@@ -33,6 +33,10 @@ struct NavState {
     int                        search_scope     = 0;
     bool                       search_active    = false;
     std::string                search_query;
+    /* Restore the right-panel list on pop. Set when entering a playlist
+       from a playlist list (recommend/my/favorite): Esc then returns to
+       the playlist list instead of leaving it behind. */
+    bool                       restore_playlist = false;
 };
 
 /* ── Loop mode ─────────────────────────────────────── */
@@ -87,8 +91,9 @@ struct AppState {
     /* play mode */
     LoopMode loop_mode = LoopMode::None;
 
-    /* source mode */
-    MusicMode music_mode = MusicMode::Local;
+    /* source mode — default to Netease so the app opens on the music
+       service homepage (local files remain reachable via the menu) */
+    MusicMode music_mode = MusicMode::Netease;
 
     /* netease menu (shown in left panel when music_mode == Netease) */
     std::vector<NeteaseMenuItem> netease_menu;
@@ -98,9 +103,18 @@ struct AppState {
     int  login_state = 0; /* 0=idle, 1=get_key, 2=wait_scan, 3=done, -1=error */
     std::string login_status; /* status message displayed in overlay */
     std::string login_qr;     /* QR code text for terminal display */
+    long login_qr_deadline = 0; /* unix ts when the QR expires (0 = unknown) */
+    int  login_net_error = 0;   /* non-zero while polling keeps failing */
+    int  qr_gfx_ready = 0;      /* kitty QR image decoded & ready to place */
 
     /* help screen */
     bool show_help = false;
+
+    /* action sheet (Ctrl+X): like song / subscribe playlist */
+    bool action_sheet_open = false;
+    int  action_sheet_selected = 0;
+    /* -1 = status querying, 0 = not liked/subscribed, 1 = liked/subscribed */
+    int  action_sheet_active = -1;
 
     /* spectrum */
     float spectrum[SPECTRUM_BANDS] = {0};
@@ -178,6 +192,9 @@ public:
     void set_netease_menu(const std::vector<NeteaseMenuItem> &items);
     void set_netease_selected(int idx);
     void set_login_state(int state, const std::string &status, const std::string &qr);
+    void set_login_deadline(long unix_ts);
+    void set_login_net_error(int on);
+    void set_qr_gfx_ready(int ready);
 
     /* playback queue */
     /* snapshot current playlist into the playback queue (call when a song
@@ -205,6 +222,8 @@ public:
 
     /* help screen */
     void set_show_help(bool show);
+    void set_action_sheet(bool open, int selected);
+    void set_action_sheet_active(int active);
 
     /* loading */
     void set_loading(bool v);
@@ -224,6 +243,10 @@ public:
 
     /* nav stack push/pop for Esc-back */
     void nav_push(void);
+    /* push with restore_playlist=true: the right-panel list snapshot is
+       restored on pop (used when entering a playlist's songs from a
+       playlist list, so Esc lands back on the playlist list) */
+    void nav_push_restore_playlist(void);
     bool nav_pop(void);  /* returns true if state restored */
     bool nav_peek(NavState &out) const;  /* shallow copy of top; false if empty */
     void clear_nav_stack(void);

@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +15,35 @@ import (
 	"github.com/skip2/go-qrcode"
 	"github.com/telanflow/cookiejar"
 )
+
+/* filterJar blocks locally-injected anti-fraud strategy cookies from
+   being persisted. ApplyRequestStrategy() (called by CheckQR and
+   login-refresh) writes a FIXED fake NMTID into the jar; the FileJar
+   persists every SetCookies call, so the fake value ends up on disk and
+   is sent on every later request — triggering the -462 "network risk"
+   ban. Real server-issued cookies (MUSIC_U etc.) pass through. */
+type filterJar struct {
+	inner http.CookieJar
+}
+
+func (f *filterJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
+	keep := make([]*http.Cookie, 0, len(cookies))
+	for _, c := range cookies {
+		if c == nil {
+			continue
+		}
+		if strings.EqualFold(c.Name, "NMTID") &&
+			c.Value == "some_random_id_from_strategy" {
+			continue
+		}
+		keep = append(keep, c)
+	}
+	f.inner.SetCookies(u, keep)
+}
+
+func (f *filterJar) Cookies(u *url.URL) []*http.Cookie {
+	return f.inner.Cookies(u)
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -25,7 +57,7 @@ func main() {
 	os.MkdirAll(cacheDir, 0755)
 	cookiePath := filepath.Join(cacheDir, "cookies.txt")
 	jar, _ := cookiejar.NewFileJar(cookiePath, nil)
-	util.SetGlobalCookieJar(jar)
+	util.SetGlobalCookieJar(&filterJar{inner: jar})
 
 	cmd := os.Args[1]
 	switch cmd {
@@ -205,10 +237,92 @@ func main() {
 			fmt.Println()
 		}
 	}
-	
+
+	case "liked-check":
+		// liked-check <song_id> — 判断歌曲是否在红心列表 (轻量, 不拉歌曲详情)
+		if len(os.Args) < 3 {
+			die("usage: netease-cli liked-check <song_id>")
+		}
+		acctSvc := service.UserAccountService{}
+		_, acctBody := acctSvc.AccountInfo()
+		var acctData map[string]interface{}
+		if err := json.Unmarshal(acctBody, &acctData); err != nil {
+			die(fmt.Sprintf("parse account failed: %v", err))
+		}
+		uid := int64(0)
+		if acct, ok := acctData["account"].(map[string]interface{}); ok {
+			if id, ok := acct["id"].(float64); ok {
+				uid = int64(id)
+			}
+		}
+		if uid == 0 {
+			die("failed to get uid, need login first")
+		}
+		likeSvc := service.LikeListService{UID: fmt.Sprintf("%d", uid)}
+		_, body := likeSvc.LikeList()
+		var likeData map[string]interface{}
+		json.Unmarshal(body, &likeData)
+		liked := false
+		if ids, ok := likeData["ids"].([]interface{}); ok {
+			for _, id := range ids {
+				if f, ok := id.(float64); ok && fmt.Sprintf("%.0f", f) == os.Args[2] {
+					liked = true
+					break
+				}
+			}
+		}
+		output([]byte(fmt.Sprintf("{\"code\":200,\"liked\":%t}", liked)))
+
+	case "like":
+		// like <song_id> [true|false] — 喜欢/取消喜欢歌曲
+		if len(os.Args) < 3 {
+			die("usage: netease-cli like <song_id> [true|false]")
+		}
+		like := "true"
+		if len(os.Args) > 3 {
+			like = os.Args[3]
+		}
+		data := map[string]string{
+			"trackId": os.Args[2],
+			"like":    like,
+		}
+		opts := &util.Options{
+			Crypto: "weapi",
+			Cookies: []*http.Cookie{
+				{Name: "os", Value: "pc"},
+				{Name: "appver", Value: "2.7.1.198277"},
+			},
+		}
+		code, body, _ := util.CreateRequest("POST", `https://music.163.com/weapi/song/like`, data, opts)
+		output([]byte(fmt.Sprintf("{\"code\":%.0f,\"body\":%s}", code, string(body))))
+
+	case "subscribe":
+		// subscribe <playlist_id> [1|0] — 收藏(1)/取消收藏(0)歌单
+		if len(os.Args) < 3 {
+			die("usage: netease-cli subscribe <playlist_id> [1|0]")
+		}
+		t := "0"
+		if len(os.Args) > 3 {
+			t = os.Args[3]
+		}
+		svc := service.PlaylistSubscribeService{T: t, ID: os.Args[2]}
+		code, body := svc.PlaylistSubscribe()
+		output([]byte(fmt.Sprintf("{\"code\":%.0f,\"body\":%s}", code, string(body))))
+
+	case "toplist":
+		// 排行榜列表（含内置榜单和各歌单）
+		svc := service.ToplistDetailService{}
+		_, body := svc.ToplistDetail()
+		output(body)
+
 	case "recommend-songs":
 		s := service.RecommendSongsService{}
 		_, body := s.RecommendSongs()
+		output(body)
+
+	case "recommend-playlists":
+		s := service.PersonalizedService{Limit: "30"}
+		_, body := s.Personalized()
 		output(body)
 
 	case "qr-render":
@@ -221,9 +335,35 @@ func main() {
 		}
 		fmt.Print(qr.ToSmallString(false))
 
+	case "qr-image":
+		// High-resolution PNG as base64 — for terminals that support the
+		// kitty graphics protocol (crisp scaling, no module loss).
+		if len(os.Args) < 3 {
+			die("usage: netease-cli qr-image <url>")
+		}
+		qr, err := qrcode.New(os.Args[2], qrcode.Medium)
+		if err != nil {
+			die(fmt.Sprintf("qr error: %v", err))
+		}
+		png, err := qr.PNG(480)
+		if err != nil {
+			die(fmt.Sprintf("qr png error: %v", err))
+		}
+		fmt.Println(base64.StdEncoding.EncodeToString(png))
+
 	case "qr-key":
 		s := service.LoginQRService{}
 		code, body, qrUrl, err := s.GetKey()
+		if err != nil || code != 200 || s.UniKey == "" {
+			// 风控(-462 "网络环境存在风险"): 旧 jar 里残留的失效登录碎片
+			// cookie (os/appver/__remember_me/旧 sDeviceId/假 NMTID) 会触发
+			// 风控 — 删除缓存文件、换一个全新的空 jar 重试一次。
+			os.Remove(cookiePath)
+			jar2, _ := cookiejar.NewFileJar(cookiePath, nil)
+			util.SetGlobalCookieJar(jar2)
+			s = service.LoginQRService{}
+			code, body, qrUrl, err = s.GetKey()
+		}
 		if err != nil {
 			die(fmt.Sprintf("get qr key failed: %v", err))
 		}
@@ -452,6 +592,11 @@ func saveNeteaseCookies(cookieStr string) {
 			strings.EqualFold(n, "Expires") || strings.EqualFold(n, "Max-Age") ||
 			strings.EqualFold(n, "Secure") || strings.EqualFold(n, "HttpOnly") ||
 			strings.EqualFold(n, "SameSite") {
+			continue
+		}
+		// ApplyRequestStrategy 注入的固定假 NMTID 不持久化 —
+		// 它会与请求级的随机 NMTID 同时发送（重复 Cookie 头，风控嫌疑）
+		if strings.EqualFold(n, "NMTID") && kv[1] == "some_random_id_from_strategy" {
 			continue
 		}
 		line := fmt.Sprintf("music.163.com\tFALSE\t/\tFALSE\t253402300799\t%s\t%s", n, kv[1])

@@ -41,6 +41,7 @@ static const HelpEntry kMisc[] = {
     {Action::CycleLoop,    "Cycle loop mode"},
     {Action::ToggleLyrics, "Toggle lyrics"},
     {Action::ShowHelp,     "Toggle this help"},
+    {Action::ShowActions,  "Like song / subscribe playlist"},
     {Action::Quit,         "Quit"},
 };
 

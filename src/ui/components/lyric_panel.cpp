@@ -453,5 +453,6 @@ Element render_spectrum_bar(const AppState &s) {
         filler(),
         hbox(std::move(columns)),
         filler(),
-    }) | size(HEIGHT, EQUAL, rows);
+    }) | size(HEIGHT, EQUAL, rows)
+      | bgcolor(Color::RGB(theme.bg.r, theme.bg.g, theme.bg.b));
 }

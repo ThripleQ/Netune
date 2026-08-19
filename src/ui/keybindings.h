@@ -21,6 +21,7 @@ enum class Action {
     CycleLoop,
     ToggleLyrics,
     ShowHelp,
+    ShowActions,
     Quit,
 };
 

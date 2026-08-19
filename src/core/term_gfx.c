@@ -76,11 +76,19 @@ TermGfxMode term_gfx_detect(void) {
 
     const char *kitty_env = getenv("KITTY_WINDOW_ID");
     const char *term = getenv("TERM");
-    /* kitty, wezterm, ghostty and foot (1.14+) all set KITTY_WINDOW_ID;
-       fall back to TERM strings for exotic setups. */
-    if (kitty_env && kitty_env[0]) {
+    /* Detection is TERM-driven. KITTY_WINDOW_ID alone is NOT enough: it
+       leaks into unrelated terminals when exported from a kitty session
+       (stale shell rc / environment.d), and treating a plain terminal
+       (e.g. GNOME Terminal) as kitty leaves image-based UI — like the
+       QR login screen — permanently blank. wezterm/foot/ghostty set
+       TERM to themselves (or xterm-kitty); verify the protocol is
+       actually claimed by TERM first. */
+    if (term && (strstr(term, "kitty") || strstr(term, "foot") ||
+                 strstr(term, "wezterm") || strstr(term, "ghostty"))) {
         g_mode = TERM_GFX_KITTY;
-    } else if (term && (strstr(term, "kitty") || strstr(term, "foot"))) {
+    } else if (kitty_env && kitty_env[0] &&
+               term && strstr(term, "kitty")) {
+        /* corroborated case: env var + TERM both claim kitty */
         g_mode = TERM_GFX_KITTY;
     }
     if (g_mode != TERM_GFX_NONE)

@@ -1,4 +1,4 @@
-#include "app.h"
+﻿#include "app.h"
 /* FTXUI v6.0.0 headers rely on these but don't include them explicitly */
 #include <mutex>
 #include <condition_variable>
@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <cstring>
 #include "compat/utf8.h"   /* UTF-8 aware getenv/fopen/access/mkdir for Windows */
 #include <vector>
@@ -45,6 +46,7 @@ extern "C" {
 #include "core/search_manager.h"
 #include "core/cache_manager.h"
 #include "core/term_gfx.h"
+#include "stb_image.h"
 #include "plugins/music_sources/local/local_source.h"
 #include "plugins/music_sources/netease/netease_source.h"
 #include "plugins/music_sources/netease/netease_api.h"
@@ -60,6 +62,7 @@ extern "C" {
 #include "ui/components/song_list.h"
 #include "ui/components/help_screen.h"
 #include "ui/components/login_screen.h"
+#include "ui/components/action_sheet.h"
 #include "ui/components/lyric_panel.h"
 
 extern "C" {
@@ -186,6 +189,37 @@ static void on_signal(int sig) { (void)sig; g_running = false; }
 static std::string g_login_unikey;
 static int         g_login_poll_tick = 0;
 
+/* High-resolution QR image (kitty graphics path). Fetched in the
+   background when the QR screen opens; the render loop places it over
+   the login layout when ready. */
+static CoverData    g_login_qr = {0};
+static volatile int g_login_qr_ready = 0;
+static uint64_t     g_login_qr_stamp = 0;
+
+/* Minimal base64 decoder (the qr-image command emits base64 PNG) */
+static std::vector<uint8_t> b64_decode(const char *s) {
+    std::vector<uint8_t> out;
+    int val = 0, bits = -8;
+    for (; *s; ++s) {
+        if (*s == '=') break;
+        unsigned char c = (unsigned char)*s;
+        int d;
+        if (c >= 'A' && c <= 'Z')      d = c - 'A';
+        else if (c >= 'a' && c <= 'z') d = c - 'a' + 26;
+        else if (c >= '0' && c <= '9') d = c - '0' + 52;
+        else if (c == '+')             d = 62;
+        else if (c == '/')             d = 63;
+        else continue;
+        val = (val << 6) + d;
+        bits += 6;
+        if (bits >= 0) {
+            out.push_back((uint8_t)((val >> bits) & 0xFF));
+            bits -= 8;
+        }
+    }
+    return out;
+}
+
 /* Generate QR code text using netease-cli's built-in qr-render */
 static std::string gen_qr(const char *url) {
     char *qr = netease_qr_render(url);
@@ -204,9 +238,48 @@ static void start_login(void) {
         && unikey[0]) {
         g_login_unikey = unikey;
         g_login_poll_tick = 0;
+        LOG_INFO("LOGIN KEY: url_len=%zu url='%.120s'", strlen(qr_url), qr_url);
         std::string qr = gen_qr(qr_url);
+        int qr_nl = 0;
+        for (size_t i = 0; i < qr.size(); i++)
+            if (qr[i] == '\n') qr_nl++;
+        LOG_INFO("LOGIN QR: text_len=%zu lines=%d head='%.40s' mid='%.40s' tail='%.40s'",
+                 qr.size(), qr_nl, qr.c_str(),
+                 qr.size() > 200 ? qr.c_str() + 200 : "",
+                 qr.size() > 80 ? qr.c_str() + qr.size() - 80 : "");
         StateStore::instance().set_login_state(2,
             "Scan with Netease Music App", qr);
+        /* unikey is valid for ~2 minutes; count down from there */
+        StateStore::instance().set_login_deadline((long)time(NULL) + 120);
+        StateStore::instance().set_login_net_error(0);
+
+        /* Fetch the high-resolution QR image in the background for
+           terminals with kitty graphics support. */
+        g_login_qr_ready = 0;
+        StateStore::instance().set_qr_gfx_ready(0);
+        if (g_login_qr.pixels) {
+            free(g_login_qr.pixels);
+            g_login_qr.pixels = NULL;
+        }
+        std::string qr_url_copy = qr_url;
+        std::thread([](std::string url) {
+            char *b64 = netease_qr_image(url.c_str());
+            if (!b64) return;
+            std::vector<uint8_t> png = b64_decode(b64);
+            free(b64);
+            if (png.empty()) return;
+            int w = 0, h = 0, ch = 0;
+            uint8_t *px = stbi_load_from_memory(png.data(), (int)png.size(),
+                                                &w, &h, &ch, 3);
+            if (!px) return;
+            g_login_qr.pixels = px;
+            g_login_qr.width = w;
+            g_login_qr.height = h;
+            g_login_qr.channels = 3;
+            g_login_qr.stamp = ++g_login_qr_stamp;
+            g_login_qr_ready = 1;
+            StateStore::instance().set_qr_gfx_ready(1);
+        }, qr_url_copy).detach();
     } else {
         StateStore::instance().set_login_state(-1,
             "Failed to get QR code", "");
@@ -223,6 +296,7 @@ static void update_login_menu(void) {
     std::string label = "";
     label += name;
     menu[0].name = label;
+    menu[0].type = 300;  /* account page entry */
     StateStore::instance().set_netease_menu(menu);
 }
 
@@ -394,8 +468,88 @@ static void activate_netease_menu_item(int idx) {
         StateStore::instance().set_playlist({}, 0);
         StateStore::instance().set_top_right_query("");
         StateStore::instance().set_top_search_active(true, 1);
-    } else if (!pl_id.empty()) {
+    } else if (type == 300) {
+        /* account page: submenu of the logged-in user.
+           nav_push so Esc (and the snapshot) can restore the main menu */
         StateStore::instance().nav_push();
+        StateStore::instance().set_netease_menu({
+            {"<< \u8FD4\u56DE", -1, ""},
+            {"\u6211\u7684\u6B4C\u5355", 301, ""},
+            {"\u6211\u559C\u6B22\u7684\u97F3\u4E50", 302, ""},
+            {"\u5237\u65B0\u767B\u5F55", 303, ""},
+            {"\u9000\u51FA\u767B\u5F55", 304, ""},
+        });
+        StateStore::instance().set_netease_selected(0);
+    } else if (type == 301) {
+        /* my playlists */
+        StateStore::instance().nav_push();
+        StateStore::instance().set_loading(true);
+        std::thread([]() {
+            SongInfo *pl = NULL; int pc = 0;
+            int ret = netease_playlists(false, &pl, &pc);
+            LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
+            if (ret == 0 && pc > 0) {
+                ld->songs = pl; ld->count = pc;
+            } else {
+                ld->songs = NULL; ld->count = 0;
+                free(pl);
+            }
+            if (event_bus_publish(EV_PLAYLIST_LIST_LOADED, ld, sizeof(*ld)) != 0) {
+                if (ld->songs) {
+                    for (int i = 0; i < ld->count; i++)
+                        song_info_free(&ld->songs[i]);
+                    free(ld->songs);
+                }
+                free(ld);
+            }
+        }).detach();
+    } else if (type == 302 || type == 4) {
+        /* liked songs (account page 302 / main menu 4) */
+        StateStore::instance().nav_push();
+        StateStore::instance().set_loading(true);
+        std::thread([]() {
+            SongInfo *ms = NULL; int mc = 0;
+            int ret = netease_liked_songs(&ms, &mc);
+            LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
+            if (ret == 0 && mc > 0) {
+                ld->songs = ms; ld->count = mc;
+            } else {
+                ld->songs = NULL; ld->count = 0;
+                free(ms);
+            }
+            if (event_bus_publish(EV_PLAYLIST_LOADED, ld, sizeof(*ld)) != 0) {
+                if (ld->songs) {
+                    for (int i = 0; i < ld->count; i++)
+                        song_info_free(&ld->songs[i]);
+                    free(ld->songs);
+                }
+                free(ld);
+            }
+        }).detach();
+    } else if (type == 303) {
+        /* refresh login */
+        std::thread([]() {
+            int ok = netease_login_refresh();
+            if (ok == 0) {
+                const char *name = netease_account_name();
+                StateStore::instance().set_login_state(3,
+                    name ? name : "Logged in", "");
+            } else {
+                StateStore::instance().set_login_state(-1,
+                    "Refresh login failed", "");
+            }
+        }).detach();
+    } else if (type == 304) {
+        /* logout: drop cookies, rebuild the default (logged-out) menu
+           without leaving Netease mode (no flicker to Local) */
+        netease_logout();
+        StateStore::instance().clear_nav_stack();
+        StateStore::instance().set_netease_menu({});
+        StateStore::instance().set_music_mode(MusicMode::Netease);
+    } else if (!pl_id.empty()) {
+        /* entering a playlist's songs from a playlist list — push with
+           playlist restore so Esc lands back on the playlist list */
+        StateStore::instance().nav_push_restore_playlist();
         StateStore::instance().set_loading(true);
         std::string _pl_id = pl_id;
         std::thread([_pl_id]() {
@@ -419,29 +573,36 @@ static void activate_netease_menu_item(int idx) {
             }
         }).detach();
 
-    } else if (type >= 0 && type <= 1) {
-        StateStore::instance().nav_push();
-        StateStore::instance().set_loading(true);
-        int _type = type;
-        std::thread([_type]() {
-            SongInfo *ms = NULL; int mc = 0;
-            int ret = netease_menu_songs(_type, 200, &ms, &mc);
-            LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
-            if (ret == 0 && mc > 0) {
-                ld->songs = ms; ld->count = mc;
-            } else {
-                ld->songs = NULL; ld->count = 0;
-                free(ms);
-            }
-            if (event_bus_publish(EV_MENU_LOADED, ld, sizeof(*ld)) != 0) {
-                if (ld->songs) {
-                    for (int i = 0; i < ld->count; i++)
-                        song_info_free(&ld->songs[i]);
-                    free(ld->songs);
+    } else if (type == 0 || type == 1 || type == 5) {
+        /* 每日推荐 (0, songs) / 推荐歌单 (1, playlists) / 排行榜 (5, playlists) */
+        if (!netease_is_logged_in() && type == 0) {
+            start_login();  /* daily recommends need a session */
+        } else {
+            StateStore::instance().nav_push();
+            StateStore::instance().set_loading(true);
+            std::thread([type]() {
+                SongInfo *songs = NULL; int sc = 0;
+                int ret = (type == 5) ? netease_toplist(&songs, &sc)
+                                      : netease_menu_songs(type, 30, &songs, &sc);
+                LOG_INFO("MENU SONGS: type=%d ret=%d count=%d", type, ret, sc);
+                LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
+                if (ret == 0 && sc > 0) {
+                    ld->songs = songs; ld->count = sc;
+                } else {
+                    ld->songs = NULL; ld->count = 0;
+                    free(songs);
                 }
-                free(ld);
-            }
-        }).detach();
+                EventType ev = (type == 1 || type == 5) ? EV_PLAYLIST_LIST_LOADED : EV_PLAYLIST_LOADED;
+                if (event_bus_publish(ev, ld, sizeof(*ld)) != 0) {
+                    if (ld->songs) {
+                        for (int i = 0; i < ld->count; i++)
+                            song_info_free(&ld->songs[i]);
+                        free(ld->songs);
+                    }
+                    free(ld);
+                }
+            }).detach();
+        }
     } else if (type == 2 || type == 3) {
         if (!netease_is_logged_in()) {
             start_login();
@@ -855,22 +1016,26 @@ static void ev_playlist_list_loaded(const BusEvent *ev, void *data) {
     StateStore::instance().set_loading(false);
     if (!ev->data) return;
     auto *ld = (LoadedSongs*)ev->data;
+    LOG_INFO("PLAYLIST LIST LOADED: count=%d", ld->count);
     if (ld->count <= 0 || !ld->songs) {
         /* ev->data freed by event_bus_poll, do NOT free(ld) */
         return;
     }
-    std::vector<NeteaseMenuItem> items;
-    items.push_back({"<< \u8FD4\u56DE", -1, ""});
+    /* Playlist list goes to the RIGHT panel (like a song list), each
+       item tagged as a playlist via aux_label so Enter opens the
+       playlist instead of playing it. */
+    std::vector<SongInfo> vec;
+    vec.reserve(ld->count);
     for (int i = 0; i < ld->count; i++) {
-        char id_buf[32];
-        snprintf(id_buf, sizeof(id_buf), "%s", ld->songs[i].id);
-        items.push_back({ld->songs[i].title, 1000, id_buf});
+        SongInfo copy = {};
+        song_info_copy(&copy, &ld->songs[i]);
+        vec.push_back(copy);
         song_info_free(&ld->songs[i]);
     }
     free(ld->songs);
     /* Note: ev->data is freed by event_bus_poll, do NOT free(ld) */
-    StateStore::instance().set_netease_menu(items);
-    StateStore::instance().set_netease_selected(0);
+    StateStore::instance().set_playlist(vec, 0);
+    StateStore::instance().set_active_panel(1);
 }
 
 static void ev_volume_changed(const BusEvent *ev, void *data) {
@@ -1328,6 +1493,10 @@ int run_app(int argc, char **argv) {
     local_source_register();
     netease_source_register();
 
+    /* Open on the Netease homepage by default: rebuild its default menu
+       now that netease_init has resolved the account name. */
+    StateStore::instance().set_music_mode(MusicMode::Netease);
+
     /* auto-scan */
     {
         std::vector<std::string> scan_dirs;
@@ -1402,12 +1571,14 @@ int run_app(int argc, char **argv) {
             /* Animation frame interval. Windows keeps 33ms (~30fps):
                conhost renders each frame slowly, so 60fps only burned CPU
                without visible smoothness. Linux/macOS keep the original
-               16ms (60fps) — terminal rendering there is fast enough. */
+               16ms (60fps) — terminal rendering there is fast enough.
+               The action sheet (Ctrl+X) also gets fast frames so its
+               status query / state flips feel responsive. */
 #ifdef _WIN32
-            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading)
+            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open)
                       ? 33 : 200;
 #else
-            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading)
+            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open)
                       ? 16 : 200;
 #endif
             std::this_thread::sleep_for(std::chrono::milliseconds(ms));
@@ -1455,23 +1626,53 @@ int run_app(int argc, char **argv) {
         state.set_screen_height(screen.dimy());
         state.set_top_row_width(screen.dimx());
 
-        /* Login polling: every ~2s while waiting for QR scan;
-           auto-close 2s after successful login */
+        /* Login polling: wall-clock based (the render loop runs at
+           200ms/frame when idle — tick counting would slow polling to
+           tens of seconds). Poll every 1s, auto-close the success
+           overlay 10s after login (or sooner when data loading ends). */
+        static auto last_poll = std::chrono::steady_clock::now();
+        static auto login_done_at = std::chrono::steady_clock::now();
         if (s.login_state == 3) {
-            static int close_tick = 0;
-            if (++close_tick >= 125) {
-                close_tick = 0;
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - login_done_at).count() >= 10000)
                 StateStore::instance().set_login_state(0, "", "");
-            }
         }
-        if (s.login_state == 2 && ++g_login_poll_tick % 125 == 0) {
+        if (s.login_state == 2 &&
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - last_poll).count() >=
+                /* poll every 2s before the scan; once scanned (802)
+                   speed up to 1s for a snappy confirm */
+                (s.login_status.find("Scanned") != std::string::npos ? 1000 : 2000)) {
+            last_poll = std::chrono::steady_clock::now();
+            /* A window too small to render the QR also pauses polling:
+               the "network error" banner is driven by poll failures and
+               must not be triggered by a small terminal. */
+            int qneed_w = 0, qneed_h = 0;
+            bool qr_fits =
+                qr_min_dims(s.login_qr, &qneed_w, &qneed_h) &&
+                s.top_row_width >= qneed_w && s.screen_height >= qneed_h;
+            if (qr_fits) {
             int rc = netease_qr_poll(g_login_unikey.c_str());
             LOG_INFO("LOGIN POLL: rc=%d", rc);
             if (rc == 0) {
                 /* 803: authorized, login successful */
+                login_done_at = std::chrono::steady_clock::now();
                 StateStore::instance().set_login_state(3,
                     netease_account_name() ? netease_account_name() : "Logged in", "");
                 update_login_menu();
+                /* Data-loading phase: warm up the user's playlists in
+                   the background; the success overlay closes when this
+                   finishes (or after the 10s timeout above). */
+                std::thread([]() {
+                    SongInfo *pl = NULL; int pc = 0;
+                    netease_playlists(false, &pl, &pc);
+                    if (pl) {
+                        for (int i = 0; i < pc; i++)
+                            song_info_free(&pl[i]);
+                        free(pl);
+                    }
+                    StateStore::instance().set_login_state(0, "", "");
+                }).detach();
             } else if (rc == 2) {
                 /* 800: expired — restart */
                 g_login_unikey.clear();
@@ -1480,7 +1681,12 @@ int run_app(int argc, char **argv) {
                 /* 802: scanned, waiting for phone confirm */
                 StateStore::instance().set_login_state(2,
                     "Scanned. Confirm in Netease Music App...", s.login_qr);
+                StateStore::instance().set_login_net_error(0);
+            } else {
+                /* -1: poll failed (network/cli) — show it, keep retrying */
+                StateStore::instance().set_login_net_error(1);
             }
+            }  /* if (qr_fits) */
         }
 
         Element main;
@@ -1506,11 +1712,48 @@ int run_app(int argc, char **argv) {
             /* full-page help screen, reflects user keybindings */
             return render_help_screen(s, g_keybindings);
         }
+        if (s.action_sheet_open) {
+            /* Ctrl+X action sheet overlays the normal UI */
+            return dbox({main, render_action_sheet(s)});
+        }
 
         return main;
     });
 
     component |= CatchEvent([&](ftxui::Event event) -> bool {
+        /* ── Action sheet (Ctrl+X) modal handling ── */
+        {
+            const AppState &as = state.state();
+            if (as.action_sheet_open) {
+                std::string k;
+                if (event.is_character()) k = event.character();
+                else k = event_to_key_name(event);
+                if (k == "enter" || k == "\r") {
+                    const auto &item = as.playlist[as.selected_index];
+                    bool is_pl = item.aux_label &&
+                                 std::string(item.aux_label) == "歌单";
+                    std::string id = item.id ? item.id : "";
+                    bool active = as.action_sheet_active == 1;
+                    if (id.empty() || as.action_sheet_active < 0) return true;
+                    std::thread([id, is_pl, active]() {
+                        int rv = is_pl
+                            ? netease_subscribe_playlist(id.c_str(), !active)
+                            : netease_like_song(id.c_str(), !active);
+                        LOG_INFO("ACTION SHEET: %s %s toggle->%d = %d",
+                                 is_pl ? "subscribe" : "like", id.c_str(), !active, rv);
+                        if (rv == 0)
+                            StateStore::instance().set_action_sheet_active(active ? 0 : 1);
+                    }).detach();
+                    return true;
+                }
+                if (k == "escape") {
+                    state.set_action_sheet(false, 0);
+                    return true;
+                }
+                return true;  /* swallow all keys while open */
+            }
+        }
+
         /* ── Non-seek key → discard pending seek ── */
         if (g_seek_accum != 0 && event != ftxui::Event::ArrowLeft && event != ftxui::Event::ArrowRight) {
             g_seek_accum = 0;
@@ -1982,9 +2225,38 @@ int run_app(int argc, char **argv) {
                 }
                 return true;
             }
-            /* Right panel: play selected song */
-            if (cur.active_panel == 1)
-                play_from_playlist(cur.selected_index);
+            /* Right panel: play selected song — unless it's a playlist
+               item (playlist lists render in the right panel); those
+               open the playlist's songs instead. */
+            if (cur.active_panel == 1) {
+                const auto &song = cur.playlist[cur.selected_index];
+                if (song.aux_label && strcmp(song.aux_label, "歌单") == 0) {
+                    StateStore::instance().nav_push_restore_playlist();
+                    StateStore::instance().set_loading(true);
+                    std::string _pl_id = song.id ? song.id : "";
+                    std::thread([_pl_id]() {
+                        SongInfo *songs = NULL; int sc = 0;
+                        int ret = netease_playlist_songs(_pl_id.c_str(), &songs, &sc);
+                        LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
+                        if (ret == 0 && sc > 0) {
+                            ld->songs = songs; ld->count = sc;
+                        } else {
+                            ld->songs = NULL; ld->count = 0;
+                            free(songs);
+                        }
+                        if (event_bus_publish(EV_PLAYLIST_LOADED, ld, sizeof(*ld)) != 0) {
+                            if (ld->songs) {
+                                for (int i = 0; i < ld->count; i++)
+                                    song_info_free(&ld->songs[i]);
+                                free(ld->songs);
+                            }
+                            free(ld);
+                        }
+                    }).detach();
+                } else {
+                    play_from_playlist(cur.selected_index);
+                }
+            }
             return true;
 
         case Action::NextTrack: {
@@ -2063,6 +2335,40 @@ int run_app(int argc, char **argv) {
 
         case Action::ShowHelp:
             StateStore::instance().set_show_help(!cur.show_help);
+            return true;
+
+        case Action::ShowActions:
+            /* open the action sheet for the selected right-panel item */
+            if (!cur.playlist.empty()) {
+                StateStore::instance().set_action_sheet(true, 0);
+                const auto &item = cur.playlist[cur.selected_index];
+                bool is_pl = item.aux_label &&
+                             std::string(item.aux_label) == "歌单";
+                std::string id = item.id ? item.id : "";
+                if (!id.empty()) {
+                    std::thread([id, is_pl]() {
+                        int active = -1;
+                        if (is_pl) {
+                            SongInfo *pls = NULL; int pc = 0;
+                            if (netease_playlists(true, &pls, &pc) == 0) {
+                                for (int i = 0; i < pc; i++) {
+                                    if (pls[i].id && strcmp(pls[i].id, id.c_str()) == 0) {
+                                        active = 1; break;
+                                    }
+                                }
+                                if (active < 0) active = 0;
+                                for (int i = 0; i < pc; i++) song_info_free(&pls[i]);
+                                free(pls);
+                            }
+                        } else {
+                            bool liked = false;
+                            if (netease_liked_check(id.c_str(), &liked) == 0)
+                                active = liked ? 1 : 0;
+                        }
+                        StateStore::instance().set_action_sheet_active(active);
+                    }).detach();
+                }
+            }
             return true;
 
         case Action::CycleLoop: {
@@ -2165,6 +2471,50 @@ int run_app(int argc, char **argv) {
                     last_dimx = last_dimy = -1;
                     last_cw = last_dw = last_dh = -1;
                     last_stamp = 0;
+                }
+
+                /* QR login image: placed over the login layout when the
+                   QR screen is up (mutually exclusive with the lyric
+                   cover above). Rows are reserved by login_screen as a
+                   placeholder starting at row 3; cols = 2x rows keeps
+                   the square aspect (half-block cells are 2:1). */
+                static bool qr_gfx_placed = false;
+                static auto qr_gfx_last = std::chrono::steady_clock::time_point{};
+                static int qr_ldx = -1, qr_ldy = -1, qr_lrows = -1;
+                static uint64_t qr_lstamp = 0;
+                if (g_login_qr_ready && st.login_state == 2) {
+                    int rows = st.screen_height - 8;
+                    if (rows < 4) rows = 4;
+                    if (rows > 12) rows = 12;
+                    int cols = rows * 2;
+                    int row0 = 3;
+                    int col0 = 1 + (screen.dimx() - cols) / 2;
+                    if (col0 < 1) col0 = 1;
+                    auto now = std::chrono::steady_clock::now();
+                    bool changed = !qr_gfx_placed ||
+                                   screen.dimx() != qr_ldx ||
+                                   screen.dimy() != qr_ldy ||
+                                   rows != qr_lrows ||
+                                   g_login_qr.stamp != qr_lstamp;
+                    bool due = (now - qr_gfx_last) >=
+                               std::chrono::milliseconds(500);
+                    if (changed || due) {
+                        qr_gfx_last = now;
+                        qr_ldx = screen.dimx();
+                        qr_ldy = screen.dimy();
+                        qr_lrows = rows;
+                        qr_lstamp = g_login_qr.stamp;
+                        term_gfx_upload(&g_login_qr);
+                        printf("\x1b[%d;%dH", row0, col0);
+                        term_gfx_place(cols, rows);
+                    }
+                    qr_gfx_placed = true;
+                } else if (qr_gfx_placed) {
+                    term_gfx_clear();
+                    qr_gfx_placed = false;
+                    qr_ldx = qr_ldy = -1;
+                    qr_lrows = -1;
+                    qr_lstamp = 0;
                 }
             }
             fflush(stdout);
