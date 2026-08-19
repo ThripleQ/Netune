@@ -215,6 +215,7 @@ function(netune_build_ffmpeg_from_source out_target)
   )
 
   set(CMAKE_BUILD_RPATH ${CMAKE_BUILD_RPATH} ${FFMPEG_INSTALL_DIR}/lib PARENT_SCOPE)
+  set(NETUNE_FFMPEG_INSTALL_RPATH "${FFMPEG_INSTALL_DIR}/lib" PARENT_SCOPE)
   set(${out_target} PkgConfig::FFMPEG_NETUNE_BUILT PARENT_SCOPE)
 endfunction()
 
@@ -508,7 +509,12 @@ add_dependencies(netune netease-cli-build)
 # Install netune and netease-cli side by side so cli_path() finds the
 # helper next to the main executable. OPTIONAL: if the helper failed to
 # build/download, installation still succeeds.
-install(TARGETS netune RUNTIME DESTINATION bin)
+# When FFmpeg was built from source (build/ffmpeg-install), the installed netune
+# still needs to find those .so files at runtime.
+if(NETUNE_FFMPEG_INSTALL_RPATH)
+  set_target_properties(netune PROPERTIES INSTALL_RPATH "${NETUNE_FFMPEG_INSTALL_RPATH}")
+endif()
+install(TARGETS netune RUNTIME DESTINATION bin CONFIGURATIONS Release)
 # install(PROGRAMS) rejects generator expressions, so wrap in install(CODE).
 install(CODE "install(PROGRAMS \"${NETEASE_CLI_OUT}\" DESTINATION bin OPTIONAL)")
 
