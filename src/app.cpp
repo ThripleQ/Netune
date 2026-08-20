@@ -407,7 +407,7 @@ static bool netease_search_apply_cache(const std::string &q) {
     auto it = g_ns_cache.find(q);
     if (it == g_ns_cache.end()) return false;
     if (!g_top_search_pushed) {
-        StateStore::instance().nav_push();
+        StateStore::instance().nav_push_restore_playlist();
         g_top_search_pushed = true;
     }
     StateStore::instance().set_playlist(it->second, 0);
@@ -1795,7 +1795,19 @@ int run_app(int argc, char **argv) {
             int side = cur.top_search_side;
 
             if (ev_key == "escape") {
-                /* close search and restore full views */
+                /* Esc first clears the current box's query (restoring the
+                   pre-search view); a second Esc closes search entirely */
+                const std::string &q = side ? cur.top_right_query
+                                            : cur.top_left_query;
+                if (!q.empty()) {
+                    if (side) {
+                        StateStore::instance().set_top_right_query("");
+                        restore_search_view("");
+                    } else {
+                        StateStore::instance().set_top_left_query("");
+                    }
+                    return true;
+                }
                 close_top_search();
                 return true;
             }
@@ -1874,6 +1886,13 @@ int run_app(int argc, char **argv) {
             }
             if (ev_key == "enter" || ev_key == "\r") {
                 if (side == 0) {
+                    /* committing the left filter must first unwind any
+                       pending right-box search push so the nav stack
+                       stays balanced */
+                    if (g_top_search_pushed) {
+                        StateStore::instance().nav_pop();
+                        g_top_search_pushed = false;
+                    }
                     StateStore::instance().set_top_search_active(false, 0);
                     if (cur.music_mode == MusicMode::Local) {
                         /* activate the matching local group (netease entry is
