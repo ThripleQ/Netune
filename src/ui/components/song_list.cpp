@@ -249,11 +249,11 @@ Element render_song_list(const AppState &s) {
             std::string title = (song.title && song.title[0]) ? song.title : "(unknown)";
             Element marker;
             if (song.is_playlist)
-                marker = theme_playlist(text("\u25A3")) | size(WIDTH, EQUAL, 2);
+                marker = theme_playlist(text("\u25A3")) | size(WIDTH, EQUAL, 1);
             else if (song.fee == 1)
-                marker = theme_vip(text("\u25C6")) | size(WIDTH, EQUAL, 2);
+                marker = theme_vip(text("\u25C6")) | size(WIDTH, EQUAL, 1);
             else
-                marker = text("  ");
+                marker = text(" ");
 
             Element line;
             if (song.is_playlist) {
