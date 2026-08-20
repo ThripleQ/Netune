@@ -167,6 +167,8 @@ static std::string event_to_key_name(const ftxui::Event &event) {
     /* ── Plain printable character (single byte ASCII) ── */
     if (event.is_character()) {
         const std::string &ch = event.character();
+        if (ch.size() == 1 && (unsigned char)ch[0] == 0x1f)
+            return "ctrl+/";  /* Ctrl+/ = ASCII US */
         if (ch.size() == 1 && (unsigned char)ch[0] >= 32 && (unsigned char)ch[0] < 127)
             return (ch == " ") ? "space" : ch;
         /* multi-byte UTF-8 (IME text): not a key */
@@ -1756,8 +1758,17 @@ int run_app(int argc, char **argv) {
                           (cur.search_active && cur.music_mode != MusicMode::Netease);
         std::string ev_key;
         if (input_mode && event.is_character()) {
-            ev_key = event.character();
-            if (ev_key == " ") ev_key = "space";
+            const std::string &ch = event.character();
+            /* control characters (Ctrl+/ etc.) are keybinding keys, not
+               query text — route them through the key-name mapping */
+            bool control = ch.size() == 1 &&
+                           ((unsigned char)ch[0] < 32 || (unsigned char)ch[0] == 127);
+            if (control) {
+                ev_key = event_to_key_name(event);
+            } else {
+                ev_key = ch;
+                if (ev_key == " ") ev_key = "space";
+            }
         } else {
             ev_key = event_to_key_name(event);
         }
@@ -1784,6 +1795,13 @@ int run_app(int argc, char **argv) {
                 /* Exit the search box and put focus back on the list
                    below it; the query is kept so it can be edited again
                    and the current list stays intact. */
+                StateStore::instance().set_top_search_active(false, 0);
+                if (side == 1)
+                    StateStore::instance().set_active_panel(1);
+                return true;
+            }
+            if (ev_key == "ctrl+/") {
+                /* same as Esc: exit the box back to the list */
                 StateStore::instance().set_top_search_active(false, 0);
                 if (side == 1)
                     StateStore::instance().set_active_panel(1);

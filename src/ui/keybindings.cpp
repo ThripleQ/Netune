@@ -35,7 +35,7 @@ KeybindingManager::KeybindingManager() {
     impl_->map["?"]      = Action::ShowHelp;
     impl_->map["escape"] = Action::ShowHelp;
     impl_->map["ctrl+x"] = Action::ShowActions;
-    impl_->map["/"]      = Action::OpenSearch;
+    impl_->map["ctrl+/"] = Action::OpenSearch;
     impl_->map["q"]      = Action::Quit;
 }
 
