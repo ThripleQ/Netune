@@ -251,7 +251,7 @@ Element render_song_list(const AppState &s) {
             if (song.artist && song.artist[0])
                 content += std::string(" \u2014 ") + song.artist;
 
-            bool scroll = (s.active_panel == 1 && sel);
+            bool scroll = (s.active_panel == 1 && sel && !s.top_search_active);
             std::string row = build_info_row(content, avail_w, scroll);
 
             if (sel) {
