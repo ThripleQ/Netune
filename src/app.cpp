@@ -434,18 +434,17 @@ static bool netease_search_apply_cache(const std::string &q) {
     return true;
 }
 
-/* Close the top search row and restore everything: clear both boxes'
-   queries and pop the nav snapshot taken for search results so the
-   pre-search view (list + menu) comes back. */
+/* Close the top search row and restore the pre-search view. The box
+   QUERY is kept so reopening search shows the last typed term (search
+   has memory); only the nav snapshot (list + menu) is restored. */
 static void close_top_search(void) {
     StateStore &st = StateStore::instance();
-    st.set_top_left_query("");
-    st.set_top_right_query("");
     if (g_top_search_pushed) {
         st.nav_pop();
         g_top_search_pushed = false;
     }
     st.set_top_search_active(false, 0);
+    g_search_awaiting = false;
 }
 
 /* After a right-box query edit: apply cached results instantly when the
@@ -2009,7 +2008,8 @@ int run_app(int argc, char **argv) {
                     StateStore::instance().set_top_left_query(q);
                 } else {
                     StateStore::instance().set_top_right_query(q);
-                    restore_search_view(q);
+                    if (cur.music_mode != MusicMode::Netease)
+                        restore_search_view(q);
                 }
                 return true;
             }
@@ -2030,7 +2030,11 @@ int run_app(int argc, char **argv) {
                     StateStore::instance().set_top_left_query(q);
                 } else {
                     StateStore::instance().set_top_right_query(q);
-                    restore_search_view(q);
+                    /* netease mode keeps the list untouched while typing —
+                       Enter submits a fresh API search (no "search within
+                       results" fallback); only non-netease filters react */
+                    if (cur.music_mode != MusicMode::Netease)
+                        restore_search_view(q);
                 }
             }
             return true; /* consume all keys while top search active */
