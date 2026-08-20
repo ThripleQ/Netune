@@ -1963,9 +1963,8 @@ int run_app(int argc, char **argv) {
                     /* right box:
                        - normal (non-netease) mode: Enter does nothing —
                          the box stays selected & editable
-                       - netease mode: Enter submits the search; the box
-                         and the list are ONE selection — results simply
-                         replace the list, no focus auto-switch */
+                       - netease mode: Enter submits the API search and
+                         leaves the box so the results are interactive */
                     if (cur.music_mode == MusicMode::Netease &&
                         !cur.top_right_query.empty()) {
                         if (!netease_search_apply_cache(cur.top_right_query)) {
@@ -1973,6 +1972,8 @@ int run_app(int argc, char **argv) {
                                               !g_top_search_pushed);
                             g_top_search_pushed = true;
                         }
+                        StateStore::instance().set_top_search_active(false, 0);
+                        StateStore::instance().set_active_panel(1);
                     }
                 }
                 return true;
