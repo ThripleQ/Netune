@@ -242,10 +242,10 @@ Element render_song_list(const AppState &s) {
             shown_rows++;
             bool sel = ((int)i == s.selected_index);
 
-            /* Whole-row background markers: VIP / playlist rows tint the
-               row background (marker color darkened) — no glyphs, so no
-               width/alignment issues. The selected row uses the normal
-               selection background instead. */
+            /* Character-position background markers: only the TEXT gets
+               the marker background (prefix spaces stay plain), so no
+               alignment impact. Selected rows use the FULL marker color
+               (accentuated) instead of the generic selection color. */
             std::string title = (song.title && song.title[0]) ? song.title : "(unknown)";
             Element line = text(title);
             if (song.artist && song.artist[0])
@@ -259,27 +259,41 @@ Element render_song_list(const AppState &s) {
                 line = text(build_info_row(content, avail_w, true));
             }
 
-            if (sel) {
-                if (s.active_panel == 1 && !s.top_search_active) {
-                    /* selection background over the whole row */
-                    auto &th = ThemeManager::instance().current();
+            bool active_sel = (sel && s.active_panel == 1 && !s.top_search_active);
+            if (active_sel) {
+                /* selected: accentuated marker background, or the
+                   generic selection color for plain rows */
+                auto &th = ThemeManager::instance().current();
+                if (song.is_playlist) {
+                    line = theme_playlist_sel_bg(line);
+                    /* dark text on the full marker color */
+                    line = line | color(Color::RGB(th.bg.r, th.bg.g, th.bg.b));
+                } else if (song.fee == 1) {
+                    line = theme_vip_sel_bg(line);
+                    line = line | color(Color::RGB(th.bg.r, th.bg.g, th.bg.b));
+                } else {
                     Color sel_bg = th.accent_bg.has_color
                         ? Color::RGB(th.accent_bg.r, th.accent_bg.g, th.accent_bg.b)
                         : (th.accent.has_color
                            ? Color::RGB(th.accent.r, th.accent.g, th.accent.b)
                            : Color::RGB(80, 80, 80));
-                    els.push_back(hbox({theme_selection(text("> ")), line})
-                                  | bgcolor(sel_bg) | focus);
-                } else {
-                    els.push_back(theme_fg(hbox({text("  "), line}) | bold | focus));
+                    line = line | bgcolor(sel_bg);
                 }
+                /* marker rows: dark text on the full marker color;
+                   plain rows: fg text on the selection background */
+                if (song.is_playlist || song.fee == 1) {
+                    els.push_back(hbox({text("> ") | bold, line}) | focus);
+                } else {
+                    els.push_back(theme_fg(hbox({text("> "), line}) | bold | focus));
+                }
+            } else if (sel) {
+                els.push_back(theme_fg(hbox({text("  "), line}) | bold | focus));
             } else {
-                Element row = hbox({text("  "), line});
                 if (song.is_playlist)
-                    row = theme_playlist_bg(row);
+                    line = theme_playlist_bg(line);
                 else if (song.fee == 1)
-                    row = theme_vip_bg(row);
-                els.push_back(theme_fg(row));
+                    line = theme_vip_bg(line);
+                els.push_back(theme_fg(hbox({text("  "), line})));
             }
         }
         if (shown_rows == 0 && !filter_q.empty())

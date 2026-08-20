@@ -30,3 +30,7 @@ Element theme_playlist(Element e);
 /* Whole-row background markers (darkened marker color) */
 Element theme_vip_bg(Element e);
 Element theme_playlist_bg(Element e);
+
+/* Selected-row marker backgrounds (full marker color) */
+Element theme_vip_sel_bg(Element e);
+Element theme_playlist_sel_bg(Element e);

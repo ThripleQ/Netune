@@ -115,6 +115,20 @@ Element theme_playlist_bg(Element e) {
     return e | bgcolor(Color::RGB(c.r, c.g, c.b));
 }
 
+/* Selected-row variants: the FULL marker color (accentuated) so the
+   selection reads as an intensified marker. */
+Element theme_vip_sel_bg(Element e) {
+    auto &t = ThemeManager::instance().current();
+    ThemeColor c = t.vip.has_color ? t.vip : t.warning;
+    return e | bgcolor(Color::RGB(c.r, c.g, c.b));
+}
+
+Element theme_playlist_sel_bg(Element e) {
+    auto &t = ThemeManager::instance().current();
+    ThemeColor c = t.playlist.has_color ? t.playlist : t.accent;
+    return e | bgcolor(Color::RGB(c.r, c.g, c.b));
+}
+
 /* ── Extended semantic colors ──────────────────────── */
 
 /* Selection: sets both bgcolor (accent_bg) and color (fg) */
