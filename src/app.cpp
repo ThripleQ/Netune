@@ -167,8 +167,13 @@ static std::string event_to_key_name(const ftxui::Event &event) {
     /* ── Plain printable character (single byte ASCII) ── */
     if (event.is_character()) {
         const std::string &ch = event.character();
-        if (ch.size() == 1 && (unsigned char)ch[0] == 0x1f)
-            return "ctrl+/";  /* Ctrl+/ = ASCII US */
+        if (ch.size() == 1) {
+            unsigned char c = (unsigned char)ch[0];
+            /* Ctrl+/ — terminals encode it differently: US (0x1f) or
+               NUL (0x00); map every candidate to one canonical key */
+            if (c == 0x1f || c == 0x00)
+                return "ctrl+/";
+        }
         if (ch.size() == 1 && (unsigned char)ch[0] >= 32 && (unsigned char)ch[0] < 127)
             return (ch == " ") ? "space" : ch;
         /* multi-byte UTF-8 (IME text): not a key */
