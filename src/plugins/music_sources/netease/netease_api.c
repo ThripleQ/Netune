@@ -452,6 +452,49 @@ void netease_search_free(NSSearchResult *r) {
     free(r->songs); r->songs=NULL; r->count=0;
 }
 
+/* Search playlists (type=1000). Result items carry is_playlist=1 so the
+   UI can open them as playlists instead of playing them as songs. */
+int netease_search_playlists(const char *kw, SongInfo **out, int *count) {
+    *out=NULL; *count=0; if(!kw)return -1;
+    char *esc = shell_escape(kw);
+    char *j=run("%s search-pl %s%s",CLI,esc,STDERR_REDIRECT);
+    free(esc);
+    if(!j)return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *r = root ? jget_obj(root, "result") : NULL;
+    yyjson_val *pl = r ? jget_arr(r, "playlists") : NULL;
+    if (!pl) { yyjson_doc_free(doc); return 0; }
+
+    size_t n = yyjson_arr_size(pl);
+    if (n == 0) { yyjson_doc_free(doc); return 0; }
+
+    *out = calloc(n, sizeof(SongInfo));
+    int oi = 0;
+    yyjson_arr_iter iter = yyjson_arr_iter_with(pl);
+    yyjson_val *v;
+    while ((v = yyjson_arr_iter_next(&iter))) {
+        if (!yyjson_is_obj(v)) continue;
+        SongInfo *s = &(*out)[oi];
+        memset(s,0,sizeof(*s));
+        s->source    = strdup("netease");
+        s->cover_url = strdup("");
+        s->aux_label = strdup("歌单");
+        s->is_playlist = 1;
+        int64_t sid = jget_sint64(v, "id");
+        char id_str[32];
+        snprintf(id_str, sizeof(id_str), "%ld", (long)sid);
+        s->id = strdup(id_str);
+        const char *nm = jget_str(v, "name"); s->title = nm ? strdup(nm) : strdup("");
+        oi++;
+    }
+    *count = oi;
+    yyjson_doc_free(doc);
+    return oi > 0 ? 0 : -1;
+}
+
 /* ── Login QR ─────────────────────────────────────── */
 int netease_qr_key(char *u, size_t usz, char *url, size_t usz2) {
     char *j=run("%s qr-key",CLI); if(!j){LOG_ERROR("netease-cli not found");return -1;}

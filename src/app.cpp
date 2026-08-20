@@ -370,7 +370,7 @@ static void do_netease_search(const char *query, bool push_nav) {
         }
 
         std::vector<SongInfo> vec;
-        vec.reserve(nr.count);
+        vec.reserve(nr.count + 16);
         for (int i = 0; i < nr.count; i++) {
             SongInfo si = {};
             si.id       = strdup(nr.songs[i].id);
@@ -383,6 +383,15 @@ static void do_netease_search(const char *query, bool push_nav) {
             vec.push_back(si);
         }
         netease_search_free(&nr);
+
+        /* Append matching playlists so a query finds both songs and
+           playlist entries (distinguished by is_playlist). */
+        SongInfo *pls = NULL; int pc = 0;
+        if (netease_search_playlists(q.c_str(), &pls, &pc) == 0 && pc > 0) {
+            for (int i = 0; i < pc; i++)
+                vec.push_back(pls[i]);
+            free(pls);
+        }
 
         /* Store in cache (transfer ownership), evict oldest if full.
            The evicted vector's SongInfo strings must be freed. */

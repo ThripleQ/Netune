@@ -20,6 +20,7 @@ typedef struct { NSSong *songs; int count; } NSSearchResult;
 
 int  netease_search(const char *kw, int limit, int offset, NSSearchResult *out);
 void netease_search_free(NSSearchResult *r);
+int  netease_search_playlists(const char *kw, SongInfo **out, int *count); /* playlist results, is_playlist=1 */
 
 /* ── Login ─────────────────────────────────────────── */
 int  netease_qr_key(char *unikey, size_t uk_sz, char *url, size_t url_sz);

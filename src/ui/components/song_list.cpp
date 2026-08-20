@@ -244,6 +244,7 @@ Element render_song_list(const AppState &s) {
 
             std::string prefix;
             if (song.fee == 1) prefix = "◆ ";
+            if (song.is_playlist) prefix = "\u25C6 ";  /* ◆ playlist */
             std::string content;
             if (song.title && song.title[0])
                 content = prefix + song.title;
@@ -251,6 +252,8 @@ Element render_song_list(const AppState &s) {
                 content = prefix + "(unknown)";
             if (song.artist && song.artist[0])
                 content += std::string(" \u2014 ") + song.artist;
+            else if (song.is_playlist)
+                content += std::string(" \u2014 ") + std::string("\u6B4C\u5355");  /* 歌单 */
 
             bool scroll = (s.active_panel == 1 && sel && !s.top_search_active);
             std::string row = build_info_row(content, avail_w, scroll);
