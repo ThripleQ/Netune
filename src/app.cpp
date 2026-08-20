@@ -884,6 +884,31 @@ static bool play_queue_index(int idx) {
 /* ── Start playback from the visible playlist (space/enter/search) ──
    Snapshots the current playlist into the queue, then plays the
    song at `idx`. Returns true if playback started. */
+/* ── Filtered navigation ───────────────────────────────
+   While a filter query is active the list/menu shows only matching
+   items, so up/down must skip non-matching entries — otherwise the
+   highlight lands on invisible rows. Returns the next matching index
+   (wrapping) or -1 when nothing matches. */
+static int next_match(const std::vector<SongInfo> &list, int from, int step,
+                      const std::string &q) {
+    int n = (int)list.size();
+    if (n <= 0) return -1;
+    std::string lq = q;
+    std::transform(lq.begin(), lq.end(), lq.begin(), ::tolower);
+    for (int k = 1; k <= n; k++) {
+        int idx = (from + step * k) % n;
+        if (idx < 0) idx += n;
+        const auto &s = list[idx];
+        std::string h;
+        if (s.title) h += s.title;
+        if (s.artist) h += std::string(" ") + s.artist;
+        std::transform(h.begin(), h.end(), h.begin(), ::tolower);
+        if (h.find(lq) != std::string::npos)
+            return idx;
+    }
+    return -1;
+}
+
 static bool play_from_playlist(int idx) {
     auto &store = StateStore::instance();
     const auto &cur = store.state();
@@ -1942,8 +1967,15 @@ int run_app(int argc, char **argv) {
                     StateStore::instance().set_top_left_query(q);
                 } else {
                     StateStore::instance().set_top_right_query(q);
-                    if (!cur.top_search_api)
+                    if (!cur.top_search_api) {
                         restore_search_view(q);
+                        const auto &st2 = StateStore::instance().state();
+                        if (!q.empty() && !st2.playlist.empty()) {
+                            int m = next_match(st2.playlist, -1, 1, q);
+                            if (m >= 0)
+                                StateStore::instance().set_selected_index(m);
+                        }
+                    }
                 }
                 return true;
             }
@@ -1967,8 +1999,17 @@ int run_app(int argc, char **argv) {
                     /* API-search box keeps the list untouched while typing —
                        Enter submits a fresh API search (no "search within
                        results" fallback); filter boxes react live */
-                    if (!cur.top_search_api)
+                    if (!cur.top_search_api) {
                         restore_search_view(q);
+                        /* snap the selection to the first matching row so
+                           Enter/space never acts on an invisible item */
+                        const auto &st2 = StateStore::instance().state();
+                        if (!q.empty() && !st2.playlist.empty()) {
+                            int m = next_match(st2.playlist, -1, 1, q);
+                            if (m >= 0)
+                                StateStore::instance().set_selected_index(m);
+                        }
+                    }
                 }
             }
             return true; /* consume all keys while top search active */
@@ -2175,57 +2216,131 @@ int run_app(int argc, char **argv) {
         case Action::MoveDown:
             if (cur.active_panel == 0) {
                 if (cur.music_mode == MusicMode::Local) {
+                    /* local groups: skip non-matching when filtered */
+                    int n = (int)cur.groups.size();
+                    if (n <= 0) return true;
                     int idx = cur.group_index;
-                    if (idx >= (int)cur.groups.size() - 1) return true; /* at bottom */
-                    if (idx == -1 && cur.groups.empty()) return true;
-                    int next = (idx < 0) ? 0 : idx + 1;
-                    StateStore::instance().set_group_index(next);
-                    if (next >= 0 && next < (int)cur.groups.size()) {
+                    const std::string &q = cur.top_left_query;
+                    int target = -1;
+                    for (int k = 0; k < n; k++) {
+                        idx = (idx + 1 >= n) ? 0 : idx + 1;
+                        if (q.empty() || str_icontains(cur.groups[idx].name, q)) {
+                            target = idx;
+                            break;
+                        }
+                    }
+                    if (target < 0) return true;
+                    StateStore::instance().set_group_index(target);
+                    if (target >= 0 && target < n) {
                         std::vector<const char*> paths;
-                        for (auto &s : cur.groups[next].songs) paths.push_back(s.id);
+                        for (auto &s : cur.groups[target].songs) paths.push_back(s.id);
                     }
                 } else {
-                    int next = cur.netease_selected + 1;
-                    if (next < (int)cur.netease_menu.size())
-                        StateStore::instance().set_netease_selected(next);
+                    /* netease menu: skip non-matching items when the
+                       left box filters */
+                    int next = cur.netease_selected;
+                    int n = (int)cur.netease_menu.size();
+                    const std::string &q = cur.top_left_query;
+                    for (int k = 0; k < n; k++) {
+                        next = (next + 1 >= n) ? 0 : next + 1;
+                        if (q.empty() ||
+                            str_icontains(cur.netease_menu[next].name, q)) {
+                            StateStore::instance().set_netease_selected(next);
+                            break;
+                        }
+                    }
                 }
             } else {
-                if (!cur.playlist.empty() && cur.selected_index < (int)cur.playlist.size() - 1)
+                if (cur.playlist.empty()) return true;
+                if (!cur.top_search_api && !cur.top_right_query.empty()) {
+                    /* filter mode: move between matching rows only */
+                    int idx = next_match(cur.playlist, cur.selected_index, 1,
+                                         cur.top_right_query);
+                    if (idx >= 0)
+                        StateStore::instance().set_selected_index(idx);
+                } else if (cur.selected_index < (int)cur.playlist.size() - 1) {
                     StateStore::instance().set_selected_index(cur.selected_index + 1);
+                }
             }
             return true;
 
         case Action::MoveUp:
             /* Cursor model: Up from the first list item goes back into
                the search box (editing mode) when a query is active. */
-            if (cur.active_panel == 1 && cur.selected_index == 0 &&
-                !cur.top_right_query.empty() && !cur.search_active) {
-                StateStore::instance().set_top_search_active(true, 1);
-                return true;
+            if (cur.active_panel == 1 && !cur.search_active) {
+                bool first_match = false;
+                if (cur.top_search_api || cur.top_right_query.empty()) {
+                    first_match = (cur.selected_index == 0);
+                } else {
+                    /* filter mode: at the top matching row when no
+                       earlier row matches */
+                    first_match = next_match(cur.playlist, cur.selected_index,
+                                             -1, cur.top_right_query) < 0;
+                }
+                if (first_match && !cur.top_right_query.empty()) {
+                    StateStore::instance().set_top_search_active(true, 1);
+                    return true;
+                }
             }
             if (cur.active_panel == 0) {
                 if (cur.music_mode == MusicMode::Local) {
-                    int prev = cur.group_index - 1;
-                    if (prev < -1) return true; /* already at top (netease entry) */
-                    if (prev >= 0) {
-                        StateStore::instance().set_group_index(prev);
-                        std::vector<const char*> paths;
-                        for (auto &s : cur.groups[prev].songs) paths.push_back(s.id);
-                    } else {
-                        StateStore::instance().set_group_index(-1);
+                    /* local groups: skip non-matching when filtered */
+                    int n = (int)cur.groups.size();
+                    if (n <= 0) return true;
+                    int idx = cur.group_index;
+                    const std::string &q = cur.top_left_query;
+                    int target = -1;
+                    for (int k = 0; k < n; k++) {
+                        idx = (idx - 1 < 0) ? n - 1 : idx - 1;
+                        if (q.empty() || str_icontains(cur.groups[idx].name, q)) {
+                            target = idx;
+                            break;
+                        }
                     }
-                } else {
-                    int prev = cur.netease_selected - 1;
-                    if (prev == 0 && !cur.top_left_query.empty()) {
+                    if (target < 0) return true;
+                    if (target == cur.group_index && !q.empty()) {
+                        /* wrapped: at the top matching group — re-enter box */
                         StateStore::instance().set_top_search_active(true, 0);
                         return true;
                     }
-                    if (prev >= -1)
-                        StateStore::instance().set_netease_selected(prev);
+                    StateStore::instance().set_group_index(target);
+                    if (target >= 0 && target < n) {
+                        std::vector<const char*> paths;
+                        for (auto &s : cur.groups[target].songs) paths.push_back(s.id);
+                    }
+                } else {
+                    /* netease menu: skip non-matching items; Up from the
+                       top matching item re-enters the left search box */
+                    int prev = cur.netease_selected;
+                    int n = (int)cur.netease_menu.size();
+                    const std::string &q = cur.top_left_query;
+                    int target = -1;
+                    for (int k = 0; k < n; k++) {
+                        prev = (prev - 1 < 0) ? n - 1 : prev - 1;
+                        if (q.empty() ||
+                            str_icontains(cur.netease_menu[prev].name, q)) {
+                            target = prev;
+                            break;
+                        }
+                    }
+                    if (target < 0) return true;
+                    if (target == cur.netease_selected && !q.empty()) {
+                        /* wrapped around: we are at the top matching item */
+                        StateStore::instance().set_top_search_active(true, 0);
+                        return true;
+                    }
+                    StateStore::instance().set_netease_selected(target);
                 }
             } else {
-                if (cur.selected_index > 0)
+                if (!cur.top_search_api && !cur.top_right_query.empty()) {
+                    /* filter mode: move between matching rows only */
+                    int idx = next_match(cur.playlist, cur.selected_index, -1,
+                                         cur.top_right_query);
+                    if (idx >= 0)
+                        StateStore::instance().set_selected_index(idx);
+                } else if (cur.selected_index > 0) {
                     StateStore::instance().set_selected_index(cur.selected_index - 1);
+                }
             }
             return true;
 
