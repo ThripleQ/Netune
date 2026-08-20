@@ -451,6 +451,21 @@ static void close_top_search(void) {
     st.set_top_search_active(false, 0);
 }
 
+/* Clear ALL search state — used when the user leaves the search context
+   (activates another menu item / local group): the new list must not be
+   filtered by the old query and the search nav push must unwind. */
+static void clear_search_state(void) {
+    StateStore &st = StateStore::instance();
+    st.set_top_left_query("");
+    st.set_top_right_query("");
+    st.set_top_search_active(false, 0);
+    st.set_top_search_api(false);
+    if (g_top_search_pushed) {
+        st.nav_pop();
+        g_top_search_pushed = false;
+    }
+}
+
 /* After a right-box query edit: apply cached results instantly when the
    list is empty; otherwise fall back to the pre-search view so stale
    results don't linger. */
@@ -467,6 +482,9 @@ static void restore_search_view(const std::string &q) {
 
 /* ── Activate a netease menu item: load its content into the right panel ── */
 static void activate_netease_menu_item(int idx) {
+    /* Leaving the search context: the new content must not inherit the
+       query filter or the search nav push. */
+    clear_search_state();
     const auto &cur = StateStore::instance().state();
     if (idx < 0 || idx >= (int)cur.netease_menu.size()) return;
     int type = cur.netease_menu[idx].type;
@@ -1886,11 +1904,7 @@ int run_app(int argc, char **argv) {
                     /* committing the left filter must first unwind any
                        pending right-box search push so the nav stack
                        stays balanced */
-                    if (g_top_search_pushed) {
-                        StateStore::instance().nav_pop();
-                        g_top_search_pushed = false;
-                    }
-                    StateStore::instance().set_top_search_active(false, 0);
+                    clear_search_state();
                     if (cur.music_mode == MusicMode::Local) {
                         /* activate the matching local group (netease entry is
                            excluded from local search — strict separation) */
