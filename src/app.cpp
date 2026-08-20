@@ -433,14 +433,17 @@ static bool netease_search_apply_cache(const std::string &q) {
 /* Close the top search row and restore the pre-search view. The box
    QUERY is kept so reopening search shows the last typed term (search
    has memory); only the nav snapshot (list + menu) is restored. */
-/* Close the top search row and restore the ORIGINAL list: clear both
-   boxes' queries and pop the nav snapshot taken for search results.
-   (The "back to search box" step keeps the query; this final step
-   discards it.) */
+/* Close the top search row.
+   - Filter mode (Ctrl+/): clear the queries so the original list/menu
+     comes back in one step.
+   - API mode (搜索网易云): keep the query (search memory) and pop the
+     nav snapshot to restore the pre-search list. */
 static void close_top_search(void) {
     StateStore &st = StateStore::instance();
-    st.set_top_left_query("");
-    st.set_top_right_query("");
+    if (!st.state().top_search_api) {
+        st.set_top_left_query("");
+        st.set_top_right_query("");
+    }
     if (g_top_search_pushed) {
         st.nav_pop();
         g_top_search_pushed = false;
@@ -1839,71 +1842,11 @@ int run_app(int argc, char **argv) {
                 return true;
             }
             if (ev_key == "up" || ev_key == "down") {
-                int step = (ev_key == "up") ? -1 : 1;
-                if (side == 0) {
-                    const std::string &q = cur.top_left_query;
-                    if (cur.music_mode == MusicMode::Local) {
-                        /* entries: -1 = netease entry (only when unfiltered),
-                           0..n-1 = groups */
-                        int n = (int)cur.groups.size();
-                        if (n <= 0) return true;
-                        int idx = cur.group_index;
-                        auto matches = [&](int i) {
-                            if (i < 0) return q.empty();
-                            if (i >= (int)cur.groups.size()) return false;
-                            return q.empty() || str_icontains(cur.groups[i].name, q);
-                        };
-                        for (int k = 0; k < n + 2; k++) {
-                            idx += step;
-                            if (idx < -1) idx = n - 1;
-                            if (idx > n - 1) idx = -1;
-                            if (matches(idx)) {
-                                StateStore::instance().set_group_index(idx);
-                                break;
-                            }
-                        }
-                    } else {
-                        /* move within filtered menu items */
-                        int n = (int)cur.netease_menu.size();
-                        if (n <= 0) return true;
-                        int idx = cur.netease_selected;
-                        for (int k = 0; k < n; k++) {
-                            idx += step;
-                            if (idx < 0) idx = n - 1;
-                            if (idx >= n) idx = 0;
-                            if (q.empty() || str_icontains(cur.netease_menu[idx].name, q)) {
-                                StateStore::instance().set_netease_selected(idx);
-                                break;
-                            }
-                        }
-                    }
-                } else {
-                    /* move within filtered playlist */
-                    const std::string &q = cur.top_right_query;
-                    int n = (int)cur.playlist.size();
-                    if (n <= 0) return true;
-                    int idx = cur.selected_index;
-                    if (q.empty()) {
-                        idx += step;
-                        if (idx < 0) idx = n - 1;
-                        if (idx >= n) idx = 0;
-                        StateStore::instance().set_selected_index(idx);
-                    } else {
-                        for (int k = 0; k < n; k++) {
-                            idx += step;
-                            if (idx < 0) idx = n - 1;
-                            if (idx >= n) idx = 0;
-                            const auto &song = cur.playlist[idx];
-                            std::string h;
-                            if (song.title) h += song.title;
-                            if (song.artist) h += std::string(" ") + song.artist;
-                            if (str_icontains(h, q)) {
-                                StateStore::instance().set_selected_index(idx);
-                                break;
-                            }
-                        }
-                    }
-                }
+                /* Leave edit mode: selection lands on the list/menu
+                   below the box (which becomes visible again); further
+                   up/down navigate normally. The query is kept so the
+                   filtered view stays. */
+                StateStore::instance().set_top_search_active(false, 0);
                 return true;
             }
             if (ev_key == "enter" || ev_key == "\r") {
