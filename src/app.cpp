@@ -430,6 +430,20 @@ static bool netease_search_apply_cache(const std::string &q) {
     return true;
 }
 
+/* Close the top search row and restore everything: clear both boxes'
+   queries and pop the nav snapshot taken for search results so the
+   pre-search view (list + menu) comes back. */
+static void close_top_search(void) {
+    StateStore &st = StateStore::instance();
+    st.set_top_left_query("");
+    st.set_top_right_query("");
+    if (g_top_search_pushed) {
+        st.nav_pop();
+        g_top_search_pushed = false;
+    }
+    st.set_top_search_active(false, 0);
+}
+
 /* After a right-box query edit: apply cached results instantly when the
    list is empty; otherwise fall back to the pre-search view so stale
    results don't linger. */
@@ -1805,38 +1819,13 @@ int run_app(int argc, char **argv) {
             int side = cur.top_search_side;
 
             if (ev_key == "escape") {
-                if (side == 1) {
-                    const std::string &q = cur.top_right_query;
-                    if (!q.empty() && cur.playlist.empty()) {
-                        /* no matches for the query — clear it first and
-                           unwind the search nav push */
-                        StateStore::instance().set_top_right_query("");
-                        restore_search_view("");
-                        if (g_top_search_pushed) {
-                            StateStore::instance().nav_pop();
-                            g_top_search_pushed = false;
-                        }
-                        return true;
-                    }
-                    /* matches exist (or box is empty): exit back to the
-                       list, keeping the results */
-                    StateStore::instance().set_top_search_active(false, 0);
-                    StateStore::instance().set_active_panel(1);
-                } else {
-                    const std::string &q = cur.top_left_query;
-                    if (!q.empty()) {
-                        StateStore::instance().set_top_left_query("");
-                        return true;
-                    }
-                    StateStore::instance().set_top_search_active(false, 0);
-                }
+                /* Esc leaves search and restores the pre-search view */
+                close_top_search();
                 return true;
             }
             if (ev_key == "ctrl+/") {
                 /* same as Esc: exit the box back to the list */
-                StateStore::instance().set_top_search_active(false, 0);
-                if (side == 1)
-                    StateStore::instance().set_active_panel(1);
+                close_top_search();
                 return true;
             }
             if (ev_key == "tab") {
@@ -2383,9 +2372,7 @@ int run_app(int argc, char **argv) {
                Closing just exits the box (focus back to the list); the
                list and query are kept. */
             if (cur.top_search_active) {
-                StateStore::instance().set_top_search_active(false, 0);
-                if (cur.top_search_side == 1)
-                    StateStore::instance().set_active_panel(1);
+                close_top_search();
             } else {
                 StateStore::instance().set_top_search_active(true,
                                                               cur.active_panel);
