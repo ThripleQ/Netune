@@ -433,8 +433,14 @@ static bool netease_search_apply_cache(const std::string &q) {
 /* Close the top search row and restore the pre-search view. The box
    QUERY is kept so reopening search shows the last typed term (search
    has memory); only the nav snapshot (list + menu) is restored. */
+/* Close the top search row and restore the ORIGINAL list: clear both
+   boxes' queries and pop the nav snapshot taken for search results.
+   (The "back to search box" step keeps the query; this final step
+   discards it.) */
 static void close_top_search(void) {
     StateStore &st = StateStore::instance();
+    st.set_top_left_query("");
+    st.set_top_right_query("");
     if (g_top_search_pushed) {
         st.nav_pop();
         g_top_search_pushed = false;
@@ -2185,9 +2191,21 @@ int run_app(int argc, char **argv) {
         /* Esc: navigate back one level (pop the nav stack). The right
            panel list is intentionally NOT restored by nav_pop — its
            content is replaced only by newly loaded content. */
-        if (ev_key == "escape" && !cur.search_active && !cur.nav_stack.empty()) {
-            StateStore::instance().nav_pop();
-            return true;
+        if (ev_key == "escape" && !cur.search_active) {
+            /* Esc from the results list first goes BACK to the search
+               box (query kept) when a search/filter was active; the
+               second Esc restores the original list. */
+            if (!cur.top_left_query.empty() ||
+                !cur.top_right_query.empty() ||
+                g_top_search_pushed) {
+                StateStore::instance().set_top_search_active(true,
+                    !cur.top_right_query.empty() || g_top_search_pushed ? 1 : 0);
+                return true;
+            }
+            if (!cur.nav_stack.empty()) {
+                StateStore::instance().nav_pop();
+                return true;
+            }
         }
 
         auto action = g_keybindings.lookup(ev_key);
