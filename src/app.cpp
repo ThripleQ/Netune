@@ -415,20 +415,6 @@ static bool netease_search_apply_cache(const std::string &q) {
     return true;
 }
 
-/* Close the top search row and restore everything: clear both boxes'
-   queries (lists un-filter) and pop the nav snapshot taken for netease
-   search results. */
-static void close_top_search(void) {
-    StateStore &st = StateStore::instance();
-    st.set_top_left_query("");
-    st.set_top_right_query("");
-    if (g_top_search_pushed) {
-        st.nav_pop();
-        g_top_search_pushed = false;
-    }
-    st.set_top_search_active(false, 0);
-}
-
 /* After a right-box query edit: apply cached results instantly when the
    list is empty; otherwise fall back to the pre-search view so stale
    results don't linger. */
@@ -1795,20 +1781,12 @@ int run_app(int argc, char **argv) {
             int side = cur.top_search_side;
 
             if (ev_key == "escape") {
-                /* Esc first clears the current box's query (restoring the
-                   pre-search view); a second Esc closes search entirely */
-                const std::string &q = side ? cur.top_right_query
-                                            : cur.top_left_query;
-                if (!q.empty()) {
-                    if (side) {
-                        StateStore::instance().set_top_right_query("");
-                        restore_search_view("");
-                    } else {
-                        StateStore::instance().set_top_left_query("");
-                    }
-                    return true;
-                }
-                close_top_search();
+                /* Exit the search box and put focus back on the list
+                   below it; the query is kept so it can be edited again
+                   and the current list stays intact. */
+                StateStore::instance().set_top_search_active(false, 0);
+                if (side == 1)
+                    StateStore::instance().set_active_panel(1);
                 return true;
             }
             if (ev_key == "tab") {
@@ -2351,9 +2329,13 @@ int run_app(int argc, char **argv) {
         case Action::OpenSearch: {
             /* search disabled in lyric mode */
             if (cur.lyric_mode) return true;
-            /* toggle the top search row (focused panel's box) — both modes */
+            /* toggle the top search row (focused panel's box) — both modes.
+               Closing just exits the box (focus back to the list); the
+               list and query are kept. */
             if (cur.top_search_active) {
-                close_top_search();
+                StateStore::instance().set_top_search_active(false, 0);
+                if (cur.top_search_side == 1)
+                    StateStore::instance().set_active_panel(1);
             } else {
                 StateStore::instance().set_top_search_active(true,
                                                               cur.active_panel);
