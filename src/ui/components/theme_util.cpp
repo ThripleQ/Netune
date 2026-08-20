@@ -32,6 +32,18 @@ static Color pick_spectrum(const Theme &t) {
     return t.spectrum.has_color ? Color::RGB(t.spectrum.r, t.spectrum.g, t.spectrum.b) : kDefaultSpectrum;
 }
 
+static Color pick_vip(const Theme &t) {
+    return t.vip.has_color ? Color::RGB(t.vip.r, t.vip.g, t.vip.b)
+        : (t.warning.has_color ? Color::RGB(t.warning.r, t.warning.g, t.warning.b)
+                               : kDefaultFg);
+}
+
+static Color pick_playlist(const Theme &t) {
+    return t.playlist.has_color ? Color::RGB(t.playlist.r, t.playlist.g, t.playlist.b)
+        : (t.accent.has_color ? Color::RGB(t.accent.r, t.accent.g, t.accent.b)
+                              : kDefaultAccent);
+}
+
 /* ── Core theme colors ─────────────────────────────── */
 
 Element theme_fg(Element e) {
@@ -55,6 +67,14 @@ Element theme_spectrum(Element e) {
 
 Element theme_progress_track(Element e) {
     return e | bgcolor(pick_progress_track(ThemeManager::instance().current()));
+}
+
+Element theme_vip(Element e) {
+    return e | color(pick_vip(ThemeManager::instance().current()));
+}
+
+Element theme_playlist(Element e) {
+    return e | color(pick_playlist(ThemeManager::instance().current()));
 }
 
 /* ── Extended semantic colors ──────────────────────── */

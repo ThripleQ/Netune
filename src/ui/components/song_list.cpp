@@ -242,29 +242,57 @@ Element render_song_list(const AppState &s) {
             shown_rows++;
             bool sel = ((int)i == s.selected_index);
 
-            std::string prefix;
-            if (song.fee == 1) prefix = "◆ ";
-            if (song.is_playlist) prefix = "\u25A3 ";  /* ▣ playlist marker (distinct from ◆ fee) */
-            std::string content;
-            if (song.title && song.title[0])
-                content = prefix + song.title;
-            else
-                content = prefix + "(unknown)";
-            if (song.is_playlist)
-                content += std::string(" \u2014 ") + std::string("\u6B4C\u5355");  /* — 歌单 */
-            else if (song.artist && song.artist[0])
-                content += std::string(" \u2014 ") + song.artist;
+            /* marker + text split so VIP/playlist markers get their own
+               theme colors */
+            std::string title = (song.title && song.title[0]) ? song.title : "(unknown)";
+            Element line;
+            if (song.is_playlist) {
+                line = hbox({
+                    theme_playlist(text("\u25A3 ")),           /* ▣ */
+                    text(title),
+                    theme_playlist(text(" \u2014 \u6B4C\u5355")),  /* — 歌单 */
+                });
+            } else {
+                Element songrow = text(title);
+                if (song.fee == 1)
+                    songrow = hbox({theme_vip(text("\u25C6 ")), songrow});  /* ◆ */
+                if (song.artist && song.artist[0])
+                    songrow = hbox({songrow,
+                                    text(std::string(" \u2014 ") + song.artist)});
+                line = songrow;
+            }
 
             bool scroll = (s.active_panel == 1 && sel && !s.top_search_active);
-            std::string row = build_info_row(content, avail_w, scroll);
+            if (scroll) {
+                /* marquee: rebuild as plain text for scrolling */
+                std::string content;
+                if (song.is_playlist) content = "\u25A3 " + title + " \u2014 歌单";
+                else {
+                    content = title;
+                    if (song.fee == 1) content = "\u25C6 " + content;
+                    if (song.artist && song.artist[0])
+                        content += std::string(" \u2014 ") + song.artist;
+                }
+                line = text(build_info_row(content, avail_w, true));
+            }
 
             if (sel) {
-                if (s.active_panel == 1 && !s.top_search_active)
-                    els.push_back(theme_selection(text("> " + row) | focus));
-                else
-                    els.push_back(theme_fg(text("  " + row) | bold | focus));
+                if (s.active_panel == 1 && !s.top_search_active) {
+                    /* selection background over the whole row, but keep
+                       the marker colors (outer color would override) */
+                    auto &th = ThemeManager::instance().current();
+                    Color sel_bg = th.accent_bg.has_color
+                        ? Color::RGB(th.accent_bg.r, th.accent_bg.g, th.accent_bg.b)
+                        : (th.accent.has_color
+                           ? Color::RGB(th.accent.r, th.accent.g, th.accent.b)
+                           : Color::RGB(80, 80, 80));
+                    els.push_back(hbox({theme_selection(text("> ")), line})
+                                  | bgcolor(sel_bg) | focus);
+                } else {
+                    els.push_back(theme_fg(hbox({text("  "), line}) | bold | focus));
+                }
             } else {
-                els.push_back(theme_fg(text("  " + row)));
+                els.push_back(theme_fg(hbox({text("  "), line})));
             }
         }
         if (shown_rows == 0 && !filter_q.empty())

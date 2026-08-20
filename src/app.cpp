@@ -1361,6 +1361,8 @@ static const char *DEFAULT_THEME_DEFAULT_YAML =
     "  success: \"#9ece6a\"\n"
     "  warning: \"#e0af68\"\n"
     "  error: \"#f7768e\"\n"
+    "  vip: \"#e0af68\"\n"
+    "  playlist: \"#7dcfff\"\n"
     "  overlay_bg: \"#16161e\"\n";
 
 static const char *DEFAULT_THEME_CATPPUCCIN_YAML =
@@ -1368,28 +1370,36 @@ static const char *DEFAULT_THEME_CATPPUCCIN_YAML =
     "colors:\n"
     "  bg: \"#1e1e2e\"\n"
     "  fg: \"#cdd6f4\"\n"
-    "  accent: \"#89b4fa\"\n";
+    "  accent: \"#89b4fa\"\n"
+    "  vip: \"#f9e2af\"\n"
+    "  playlist: \"#94e2d5\"\n";
 
 static const char *DEFAULT_THEME_DRACULA_YAML =
     "name: \"Dracula\"\n"
     "colors:\n"
     "  bg: \"#282a36\"\n"
     "  fg: \"#f8f8f2\"\n"
-    "  accent: \"#bd93f9\"\n";
+    "  accent: \"#bd93f9\"\n"
+    "  vip: \"#f1fa8c\"\n"
+    "  playlist: \"#8be9fd\"\n";
 
 static const char *DEFAULT_THEME_NETEASE_DARK_YAML =
     "name: \"Netease Dark\"\n"
     "colors:\n"
     "  bg: \"#1a1a2e\"\n"
     "  fg: \"#c8c8dc\"\n"
-    "  accent: \"#e3322d\"\n";
+    "  accent: \"#e3322d\"\n"
+    "  vip: \"#e8c547\"\n"
+    "  playlist: \"#4aa3df\"\n";
 
 static const char *DEFAULT_THEME_NETEASE_LIGHT_YAML =
     "name: \"Netease Light\"\n"
     "colors:\n"
     "  bg: \"#f5f5f5\"\n"
     "  fg: \"#333333\"\n"
-    "  accent: \"#d43c33\"\n";
+    "  accent: \"#d43c33\"\n"
+    "  vip: \"#c9a227\"\n"
+    "  playlist: \"#2d7bb5\"\n";
 
 /* ── Ensure the full default data tree exists ──────── */
 /* On startup, walks the canonical data root and creates

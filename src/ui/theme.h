@@ -30,6 +30,8 @@ struct Theme {
     ThemeColor success;       /* success / online indicator */
     ThemeColor warning;       /* warning / VIP badge        */
     ThemeColor error;         /* error / important          */
+    ThemeColor vip;           /* VIP (◆) marker color       */
+    ThemeColor playlist;      /* playlist (▣) marker color  */
     ThemeColor overlay_bg;    /* overlay/popup background   */
     ThemeColor spectrum;      /* spectrum visualization     */
 };

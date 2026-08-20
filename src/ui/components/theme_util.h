@@ -20,3 +20,9 @@ Element theme_progress_track(Element e);
 
 /* Spectrum bar color */
 Element theme_spectrum(Element e);
+
+/* VIP (◆) marker color */
+Element theme_vip(Element e);
+
+/* Playlist (▣) marker color */
+Element theme_playlist(Element e);
