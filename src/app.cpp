@@ -1887,15 +1887,45 @@ int run_app(int argc, char **argv) {
             if (ev_key == "up" || ev_key == "down") {
                 /* Cursor model: the search box and the list are one
                    continuous cursor. Down leaves the box and lands on
-                   the FIRST list item (or menu item for the left box) —
+                   the FIRST visible item (first match when filtering) —
                    a deterministic target, never a hidden selection. */
                 StateStore::instance().set_top_search_active(false, 0);
+                const auto &st2 = StateStore::instance().state();
                 if (side == 1) {
-                    StateStore::instance().set_selected_index(0);
+                    if (!cur.top_search_api && !cur.top_right_query.empty() &&
+                        !st2.playlist.empty()) {
+                        int m = next_match(st2.playlist, -1, 1,
+                                           cur.top_right_query);
+                        StateStore::instance().set_selected_index(m >= 0 ? m : 0);
+                    } else {
+                        StateStore::instance().set_selected_index(0);
+                    }
                 } else if (cur.music_mode == MusicMode::Local) {
-                    StateStore::instance().set_group_index(0);
+                    /* first matching group when the left box filters */
+                    if (!cur.top_left_query.empty() && !st2.groups.empty()) {
+                        int m = -1;
+                        for (size_t i = 0; i < st2.groups.size(); i++) {
+                            if (str_icontains(st2.groups[i].name, cur.top_left_query)) {
+                                m = (int)i; break;
+                            }
+                        }
+                        StateStore::instance().set_group_index(m >= 0 ? m : 0);
+                    } else {
+                        StateStore::instance().set_group_index(0);
+                    }
                 } else {
-                    StateStore::instance().set_netease_selected(0);
+                    /* first matching netease menu item when filtered */
+                    if (!cur.top_left_query.empty() && !st2.netease_menu.empty()) {
+                        int m = -1;
+                        for (size_t i = 0; i < st2.netease_menu.size(); i++) {
+                            if (str_icontains(st2.netease_menu[i].name, cur.top_left_query)) {
+                                m = (int)i; break;
+                            }
+                        }
+                        StateStore::instance().set_netease_selected(m >= 0 ? m : 0);
+                    } else {
+                        StateStore::instance().set_netease_selected(0);
+                    }
                 }
                 return true;
             }
