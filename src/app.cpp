@@ -1984,9 +1984,11 @@ int run_app(int argc, char **argv) {
                                               !g_top_search_pushed);
                             g_top_search_pushed = true;
                         } else {
-                            /* cache hit: decide synchronously */
+                            /* cache hit: decide synchronously (re-read
+                               state — cur is the pre-apply snapshot) */
                             g_search_awaiting = false;
-                            if (!cur.playlist.empty()) {
+                            const auto &st2 = StateStore::instance().state();
+                            if (!st2.playlist.empty()) {
                                 StateStore::instance().set_top_search_active(false, 0);
                                 StateStore::instance().set_active_panel(1);
                             }
