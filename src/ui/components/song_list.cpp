@@ -242,45 +242,37 @@ Element render_song_list(const AppState &s) {
             shown_rows++;
             bool sel = ((int)i == s.selected_index);
 
-            /* marker + text split so VIP/playlist markers get their own
-               theme colors. The marker slot is a FIXED 2-column width
-               (plain rows use two spaces) so titles align across rows
-               regardless of the marker glyph's terminal width. */
+            /* Markers are appended at the END of the row (▣/◆ are
+               East-Asian-ambiguous glyphs — under zh_CN locales they
+               measure 2 columns and would misalign titles if used as a
+               prefix). Tail markers never affect title alignment. */
             std::string title = (song.title && song.title[0]) ? song.title : "(unknown)";
-            Element marker;
-            if (song.is_playlist)
-                marker = theme_playlist(text("\u25A3")) | size(WIDTH, EQUAL, 1);
-            else if (song.fee == 1)
-                marker = theme_vip(text("\u25C6")) | size(WIDTH, EQUAL, 1);
-            else
-                marker = text(" ");
-
             Element line;
             if (song.is_playlist) {
                 line = hbox({
-                    marker,
                     text(title),
                     theme_playlist(text(" \u2014 \u6B4C\u5355")),  /* — 歌单 */
                 });
             } else {
-                Element songrow = hbox({marker, text(title)});
+                Element songrow = text(title);
                 if (song.artist && song.artist[0])
                     songrow = hbox({songrow,
                                     text(std::string(" \u2014 ") + song.artist)});
+                if (song.fee == 1)
+                    songrow = hbox({songrow, theme_vip(text(" \u25C6"))});  /* ◆ */
                 line = songrow;
             }
 
             bool scroll = (s.active_panel == 1 && sel && !s.top_search_active);
             if (scroll) {
-                /* marquee: rebuild as plain text for scrolling (marker
-                   slot stays 2 columns so alignment is identical) */
+                /* marquee: rebuild as plain text for scrolling */
                 std::string content;
-                if (song.is_playlist) content = "\u25A3 " + title + " \u2014 歌单";
+                if (song.is_playlist) content = title + " \u2014 歌单";
                 else {
-                    content = "  " + title;
-                    if (song.fee == 1) content = "\u25C6 " + title;
+                    content = title;
                     if (song.artist && song.artist[0])
                         content += std::string(" \u2014 ") + song.artist;
+                    if (song.fee == 1) content += " \u25C6";
                 }
                 line = text(build_info_row(content, avail_w, true));
             }
