@@ -135,7 +135,8 @@ Element render_song_list(const AppState &s) {
                 if (song.artist) haystack += std::string(" ") + song.artist;
                 std::transform(haystack.begin(), haystack.end(), haystack.begin(), ::tolower);
                 if (haystack.find(q) == std::string::npos) continue;
-                bool sel = ((int)i == s.selected_index && s.active_panel == 1);
+                bool sel = ((int)i == s.selected_index && s.active_panel == 1
+                            && !s.top_search_active);
                 std::string content;
                 if (song.title) content += song.title;
                 if (song.artist) content += std::string(" — ") + song.artist;
@@ -177,16 +178,17 @@ Element render_song_list(const AppState &s) {
     } else {
         /* ── Normal playlist display ─────────────────── */
 
-        /* top-right search box filters the current list (both modes) */
-        const std::string filter_q = s.top_right_query;
+        /* top-right search box filters the current list — filter mode
+           only (the API-search box never filters: results ARE the API
+           response, and its query is kept for memory) */
+        const std::string filter_q = s.top_search_api ? "" : s.top_right_query;
 
         /* Spinner during async load (overlaid on top of list below) */
 
         /* Empty-list hints (netease mode) */
         if (!s.loading && s.playlist.empty() && s.music_mode == MusicMode::Netease) {
-            if (!filter_q.empty()) {
+            if (!filter_q.empty() && s.top_search_api) {
                 els.push_back(theme_fg(text("  按 [Enter] 搜索网易云: " + filter_q)) | dim);
-                els.push_back(theme_fg(text("  (缓存命中则自动返回)")) | dim);
             }
         }
 
@@ -240,26 +242,58 @@ Element render_song_list(const AppState &s) {
             shown_rows++;
             bool sel = ((int)i == s.selected_index);
 
-            std::string prefix;
-            if (song.fee == 1) prefix = "◆ ";
-            std::string content;
-            if (song.title && song.title[0])
-                content = prefix + song.title;
-            else
-                content = prefix + "(unknown)";
+            /* Character-position background markers: only the TEXT gets
+               the marker background (prefix spaces stay plain), so no
+               alignment impact. Selected rows use the FULL marker color
+               (accentuated) instead of the generic selection color. */
+            std::string title = (song.title && song.title[0]) ? song.title : "(unknown)";
+            Element line = text(title);
             if (song.artist && song.artist[0])
-                content += std::string(" \u2014 ") + song.artist;
+                line = hbox({line, text(std::string(" \u2014 ") + song.artist)});
 
-            bool scroll = (s.active_panel == 1 && sel);
-            std::string row = build_info_row(content, avail_w, scroll);
+            bool scroll = (s.active_panel == 1 && sel && !s.top_search_active);
+            if (scroll) {
+                std::string content = title;
+                if (song.artist && song.artist[0])
+                    content += std::string(" \u2014 ") + song.artist;
+                line = text(build_info_row(content, avail_w, true));
+            }
 
-            if (sel) {
-                if (s.active_panel == 1)
-                    els.push_back(theme_selection(text("> " + row) | focus));
-                else
-                    els.push_back(theme_fg(text("  " + row) | bold | focus));
+            bool active_sel = (sel && s.active_panel == 1 && !s.top_search_active);
+            if (active_sel) {
+                /* selected: accentuated marker background, or the
+                   generic selection color for plain rows */
+                auto &th = ThemeManager::instance().current();
+                if (song.is_playlist) {
+                    line = theme_playlist_sel_bg(line);
+                    /* dark text on the full marker color */
+                    line = line | color(Color::RGB(th.bg.r, th.bg.g, th.bg.b));
+                } else if (song.fee == 1) {
+                    line = theme_vip_sel_bg(line);
+                    line = line | color(Color::RGB(th.bg.r, th.bg.g, th.bg.b));
+                } else {
+                    Color sel_bg = th.accent_bg.has_color
+                        ? Color::RGB(th.accent_bg.r, th.accent_bg.g, th.accent_bg.b)
+                        : (th.accent.has_color
+                           ? Color::RGB(th.accent.r, th.accent.g, th.accent.b)
+                           : Color::RGB(80, 80, 80));
+                    line = line | bgcolor(sel_bg);
+                }
+                /* marker rows: dark text on the full marker color;
+                   plain rows: fg text on the selection background */
+                if (song.is_playlist || song.fee == 1) {
+                    els.push_back(hbox({text("> ") | bold, line}) | focus);
+                } else {
+                    els.push_back(theme_fg(hbox({text("> "), line}) | bold | focus));
+                }
+            } else if (sel) {
+                els.push_back(theme_fg(hbox({text("  "), line}) | bold | focus));
             } else {
-                els.push_back(theme_fg(text("  " + row)));
+                if (song.is_playlist)
+                    line = theme_playlist_bg(line);
+                else if (song.fee == 1)
+                    line = theme_vip_bg(line);
+                els.push_back(theme_fg(hbox({text("  "), line})));
             }
         }
         if (shown_rows == 0 && !filter_q.empty())

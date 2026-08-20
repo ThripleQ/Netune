@@ -32,6 +32,18 @@ static Color pick_spectrum(const Theme &t) {
     return t.spectrum.has_color ? Color::RGB(t.spectrum.r, t.spectrum.g, t.spectrum.b) : kDefaultSpectrum;
 }
 
+static Color pick_vip(const Theme &t) {
+    return t.vip.has_color ? Color::RGB(t.vip.r, t.vip.g, t.vip.b)
+        : (t.warning.has_color ? Color::RGB(t.warning.r, t.warning.g, t.warning.b)
+                               : kDefaultFg);
+}
+
+static Color pick_playlist(const Theme &t) {
+    return t.playlist.has_color ? Color::RGB(t.playlist.r, t.playlist.g, t.playlist.b)
+        : (t.accent.has_color ? Color::RGB(t.accent.r, t.accent.g, t.accent.b)
+                              : kDefaultAccent);
+}
+
 /* ── Core theme colors ─────────────────────────────── */
 
 Element theme_fg(Element e) {
@@ -55,6 +67,66 @@ Element theme_spectrum(Element e) {
 
 Element theme_progress_track(Element e) {
     return e | bgcolor(pick_progress_track(ThemeManager::instance().current()));
+}
+
+Element theme_vip(Element e) {
+    return e | color(pick_vip(ThemeManager::instance().current()));
+}
+
+Element theme_playlist(Element e) {
+    return e | color(pick_playlist(ThemeManager::instance().current()));
+}
+
+/* ── Background markers (whole-row) ───────────────────
+   VIP/playlist rows tint the row background with the marker color.
+   Dark themes: darken the marker so bright text stays readable.
+   Light themes: lighten it (text is dark there). */
+static ThemeColor scale_tc(const ThemeColor &c, float t, bool toward_white) {
+    ThemeColor out = c;
+    if (toward_white) {
+        out.r = (uint8_t)(c.r + (255 - c.r) * t);
+        out.g = (uint8_t)(c.g + (255 - c.g) * t);
+        out.b = (uint8_t)(c.b + (255 - c.b) * t);
+    } else {
+        out.r = (uint8_t)(c.r * (1.0f - t));
+        out.g = (uint8_t)(c.g * (1.0f - t));
+        out.b = (uint8_t)(c.b * (1.0f - t));
+    }
+    out.has_color = true;
+    return out;
+}
+
+static bool theme_bg_is_light(const Theme &t) {
+    if (!t.bg.has_color) return false;
+    return (t.bg.r + t.bg.g + t.bg.b) / 3 >= 128;
+}
+
+Element theme_vip_bg(Element e) {
+    auto &t = ThemeManager::instance().current();
+    ThemeColor c = t.vip.has_color ? t.vip : t.warning;
+    c = scale_tc(c, 0.45f, theme_bg_is_light(t));
+    return e | bgcolor(Color::RGB(c.r, c.g, c.b));
+}
+
+Element theme_playlist_bg(Element e) {
+    auto &t = ThemeManager::instance().current();
+    ThemeColor c = t.playlist.has_color ? t.playlist : t.accent;
+    c = scale_tc(c, 0.45f, theme_bg_is_light(t));
+    return e | bgcolor(Color::RGB(c.r, c.g, c.b));
+}
+
+/* Selected-row variants: the FULL marker color (accentuated) so the
+   selection reads as an intensified marker. */
+Element theme_vip_sel_bg(Element e) {
+    auto &t = ThemeManager::instance().current();
+    ThemeColor c = t.vip.has_color ? t.vip : t.warning;
+    return e | bgcolor(Color::RGB(c.r, c.g, c.b));
+}
+
+Element theme_playlist_sel_bg(Element e) {
+    auto &t = ThemeManager::instance().current();
+    ThemeColor c = t.playlist.has_color ? t.playlist : t.accent;
+    return e | bgcolor(Color::RGB(c.r, c.g, c.b));
 }
 
 /* ── Extended semantic colors ──────────────────────── */

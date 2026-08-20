@@ -65,7 +65,17 @@ func main() {
 		s := service.SearchService{
 			S:     strings.Join(os.Args[2:], " "),
 			Type:  "1",
-			Limit: "30",
+			Limit: "100",
+		}
+		_, body := s.Search()
+		output(body)
+
+	case "search-pl":
+		// 歌单搜索 (type=1000)
+		s := service.SearchService{
+			S:     strings.Join(os.Args[2:], " "),
+			Type:  "1000",
+			Limit: "20",
 		}
 		_, body := s.Search()
 		output(body)
