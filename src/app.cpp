@@ -1958,6 +1958,12 @@ int run_app(int argc, char **argv) {
             /* character (ASCII or UTF-8 from IME): append to query.
                (input_mode guarantees ev_key is a character here) */
             {
+                /* navigation keys must not become query text — up/down
+                   already handled above, left/right have no edit-cursor
+                   here so they are simply dropped */
+                if (ev_key == "left" || ev_key == "right" ||
+                    ev_key == "up" || ev_key == "down")
+                    return true;
                 std::string ch = ev_key;
                 if (ev_key == "space") ch = " ";
                 std::string q = ((side == 0) ? cur.top_left_query
@@ -2122,6 +2128,10 @@ int run_app(int argc, char **argv) {
             /* character (ASCII or UTF-8 from IME): append to query.
                (input_mode guarantees ev_key is a character here) */
             {
+                /* navigation keys must not become query text */
+                if (ev_key == "left" || ev_key == "right" ||
+                    ev_key == "up" || ev_key == "down")
+                    return true;
                 std::string ch = ev_key;
                 if (ev_key == "space") ch = " ";
                 std::string q = cur.search_query + ch;
