@@ -1805,12 +1805,31 @@ int run_app(int argc, char **argv) {
             int side = cur.top_search_side;
 
             if (ev_key == "escape") {
-                /* Exit the search box and put focus back on the list
-                   below it; the query is kept so it can be edited again
-                   and the current list stays intact. */
-                StateStore::instance().set_top_search_active(false, 0);
-                if (side == 1)
+                if (side == 1) {
+                    const std::string &q = cur.top_right_query;
+                    if (!q.empty() && cur.playlist.empty()) {
+                        /* no matches for the query — clear it first and
+                           unwind the search nav push */
+                        StateStore::instance().set_top_right_query("");
+                        restore_search_view("");
+                        if (g_top_search_pushed) {
+                            StateStore::instance().nav_pop();
+                            g_top_search_pushed = false;
+                        }
+                        return true;
+                    }
+                    /* matches exist (or box is empty): exit back to the
+                       list, keeping the results */
+                    StateStore::instance().set_top_search_active(false, 0);
                     StateStore::instance().set_active_panel(1);
+                } else {
+                    const std::string &q = cur.top_left_query;
+                    if (!q.empty()) {
+                        StateStore::instance().set_top_left_query("");
+                        return true;
+                    }
+                    StateStore::instance().set_top_search_active(false, 0);
+                }
                 return true;
             }
             if (ev_key == "ctrl+/") {
