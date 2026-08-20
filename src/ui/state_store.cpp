@@ -359,6 +359,10 @@ void StateStore::set_top_search_active(bool active, int side) {
     state_.top_search_side   = side;
 }
 
+void StateStore::set_top_search_api(bool api) {
+    state_.top_search_api = api;
+}
+
 void StateStore::set_top_left_query(const std::string &query) {
     state_.top_left_query = query;
 }

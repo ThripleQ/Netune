@@ -487,6 +487,7 @@ static void activate_netease_menu_item(int idx) {
         StateStore::instance().set_playlist({}, 0);
         StateStore::instance().set_top_right_query("");
         StateStore::instance().set_top_search_active(true, 1);
+        StateStore::instance().set_top_search_api(true);
     } else if (type == 300) {
         /* account page: submenu of the logged-in user.
            nav_push so Esc (and the snapshot) can restore the main menu */
@@ -1965,7 +1966,7 @@ int run_app(int argc, char **argv) {
                          the box stays selected & editable
                        - netease mode: Enter submits the API search and
                          leaves the box so the results are interactive */
-                    if (cur.music_mode == MusicMode::Netease &&
+                    if (cur.top_search_api &&
                         !cur.top_right_query.empty()) {
                         if (!netease_search_apply_cache(cur.top_right_query)) {
                             do_netease_search(cur.top_right_query.c_str(),
@@ -1991,7 +1992,7 @@ int run_app(int argc, char **argv) {
                     StateStore::instance().set_top_left_query(q);
                 } else {
                     StateStore::instance().set_top_right_query(q);
-                    if (cur.music_mode != MusicMode::Netease)
+                    if (!cur.top_search_api)
                         restore_search_view(q);
                 }
                 return true;
@@ -2013,10 +2014,10 @@ int run_app(int argc, char **argv) {
                     StateStore::instance().set_top_left_query(q);
                 } else {
                     StateStore::instance().set_top_right_query(q);
-                    /* netease mode keeps the list untouched while typing —
+                    /* API-search box keeps the list untouched while typing —
                        Enter submits a fresh API search (no "search within
-                       results" fallback); only non-netease filters react */
-                    if (cur.music_mode != MusicMode::Netease)
+                       results" fallback); filter boxes react live */
+                    if (!cur.top_search_api)
                         restore_search_view(q);
                 }
             }
@@ -2397,6 +2398,7 @@ int run_app(int argc, char **argv) {
             } else {
                 StateStore::instance().set_top_search_active(true,
                                                               cur.active_panel);
+                StateStore::instance().set_top_search_api(false);
             }
             return true;
         }
