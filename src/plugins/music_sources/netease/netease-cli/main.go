@@ -65,7 +65,7 @@ func main() {
 		s := service.SearchService{
 			S:     strings.Join(os.Args[2:], " "),
 			Type:  "1",
-			Limit: "30",
+			Limit: "100",
 		}
 		_, body := s.Search()
 		output(body)
