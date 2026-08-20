@@ -334,6 +334,10 @@ static std::map<std::string, std::vector<SongInfo>> g_ns_cache;
 /* True while the right search box has pushed a nav snapshot for its
    results view; Esc (or a query edit that misses the cache) restores. */
 static bool g_top_search_pushed = false;
+/* set while a netease search submitted from the top box is in flight;
+   EV_PLAYLIST_LOADED arriving with it set decides whether to leave the
+   box (results) or keep it selected (no results) */
+static bool g_search_awaiting = false;
 
 /* Free all SongInfo strings in a cache vector (for eviction / shutdown) */
 static void ns_cache_vec_free(std::vector<SongInfo> &v) {
@@ -985,7 +989,17 @@ static void ev_playlist_loaded(const BusEvent *ev, void *data) {
     auto *ld = (LoadedSongs*)ev->data;
     if (!ld || ld->count <= 0) {
         StateStore::instance().set_loading(false);
+        if (g_search_awaiting) {
+            /* search returned nothing — keep the box selected */
+            g_search_awaiting = false;
+        }
         return;
+    }
+    if (g_search_awaiting) {
+        /* a top-box netease search just delivered results: unselect the
+           box and land on the result list (selection already at row 0) */
+        g_search_awaiting = false;
+        StateStore::instance().set_top_search_active(false, 0);
     }
     std::vector<SongInfo> vec;
     vec.reserve(ld->count);
@@ -1956,19 +1970,27 @@ int run_app(int argc, char **argv) {
                         }
                     }
                 } else {
-                    /* right box: filter mode plays selected */
-                    if (!cur.playlist.empty()) {
-                        StateStore::instance().set_top_search_active(false, 1);
-                        int idx = cur.selected_index;
-                        if (idx >= 0 && idx < (int)cur.playlist.size())
-                            play_from_playlist(idx);
-                    } else if (!cur.top_right_query.empty() &&
-                               cur.music_mode == MusicMode::Netease) {
-                        /* netease API search (cache hit → instant) */
+                    /* right box:
+                       - normal (non-netease) mode: Enter does nothing —
+                         the box stays selected & editable
+                       - netease mode: Enter submits the search; on
+                         results the box unselects and focus goes to the
+                         result list (selection already at row 0); on no
+                         results the box stays selected */
+                    if (cur.music_mode == MusicMode::Netease &&
+                        !cur.top_right_query.empty()) {
+                        g_search_awaiting = true;
                         if (!netease_search_apply_cache(cur.top_right_query)) {
                             do_netease_search(cur.top_right_query.c_str(),
                                               !g_top_search_pushed);
                             g_top_search_pushed = true;
+                        } else {
+                            /* cache hit: decide synchronously */
+                            g_search_awaiting = false;
+                            if (!cur.playlist.empty()) {
+                                StateStore::instance().set_top_search_active(false, 0);
+                                StateStore::instance().set_active_panel(1);
+                            }
                         }
                     }
                 }
