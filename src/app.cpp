@@ -1842,11 +1842,18 @@ int run_app(int argc, char **argv) {
                 return true;
             }
             if (ev_key == "up" || ev_key == "down") {
-                /* Leave edit mode: selection lands on the list/menu
-                   below the box (which becomes visible again); further
-                   up/down navigate normally. The query is kept so the
-                   filtered view stays. */
+                /* Cursor model: the search box and the list are one
+                   continuous cursor. Down leaves the box and lands on
+                   the FIRST list item (or menu item for the left box) —
+                   a deterministic target, never a hidden selection. */
                 StateStore::instance().set_top_search_active(false, 0);
+                if (side == 1) {
+                    StateStore::instance().set_selected_index(0);
+                } else if (cur.music_mode == MusicMode::Local) {
+                    StateStore::instance().set_group_index(0);
+                } else {
+                    StateStore::instance().set_netease_selected(0);
+                }
                 return true;
             }
             if (ev_key == "enter" || ev_key == "\r") {
@@ -2189,6 +2196,13 @@ int run_app(int argc, char **argv) {
             return true;
 
         case Action::MoveUp:
+            /* Cursor model: Up from the first list item goes back into
+               the search box (editing mode) when a query is active. */
+            if (cur.active_panel == 1 && cur.selected_index == 0 &&
+                !cur.top_right_query.empty() && !cur.search_active) {
+                StateStore::instance().set_top_search_active(true, 1);
+                return true;
+            }
             if (cur.active_panel == 0) {
                 if (cur.music_mode == MusicMode::Local) {
                     int prev = cur.group_index - 1;
@@ -2202,6 +2216,10 @@ int run_app(int argc, char **argv) {
                     }
                 } else {
                     int prev = cur.netease_selected - 1;
+                    if (prev == 0 && !cur.top_left_query.empty()) {
+                        StateStore::instance().set_top_search_active(true, 0);
+                        return true;
+                    }
                     if (prev >= -1)
                         StateStore::instance().set_netease_selected(prev);
                 }
