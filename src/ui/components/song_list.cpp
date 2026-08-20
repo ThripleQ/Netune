@@ -242,45 +242,26 @@ Element render_song_list(const AppState &s) {
             shown_rows++;
             bool sel = ((int)i == s.selected_index);
 
-            /* Markers are appended at the END of the row (▣/◆ are
-               East-Asian-ambiguous glyphs — under zh_CN locales they
-               measure 2 columns and would misalign titles if used as a
-               prefix). Tail markers never affect title alignment. */
+            /* Whole-row background markers: VIP / playlist rows tint the
+               row background (marker color darkened) — no glyphs, so no
+               width/alignment issues. The selected row uses the normal
+               selection background instead. */
             std::string title = (song.title && song.title[0]) ? song.title : "(unknown)";
-            Element line;
-            if (song.is_playlist) {
-                line = hbox({
-                    text(title),
-                    theme_playlist(text(" \u2014 \u6B4C\u5355")),  /* — 歌单 */
-                });
-            } else {
-                Element songrow = text(title);
-                if (song.artist && song.artist[0])
-                    songrow = hbox({songrow,
-                                    text(std::string(" \u2014 ") + song.artist)});
-                if (song.fee == 1)
-                    songrow = hbox({songrow, theme_vip(text(" \u25C6"))});  /* ◆ */
-                line = songrow;
-            }
+            Element line = text(title);
+            if (song.artist && song.artist[0])
+                line = hbox({line, text(std::string(" \u2014 ") + song.artist)});
 
             bool scroll = (s.active_panel == 1 && sel && !s.top_search_active);
             if (scroll) {
-                /* marquee: rebuild as plain text for scrolling */
-                std::string content;
-                if (song.is_playlist) content = title + " \u2014 歌单";
-                else {
-                    content = title;
-                    if (song.artist && song.artist[0])
-                        content += std::string(" \u2014 ") + song.artist;
-                    if (song.fee == 1) content += " \u25C6";
-                }
+                std::string content = title;
+                if (song.artist && song.artist[0])
+                    content += std::string(" \u2014 ") + song.artist;
                 line = text(build_info_row(content, avail_w, true));
             }
 
             if (sel) {
                 if (s.active_panel == 1 && !s.top_search_active) {
-                    /* selection background over the whole row, but keep
-                       the marker colors (outer color would override) */
+                    /* selection background over the whole row */
                     auto &th = ThemeManager::instance().current();
                     Color sel_bg = th.accent_bg.has_color
                         ? Color::RGB(th.accent_bg.r, th.accent_bg.g, th.accent_bg.b)
@@ -293,7 +274,12 @@ Element render_song_list(const AppState &s) {
                     els.push_back(theme_fg(hbox({text("  "), line}) | bold | focus));
                 }
             } else {
-                els.push_back(theme_fg(hbox({text("  "), line})));
+                Element row = hbox({text("  "), line});
+                if (song.is_playlist)
+                    row = theme_playlist_bg(row);
+                else if (song.fee == 1)
+                    row = theme_vip_bg(row);
+                els.push_back(theme_fg(row));
             }
         }
         if (shown_rows == 0 && !filter_q.empty())

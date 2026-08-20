@@ -77,6 +77,44 @@ Element theme_playlist(Element e) {
     return e | color(pick_playlist(ThemeManager::instance().current()));
 }
 
+/* ── Background markers (whole-row) ───────────────────
+   VIP/playlist rows tint the row background with the marker color.
+   Dark themes: darken the marker so bright text stays readable.
+   Light themes: lighten it (text is dark there). */
+static ThemeColor scale_tc(const ThemeColor &c, float t, bool toward_white) {
+    ThemeColor out = c;
+    if (toward_white) {
+        out.r = (uint8_t)(c.r + (255 - c.r) * t);
+        out.g = (uint8_t)(c.g + (255 - c.g) * t);
+        out.b = (uint8_t)(c.b + (255 - c.b) * t);
+    } else {
+        out.r = (uint8_t)(c.r * (1.0f - t));
+        out.g = (uint8_t)(c.g * (1.0f - t));
+        out.b = (uint8_t)(c.b * (1.0f - t));
+    }
+    out.has_color = true;
+    return out;
+}
+
+static bool theme_bg_is_light(const Theme &t) {
+    if (!t.bg.has_color) return false;
+    return (t.bg.r + t.bg.g + t.bg.b) / 3 >= 128;
+}
+
+Element theme_vip_bg(Element e) {
+    auto &t = ThemeManager::instance().current();
+    ThemeColor c = t.vip.has_color ? t.vip : t.warning;
+    c = scale_tc(c, 0.45f, theme_bg_is_light(t));
+    return e | bgcolor(Color::RGB(c.r, c.g, c.b));
+}
+
+Element theme_playlist_bg(Element e) {
+    auto &t = ThemeManager::instance().current();
+    ThemeColor c = t.playlist.has_color ? t.playlist : t.accent;
+    c = scale_tc(c, 0.45f, theme_bg_is_light(t));
+    return e | bgcolor(Color::RGB(c.r, c.g, c.b));
+}
+
 /* ── Extended semantic colors ──────────────────────── */
 
 /* Selection: sets both bgcolor (accent_bg) and color (fg) */
