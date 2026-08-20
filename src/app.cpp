@@ -1259,7 +1259,7 @@ static const char *DEFAULT_KEYBINDINGS_YAML =
     "  seek_backward:  [\"left\"]\n"
     "  volume_up:     [\"+\", \"=\"]\n"
     "  volume_down:   [\"-\"]\n"
-    "  open_search:   [\"/\"]\n"
+    "  open_search:   [\"ctrl+/\"]\n"
     "  stop:          [\"s\"]\n"
     "  toggle_mute:   [\"m\"]\n"
     "  cycle_loop:    [\"r\"]\n"
