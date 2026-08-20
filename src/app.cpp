@@ -2194,14 +2194,13 @@ int run_app(int argc, char **argv) {
            panel list is intentionally NOT restored by nav_pop — its
            content is replaced only by newly loaded content. */
         if (ev_key == "escape" && !cur.search_active) {
-            /* Esc from the results list first goes BACK to the search
-               box (query kept) when a search/filter was active; the
-               second Esc restores the original list. */
+            /* Esc on a search-result/filtered list first goes back to
+               the search box (query kept) when a query is present; the
+               second Esc (box) restores the original list. */
             if (!cur.top_left_query.empty() ||
-                !cur.top_right_query.empty() ||
-                g_top_search_pushed) {
+                !cur.top_right_query.empty()) {
                 StateStore::instance().set_top_search_active(true,
-                    !cur.top_right_query.empty() || g_top_search_pushed ? 1 : 0);
+                    !cur.top_right_query.empty() ? 1 : 0);
                 return true;
             }
             if (!cur.nav_stack.empty()) {

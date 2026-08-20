@@ -19,7 +19,7 @@ Element render_group_list(const AppState &s) {
         bool any = false;
 
         if (q.empty()) {
-            bool netease_sel = (s.active_panel == 0 && s.group_index < 0);
+            bool netease_sel = (s.active_panel == 0 && s.group_index < 0 && !s.top_search_active);
             if (netease_sel)
                 els.push_back(theme_selection(text("> >> 网易云音乐") | bold | focus));
             else
@@ -33,7 +33,7 @@ Element render_group_list(const AppState &s) {
             std::string label = s.groups[i].name;
             bool sel = ((int)i == s.group_index);
 
-            if (s.active_panel == 0 && sel) {
+            if (s.active_panel == 0 && sel && !s.top_search_active) {
                 els.push_back(theme_selection(
                     hflow(paragraph("> " + label)) | bold | focus));
             } else if (s.active_panel == 1 && sel) {
@@ -50,7 +50,7 @@ Element render_group_list(const AppState &s) {
         const std::string &q = s.top_left_query;
 
         if (q.empty()) {
-            bool back_sel = (s.active_panel == 0 && s.netease_selected < 0);
+            bool back_sel = (s.active_panel == 0 && s.netease_selected < 0 && !s.top_search_active);
             if (back_sel)
                 els.push_back(theme_selection(text("> << 本地音乐") | bold | focus));
             else
@@ -66,7 +66,7 @@ Element render_group_list(const AppState &s) {
             std::string label = s.netease_menu[i].name;
             bool sel = ((int)i == s.netease_selected);
 
-            if (s.active_panel == 0 && sel) {
+            if (s.active_panel == 0 && sel && !s.top_search_active) {
                 els.push_back(theme_selection(
                     hflow(paragraph("> " + label)) | bold | focus));
             } else {

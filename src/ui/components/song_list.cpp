@@ -178,16 +178,17 @@ Element render_song_list(const AppState &s) {
     } else {
         /* ── Normal playlist display ─────────────────── */
 
-        /* top-right search box filters the current list (both modes) */
-        const std::string filter_q = s.top_right_query;
+        /* top-right search box filters the current list — filter mode
+           only (the API-search box never filters: results ARE the API
+           response, and its query is kept for memory) */
+        const std::string filter_q = s.top_search_api ? "" : s.top_right_query;
 
         /* Spinner during async load (overlaid on top of list below) */
 
         /* Empty-list hints (netease mode) */
         if (!s.loading && s.playlist.empty() && s.music_mode == MusicMode::Netease) {
-            if (!filter_q.empty()) {
+            if (!filter_q.empty() && s.top_search_api) {
                 els.push_back(theme_fg(text("  按 [Enter] 搜索网易云: " + filter_q)) | dim);
-                els.push_back(theme_fg(text("  (缓存命中则自动返回)")) | dim);
             }
         }
 
