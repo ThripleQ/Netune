@@ -135,7 +135,8 @@ Element render_song_list(const AppState &s) {
                 if (song.artist) haystack += std::string(" ") + song.artist;
                 std::transform(haystack.begin(), haystack.end(), haystack.begin(), ::tolower);
                 if (haystack.find(q) == std::string::npos) continue;
-                bool sel = ((int)i == s.selected_index && s.active_panel == 1);
+                bool sel = ((int)i == s.selected_index && s.active_panel == 1
+                            && !s.top_search_active);
                 std::string content;
                 if (song.title) content += song.title;
                 if (song.artist) content += std::string(" — ") + song.artist;
@@ -254,7 +255,7 @@ Element render_song_list(const AppState &s) {
             std::string row = build_info_row(content, avail_w, scroll);
 
             if (sel) {
-                if (s.active_panel == 1)
+                if (s.active_panel == 1 && !s.top_search_active)
                     els.push_back(theme_selection(text("> " + row) | focus));
                 else
                     els.push_back(theme_fg(text("  " + row) | bold | focus));
