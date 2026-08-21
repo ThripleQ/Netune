@@ -196,6 +196,11 @@ static std::string event_to_key_name(const ftxui::Event &event) {
 /* ── Seek accumulation ────────────────────────────── */
 /* Press: accumulate. Release (>150ms idle): fire once. */
 static int g_seek_accum = 0;
+/* Baseline terminal size for disambiguating resize signals
+   (ftxui routes SIGWINCH as Event::Special({0}), the same bytes as a
+   real Ctrl+/ on some terminals). Seeded at startup so the FIRST
+   resize after launch is also recognized as a resize. */
+static int g_resize_w = -1, g_resize_h = -1;
 static int g_seek_target = -1;   /* seek destination (sec), -1 = none; cleared when progress reaches target */
 static std::chrono::steady_clock::time_point g_last_seek_tp;
 
@@ -1850,18 +1855,16 @@ int run_app(int argc, char **argv) {
            ftxui routes SIGWINCH as Event::Special({0}) — the SAME bytes
            as a real Ctrl+/ on some terminals. Disambiguate by checking
            whether the terminal size actually changed since the last
-           event; if so this is a resize, swallow it (a real Ctrl+/
-           leaves the size untouched). */
+           known size (baseline seeded at startup); if so this is a
+           resize, swallow it (a real Ctrl+/ leaves the size untouched). */
         {
-            static int g_resize_w = -1, g_resize_h = -1;
             if (event.input().size() == 1 &&
                 (unsigned char)event.input()[0] == 0x00) {
                 auto tsz = Terminal::Size();
                 if (tsz.dimx != g_resize_w || tsz.dimy != g_resize_h) {
-                    bool first = (g_resize_w < 0);
                     g_resize_w = tsz.dimx;
                     g_resize_h = tsz.dimy;
-                    if (!first) return true;  /* swallow the resize signal */
+                    return true;  /* swallow the resize signal */
                 }
             }
         }
@@ -3004,6 +3007,11 @@ int run_app(int argc, char **argv) {
        terminal in alt-screen limbo */
     {
         ftxui::Loop loop(&screen, component);
+        /* seed the resize-detection baseline with the real size so the
+           FIRST resize after launch is recognized (and not mistaken for
+           Ctrl+/) */
+        g_resize_w = Terminal::Size().dimx;
+        g_resize_h = Terminal::Size().dimy;
         /* Raw-image cover overlay (kitty graphics protocol):
            - upload once per cover (fingerprinted inside term_gfx)
            - re-place IMMEDIATELY whenever the geometry changed (terminal
