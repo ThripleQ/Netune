@@ -163,6 +163,11 @@ int config_get_array_size(Config *cfg, const char *key) {
     return (int)yyjson_arr_size(v);
 }
 
+bool config_has(Config *cfg, const char *key) {
+    if (!cfg || !key) return false;
+    return resolve(cfg, key) != NULL;
+}
+
 /* ── Mutable access (set + persist) ─────────────────── */
 
 /* make an owned copy of a key that will be handed to the mutable tree */

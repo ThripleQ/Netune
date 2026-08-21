@@ -1539,6 +1539,15 @@ int run_app(int argc, char **argv) {
     if (!cfg) LOG_WARN("No config loaded, using defaults");
     config_set_global(cfg);
 
+    /* Backfill missing core sections (older configs / partial writes):
+       without music_sources the local source silently disables itself. */
+    if (cfg && !config_has(cfg, "music_sources")) {
+        LOG_WARN("config.json missing 'music_sources' — backfilling defaults");
+        config_set_str(cfg, "music_sources.local.enabled", "true");
+        config_set_str(cfg, "music_sources.netease.enabled", "true");
+        config_save(cfg);
+    }
+
     /* ── Cache (XDG_CACHE_HOME) ─────────────────────── */
     const char *cache_dir = xdg_dir("XDG_CACHE_HOME", NULL);
     ensure_dir(cache_dir);
