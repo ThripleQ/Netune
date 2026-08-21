@@ -300,6 +300,39 @@ Element render_song_list(const AppState &s) {
         }
         if (shown_rows == 0 && !filter_q.empty())
             els.push_back(theme_fg(text("  无匹配")) | dim);
+
+        if (!filter_q.empty() || s.search_active) {
+            /* filtered/search rows map 1:1 to visible lines — keep the
+               FTXUI frame auto-scroll for those modes */
+            auto list = theme_bg(vbox(std::move(els)) | vscroll_indicator | frame | flex | border);
+            if (s.loading)
+                return dbox({list, render_spinner(s) | center});
+            return list;
+        }
+
+        /* unfiltered list: manual viewport so mouse clicks can map to
+           rows. Clamp the offset to keep the selection visible, then
+           slice — content never exceeds the panel, so the frame
+           auto-scroll (which would fight the offset) stays inert. */
+        const int h = s.screen_height - 5;  /* top 1 + status 2 + borders 2 */
+        int n = (int)els.size();
+        int off = s.song_list_offset;
+        int sel = s.selected_index;
+        if (sel < 0) sel = 0;
+        if (sel >= off + h) off = sel - h + 1;
+        if (sel < off) off = sel;
+        if (off > n - h) off = n - h;
+        if (off < 0) off = 0;
+        if (off != s.song_list_offset)
+            StateStore::instance().set_song_list_offset(off);
+        Elements vis;
+        for (int i = off; i < off + h && i < n; i++)
+            vis.push_back(els[i]);
+        auto list = theme_bg(vbox(std::move(vis)) | vscroll_indicator | frame | flex | border);
+        if (s.loading) {
+            return dbox({list, render_spinner(s) | center});
+        }
+        return list;
     }
 
     auto list = theme_bg(vbox(std::move(els)) | vscroll_indicator | frame | flex | border);

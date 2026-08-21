@@ -552,6 +552,16 @@ void StateStore::set_screen_height(int rows) {
     state_.screen_height = rows;
 }
 
+void StateStore::set_song_list_offset(int rows) {
+    if (rows < 0) rows = 0;
+    state_.song_list_offset = rows;
+}
+
+void StateStore::set_menu_list_offset(int rows) {
+    if (rows < 0) rows = 0;
+    state_.menu_list_offset = rows;
+}
+
 void StateStore::set_spectrum(const float *bands) {
     /* dispatched on main thread via event_bus_poll */
     if (bands)

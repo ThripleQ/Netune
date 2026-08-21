@@ -2050,6 +2050,82 @@ int run_app(int argc, char **argv) {
             }
         }
 
+        /* ── Mouse: click to select row / wheel to scroll ── */
+        if (event.is_mouse()) {
+            const AppState &st = state.state();
+            if (st.login_state != 0 || st.show_help || st.lyric_mode)
+                return true;  /* overlays: ignore the mouse */
+            auto &m = event.mouse();
+            /* Wheel: move the selection in the panel under the cursor */
+            if (m.button == ftxui::Mouse::WheelUp ||
+                m.button == ftxui::Mouse::WheelDown) {
+                int dir = (m.button == ftxui::Mouse::WheelUp) ? -1 : 1;
+                if (m.x >= 22) {
+                    /* right song panel */
+                    StateStore::instance().set_active_panel(1);
+                    int n = (int)st.playlist.size();
+                    if (n > 0) {
+                        int idx = st.selected_index + dir;
+                        if (idx < 0) idx = 0;
+                        if (idx >= n) idx = n - 1;
+                        StateStore::instance().set_selected_index(idx);
+                    }
+                } else {
+                    /* left menu/groups panel */
+                    StateStore::instance().set_active_panel(0);
+                    if (st.music_mode == MusicMode::Local) {
+                        int n = (int)st.groups.size();
+                        if (n > 0) {
+                            int idx = st.group_index + dir;
+                            if (idx < -1) idx = -1;
+                            if (idx >= n) idx = n - 1;
+                            StateStore::instance().set_group_index(idx);
+                        }
+                    } else {
+                        int n = (int)st.netease_menu.size();
+                        if (n > 0) {
+                            int idx = st.netease_selected + dir;
+                            if (idx < -1) idx = -1;
+                            if (idx >= n) idx = n - 1;
+                            StateStore::instance().set_netease_selected(idx);
+                        }
+                    }
+                }
+                return true;
+            }
+            if (m.button != ftxui::Mouse::Left ||
+                m.motion != ftxui::Mouse::Pressed)
+                return true;
+            if (m.y < 1 || m.y > st.screen_height - 3)
+                return true;  /* top/status bars */
+            if (m.x >= 22) {
+                /* right panel: row = y-2 (top bar 1 + border 1) + offset */
+                int row = (m.y - 2) + st.song_list_offset;
+                StateStore::instance().set_active_panel(1);
+                if (st.top_search_active)
+                    StateStore::instance().set_top_search_active(false, 0);
+                if (row >= 0 && row < (int)st.playlist.size()) {
+                    StateStore::instance().set_selected_index(row);
+                }
+            } else {
+                /* left menu: row 0 = nav entry, then menu items */
+                int row = m.y - 2;
+                StateStore::instance().set_active_panel(0);
+                if (st.music_mode == MusicMode::Local) {
+                    if (row == 0 && st.top_left_query.empty())
+                        StateStore::instance().set_group_index(-1);
+                    else if (row > 0 && row - 1 < (int)st.groups.size())
+                        StateStore::instance().set_group_index(row - 1);
+                } else {
+                    if (row == 0 && st.top_left_query.empty())
+                        StateStore::instance().set_netease_selected(-1);
+                    else if (row > 0 && row - 1 < (int)st.netease_menu.size())
+                        StateStore::instance().set_netease_selected(row - 1);
+                }
+            }
+            return true;
+        }
+
         /* ── Non-seek key → discard pending seek ── */
         if (g_seek_accum != 0 && event != ftxui::Event::ArrowLeft && event != ftxui::Event::ArrowRight) {
             g_seek_accum = 0;
