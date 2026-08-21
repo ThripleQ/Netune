@@ -725,6 +725,72 @@ int netease_subscribe_playlist(const char *pl_id, bool sub) {
     return code == 200 ? 0 : -1;
 }
 
+/* ── Playlist management ──────────────────────────── */
+/* Generic response-code checker for the *-cli JSON wrappers */
+static int cli_code_ok(char *j) {
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    long long code = root ? jget_int(root, "code") : 0;
+    yyjson_doc_free(doc);
+    return code == 200 ? 0 : -1;
+}
+
+int netease_track_add(const char *pl_id, const char *song_id) {
+    char *e1 = shell_escape(pl_id);
+    char *e2 = shell_escape(song_id);
+    char *j = run("%s track-add %s %s%s", CLI, e1, e2, STDERR_REDIRECT);
+    free(e1); free(e2);
+    return cli_code_ok(j);
+}
+
+int netease_track_remove(const char *pl_id, const char *song_id) {
+    char *e1 = shell_escape(pl_id);
+    char *e2 = shell_escape(song_id);
+    char *j = run("%s track-del %s %s%s", CLI, e1, e2, STDERR_REDIRECT);
+    free(e1); free(e2);
+    return cli_code_ok(j);
+}
+
+int netease_playlist_create(const char *name, char *new_id, size_t id_sz) {
+    if (new_id && id_sz) new_id[0] = 0;
+    char *esc = shell_escape(name);
+    char *j = run("%s playlist-create %s%s", CLI, esc, STDERR_REDIRECT);
+    free(esc);
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    long long code = root ? jget_int(root, "code") : 0;
+    if (code == 200 && new_id && id_sz) {
+        yyjson_val *body = root ? jget_obj(root, "body") : NULL;
+        yyjson_val *pl = body ? jget_obj(body, "playlist") : NULL;
+        int64_t pid = pl ? jget_sint64(pl, "id") : 0;
+        if (pid > 0)
+            snprintf(new_id, id_sz, "%ld", (long)pid);
+    }
+    yyjson_doc_free(doc);
+    return code == 200 ? 0 : -1;
+}
+
+int netease_playlist_rename(const char *pl_id, const char *name) {
+    char *e1 = shell_escape(pl_id);
+    char *e2 = shell_escape(name);
+    char *j = run("%s playlist-rename %s %s%s", CLI, e1, e2, STDERR_REDIRECT);
+    free(e1); free(e2);
+    return cli_code_ok(j);
+}
+
+int netease_playlist_delete(const char *pl_id) {
+    char *esc = shell_escape(pl_id);
+    char *j = run("%s playlist-delete %s%s", CLI, esc, STDERR_REDIRECT);
+    free(esc);
+    return cli_code_ok(j);
+}
+
 int netease_toplist(SongInfo **out, int *count) {
     char *j = run("%s toplist%s", CLI, STDERR_REDIRECT); if (!j) return -1;
     yyjson_doc *doc = yyjson_read(j, strlen(j), 0);

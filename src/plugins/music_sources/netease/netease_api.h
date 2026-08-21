@@ -45,6 +45,11 @@ int  netease_like_song(const char *song_id, bool like); /* 0 = ok */
 int  netease_liked_check(const char *song_id, bool *liked); /* 0 = ok, liked set */
 int  netease_subscribe_playlist(const char *pl_id, bool sub); /* 0 = ok */
 int  netease_toplist(SongInfo **out, int *count);       /* chart list */
+int  netease_track_add(const char *pl_id, const char *song_id);   /* 0 = ok */
+int  netease_track_remove(const char *pl_id, const char *song_id);/* 0 = ok */
+int  netease_playlist_create(const char *name, char *new_id, size_t id_sz); /* 0 = ok */
+int  netease_playlist_rename(const char *pl_id, const char *name);   /* 0 = ok */
+int  netease_playlist_delete(const char *pl_id);                    /* 0 = ok */
 
 /* ── Play URL + Download ──────────────────────────── */
 /* Get streaming URL.                                      */
