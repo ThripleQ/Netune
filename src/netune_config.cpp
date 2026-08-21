@@ -68,9 +68,19 @@ static const ActionInfo kActions[] = {
 
 /* ── Key name conversion (mirrors app.cpp) ──────────── */
 static std::string event_to_key_name(const Event &event) {
+    /* Alt combos: terminal sends ESC + char (2 bytes) */
+    if (event.input().size() == 2 &&
+        (unsigned char)event.input()[0] == 0x1b &&
+        (unsigned char)event.input()[1] >= 32 &&
+        (unsigned char)event.input()[1] != 127) {
+        return "alt+" + event.input().substr(1, 1);
+    }
     if (event.input().size() == 1) {
         unsigned char c = (unsigned char)event.input()[0];
         if (c == 0x1f || c == 0x00) return "ctrl+/";
+        if (c == 0x1c) return "ctrl+\\";
+        if (c == 0x1d) return "ctrl+]";
+        if (c == 0x1e) return "ctrl+^";
     }
     if (event == Event::ArrowUp)        return "up";
     if (event == Event::ArrowDown)      return "down";
@@ -92,21 +102,17 @@ static std::string event_to_key_name(const Event &event) {
         std::string c = event.character();
         if (c.size() == 1 && (unsigned char)c[0] >= 32) {
             if (c == " ") return "space";
-            if (c == "+") return "+";
             return c;
         }
-        if (c.size() == 1 && (unsigned char)c[0] == 0x03) return "ctrl+c";
-        if (c.size() == 1 && (unsigned char)c[0] == 0x18) return "ctrl+x";
     }
     if (event.input().size() == 1) {
         unsigned char c = (unsigned char)event.input()[0];
-        if (c == 0x03) return "ctrl+c";
-        if (c == 0x18) return "ctrl+x";
         if (c >= 1 && c <= 26) {
             char buf[16];
             snprintf(buf, sizeof(buf), "ctrl+%c", 'a' + c - 1);
             return buf;
         }
+        if (c == 127) return "delete";
     }
     return "";
 }
@@ -236,9 +242,9 @@ int main() {
         /* right: section content */
         Elements right;
         if (th.capturing) {
-            right.push_back(text("  编辑按键: 按新键=绑定, 按已有键=取消") | bold);
+            right.push_back(text("  编辑按键: 按新键=绑定(支持 ctrl+/alt 组合), 已有键=取消") | bold);
             right.push_back(text("  当前: " + key_list_str(st.kb_map[st.kb_sel].second)));
-            right.push_back(text("  Enter 完成  ESC 取消") | dim);
+            right.push_back(text("  Backspace 删除最后一个  Enter 完成  ESC 取消") | dim);
         } else if (th.section == 0) {
             for (size_t i = 0; i < sizeof(kActions)/sizeof(kActions[0]); i++) {
                 bool sel = ((int)i == th.kb_sel);
@@ -298,6 +304,16 @@ int main() {
             }
             if (event == Event::Return || event.character() == "\r") {
                 st.capturing = false;  /* Enter: finish editing */
+                return true;
+            }
+            if (event == Event::Backspace) {
+                /* delete the last bound key, one at a time */
+                auto &keys = st.kb_map[st.kb_sel].second;
+                if (!keys.empty()) {
+                    st.notice = "已删除 " + keys.back();
+                    keys.pop_back();
+                    st.dirty_kb = true;
+                }
                 return true;
             }
             std::string k = event_to_key_name(event);

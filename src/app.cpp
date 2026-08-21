@@ -88,6 +88,13 @@ static volatile bool g_running = true;
    mouse, cursor updates, IME text (multi-byte UTF-8), etc.
    ──────────────────────────────────────────────────── */
 static std::string event_to_key_name(const ftxui::Event &event) {
+    /* Alt combos: terminal sends ESC + char (2 bytes) */
+    if (event.input().size() == 2 &&
+        (unsigned char)event.input()[0] == 0x1b &&
+        (unsigned char)event.input()[1] >= 32 &&
+        (unsigned char)event.input()[1] != 127) {
+        return "alt+" + event.input().substr(1, 1);
+    }
     /* ── Special events (C0 control chars) ──
        ftxui routes every byte < 0x20 to Event::Special; Ctrl+/ is
        US (0x1f) or NUL (0x00) depending on the terminal. */
@@ -95,6 +102,12 @@ static std::string event_to_key_name(const ftxui::Event &event) {
         unsigned char c = (unsigned char)event.input()[0];
         if (c == 0x1f || c == 0x00)
             return "ctrl+/";
+        if (c == 0x1c)
+            return "ctrl+\\";
+        if (c == 0x1d)
+            return "ctrl+]";
+        if (c == 0x1e)
+            return "ctrl+^";
     }
     /* ── Navigation / editing keys ── */
     if (event == ftxui::Event::ArrowUp)        return "up";
