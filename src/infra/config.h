@@ -30,6 +30,7 @@ int         config_get_array_size(Config *cfg, const char *key);
    config_save() writes it back to the file it was loaded from. Returns
    false on failure (e.g. NULL cfg). */
 bool        config_set_int(Config *cfg, const char *key, int value);
+bool        config_set_str(Config *cfg, const char *key, const char *value);
 bool        config_save(Config *cfg);
 
 

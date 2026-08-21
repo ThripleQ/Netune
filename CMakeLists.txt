@@ -344,6 +344,28 @@ set(ALL_SOURCES
 # ── Executable ───────────────────────────────────────
 add_executable(netune ${ALL_SOURCES})
 
+add_executable(netune-config
+  src/netune_config.cpp
+  src/infra/config.c
+  src/infra/path.c
+  src/infra/log.c
+  src/ui/keybindings.cpp
+)
+
+target_include_directories(netune-config PRIVATE src)
+if(NOT WIN32)
+  target_compile_definitions(netune-config PRIVATE _GNU_SOURCE)
+endif()
+
+target_link_libraries(netune-config PRIVATE
+  ftxui::screen
+  ftxui::dom
+  ftxui::component
+  yyjson::yyjson
+  PkgConfig::YAML
+  Threads::Threads
+)
+
 target_include_directories(netune PRIVATE src)
 if(NOT WIN32)
   target_compile_definitions(netune PRIVATE _GNU_SOURCE)
