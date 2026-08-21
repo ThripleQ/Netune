@@ -59,7 +59,7 @@ Element render_action_sheet(const AppState &s) {
                 if ((int)i == s.action_sheet_selected)
                     body.push_back(hbox({theme_selection(text(" \u203A ")), row | bold}) | focus);
                 else
-                    body.push_back(row);
+                    body.push_back(hbox({text("   "), row}));
             }
         }
     } else if (s.action_sheet_menu == 2) {
