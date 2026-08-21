@@ -1704,7 +1704,13 @@ int run_app(int argc, char **argv) {
             int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open)
                       ? 33 : 200;
 #else
-            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open)
+            /* marquee-scrolling selected row needs smooth frames even
+               when idle — otherwise the 130ms/column scroll jumps 1-2
+               columns per 200ms idle frame (visible stutter) */
+            bool marquee_row = (st.active_panel == 1 &&
+                                !st.playlist.empty() &&
+                                !st.top_search_active);
+            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open || marquee_row)
                       ? 16 : 200;
 #endif
             std::this_thread::sleep_for(std::chrono::milliseconds(ms));
