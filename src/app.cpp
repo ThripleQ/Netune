@@ -1961,10 +1961,12 @@ int run_app(int argc, char **argv) {
                        (playlist: 0 subscribe, 1 rename, 2 delete;
                         song:     0 like,    1 add-to-playlist, 2 remove) */
                     bool is_pl = item.is_playlist;
+                    /* active<0 = state query still in flight: treat as
+                       inactive (idempotent on the API side) */
                     bool active = as.action_sheet_active == 1;
                     bool in_own = !as.current_playlist_id.empty();
                     int idx = as.action_sheet_selected;
-                    if (id.empty() || as.action_sheet_active < 0) return true;
+                    if (id.empty()) return true;
                     if (is_pl) {
                         if (idx == 0) {
                             /* subscribe/unsubscribe */
@@ -2759,14 +2761,20 @@ int run_app(int argc, char **argv) {
                                         active = 1; break;
                                     }
                                 }
-                                if (active < 0) active = 0;
                                 for (int i = 0; i < pc; i++) song_info_free(&pls[i]);
                                 free(pls);
+                                if (active < 0) active = 0;
+                            } else {
+                                /* no subscribed playlists (or fetch failed):
+                                   treat as not subscribed so actions work */
+                                active = 0;
                             }
                         } else {
                             bool liked = false;
                             if (netease_liked_check(id.c_str(), &liked) == 0)
                                 active = liked ? 1 : 0;
+                            else
+                                active = 0;  /* default: not liked */
                         }
                         StateStore::instance().set_action_sheet_active(active);
                     }).detach();
