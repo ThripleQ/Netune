@@ -90,6 +90,13 @@ Element render_action_sheet(const AppState &s) {
                                  : Color::RGB(0, 0, 0))
       | color(Color::RGB(th.accent.r, th.accent.g, th.accent.b));
 
+    /* Cap the width to the song panel: an over-wide row (long titles)
+       would otherwise overflow the panel, break the right alignment
+       and leave the border columns misplaced (stray vertical lines). */
+    int max_w = s.top_row_width - 24;
+    if (max_w < 40) max_w = 40;
+    box = box | size(WIDTH, LESS_THAN, max_w - 1);
+
     /* Bottom-right of the song-list panel: the popup's bottom edge
        lands on the panel border's bottom row (y = H-3) so its border
        corner meets the list's border corner seamlessly. */
@@ -118,6 +125,9 @@ Element render_song_detail(const AppState &s) {
       | bgcolor(th.bg.has_color ? Color::RGB(th.bg.r, th.bg.g, th.bg.b)
                                  : Color::RGB(0, 0, 0))
       | color(Color::RGB(th.accent.r, th.accent.g, th.accent.b));
+    int max_w = s.top_row_width - 24;
+    if (max_w < 40) max_w = 40;
+    box = box | size(WIDTH, LESS_THAN, max_w - 1);
     int n = s.screen_height - 4;
     if (n < 3) n = 3;
     return vbox({filler(), hbox({filler(), box})})
