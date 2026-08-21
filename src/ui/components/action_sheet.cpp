@@ -90,7 +90,13 @@ Element render_action_sheet(const AppState &s) {
                                  : Color::RGB(0, 0, 0))
       | color(Color::RGB(th.accent.r, th.accent.g, th.accent.b));
 
-    return vbox({filler(), hbox({filler(), box})});
+    /* Bottom-right of the song-list panel: the popup's bottom edge
+       lands on the panel border's bottom row (y = H-3) so its border
+       corner meets the list's border corner seamlessly. */
+    int n = s.screen_height - 4;
+    if (n < 3) n = 3;
+    return vbox({filler(), hbox({filler(), box})})
+        | size(HEIGHT, LESS_THAN, n);
 }
 
 /* ── Song detail popup (key d) ───────────────────────── */
@@ -112,5 +118,8 @@ Element render_song_detail(const AppState &s) {
       | bgcolor(th.bg.has_color ? Color::RGB(th.bg.r, th.bg.g, th.bg.b)
                                  : Color::RGB(0, 0, 0))
       | color(Color::RGB(th.accent.r, th.accent.g, th.accent.b));
-    return vbox({filler(), hbox({filler(), box})});
+    int n = s.screen_height - 4;
+    if (n < 3) n = 3;
+    return vbox({filler(), hbox({filler(), box})})
+        | size(HEIGHT, LESS_THAN, n);
 }
