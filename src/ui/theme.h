@@ -32,6 +32,7 @@ struct Theme {
     ThemeColor error;         /* error / important          */
     ThemeColor vip;           /* VIP (◆) marker color       */
     ThemeColor playlist;      /* playlist (▣) marker color  */
+    ThemeColor logo;          /* netease logo watermark     */
     ThemeColor overlay_bg;    /* overlay/popup background   */
     ThemeColor spectrum;      /* spectrum visualization     */
 };

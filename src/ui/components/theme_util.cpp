@@ -77,6 +77,19 @@ Element theme_playlist(Element e) {
     return e | color(pick_playlist(ThemeManager::instance().current()));
 }
 
+Element theme_logo(Element e) {
+    auto &t = ThemeManager::instance().current();
+    ThemeColor c = t.logo.has_color ? t.logo : t.accent;
+    return e | color(Color::RGB(c.r, c.g, c.b));
+}
+
+Element theme_border(Element e) {
+    auto &t = ThemeManager::instance().current();
+    if (t.border.has_color)
+        return e | color(Color::RGB(t.border.r, t.border.g, t.border.b));
+    return e;
+}
+
 /* ── Background markers (whole-row) ───────────────────
    VIP/playlist rows tint the row background with the marker color.
    Dark themes: darken the marker so bright text stays readable.

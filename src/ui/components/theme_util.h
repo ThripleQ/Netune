@@ -15,6 +15,9 @@ Element theme_accent(Element e);
 /* Selection: sets bgcolor (accent_bg) and text color (fg) */
 Element theme_selection(Element e);
 
+/* Border / divider lines color (applied outermost) */
+Element theme_border(Element e);
+
 /* Progress bar unfilled track background */
 Element theme_progress_track(Element e);
 
@@ -26,6 +29,9 @@ Element theme_vip(Element e);
 
 /* Playlist (▣) marker color */
 Element theme_playlist(Element e);
+
+/* Netease logo watermark color */
+Element theme_logo(Element e);
 
 /* Whole-row background markers (darkened marker color) */
 Element theme_vip_bg(Element e);

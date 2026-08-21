@@ -68,6 +68,7 @@ static const ThemeSlotInfo kSlots[] = {
     {"频谱",      "spectrum",        &Theme::spectrum},
     {"VIP 标记",  "vip",             &Theme::vip},
     {"歌单标记",   "playlist",        &Theme::playlist},
+    {"网易云Logo", "logo",            &Theme::logo},
 };
 
 /* ── Key name display (raw config strings → pretty names) ── */
@@ -165,7 +166,7 @@ Element render_help_screen(const AppState &s, const KeybindingManager &kb) {
     return vbox(Elements{
         filler(),
         theme_accent(text(" Help ") | bold),
-        body | border,
+        theme_border(body | border),
         text(" 按 ? 或 Esc 关闭 ") | dim | center,
         filler(),
     }) | yframe | flex |

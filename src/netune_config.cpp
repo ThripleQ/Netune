@@ -141,6 +141,7 @@ static const ColorSlot kSlots[] = {
     {"spectrum",       "频谱",      &Theme::spectrum},
     {"vip",            "VIP 标记",  &Theme::vip},
     {"playlist",       "歌单标记",  &Theme::playlist},
+    {"logo",           "网易云Logo", &Theme::logo},
 };
 
 /* ── Preset palette (16 colors) ─────────────────────── */
@@ -419,6 +420,9 @@ static const char *kThemeTemplate =
     "  success: \"#9ece6a\"\n"
     "  warning: \"#e0af68\"\n"
     "  error: \"#f7768e\"\n"
+    "  vip: \"#e0af68\"\n"
+    "  playlist: \"#7dcfff\"\n"
+    "  logo: \"#7dcfff\"\n"
     "  overlay_bg: \"#16161e\"\n";
 
 /* default layout template (matches app.cpp DEFAULT_LAYOUT_YAML) */

@@ -128,6 +128,10 @@ void ThemeManager::derive_colors() {
     if (!theme_.playlist.has_color)
         theme_.playlist = theme_.accent;
 
+    /* logo: netease logo watermark (defaults to accent) */
+    if (!theme_.logo.has_color && theme_.accent.has_color)
+        theme_.logo = theme_.accent;
+
     /* overlay_bg: slightly lighter than bg */
     if (!theme_.overlay_bg.has_color && theme_.bg.has_color)
         theme_.overlay_bg = lighten(theme_.bg, 0.06f);
@@ -188,7 +192,7 @@ bool ThemeManager::load(const std::string &yaml_path) {
         std::string hex_bg, hex_fg, hex_accent;
         std::string hex_accent_bg, hex_muted, hex_border;
         std::string hex_success, hex_warning, hex_error, hex_overlay_bg, hex_spectrum;
-        std::string hex_vip, hex_playlist;
+        std::string hex_vip, hex_playlist, hex_logo;
         std::string hex_progress_track;
         std::string current_field;
 
@@ -217,6 +221,7 @@ bool ThemeManager::load(const std::string &yaml_path) {
                         else if (current_field == "spectrum")    hex_spectrum    = val;
                         else if (current_field == "vip")         hex_vip         = val;
                         else if (current_field == "playlist")    hex_playlist    = val;
+                        else if (current_field == "logo")         hex_logo        = val;
                         current_field.clear();
                     }
                 } else if (strcmp(val, "name") == 0) {
@@ -249,6 +254,7 @@ bool ThemeManager::load(const std::string &yaml_path) {
         if (!hex_spectrum.empty())    theme_.spectrum    = theme_color_from_hex(hex_spectrum);
         if (!hex_vip.empty())         theme_.vip         = theme_color_from_hex(hex_vip);
         if (!hex_playlist.empty())    theme_.playlist    = theme_color_from_hex(hex_playlist);
+        if (!hex_logo.empty())        theme_.logo        = theme_color_from_hex(hex_logo);
 
         /* Derive any unset extended colors */
         derive_colors();

@@ -228,7 +228,7 @@ Element render_song_list(const AppState &s) {
 
             Elements logo_els;
             for (int i = 0; i < logo_rows; i++)
-                logo_els.push_back(theme_accent(text(logo[i])));
+                logo_els.push_back(theme_logo(text(logo[i])));
 
             /* Center horizontally (adapts to actual panel width) and vertically */
             els.push_back(filler());
@@ -310,7 +310,7 @@ Element render_song_list(const AppState &s) {
         if (!filter_q.empty() || s.search_active) {
             /* filtered/search rows map 1:1 to visible lines — keep the
                FTXUI frame auto-scroll for those modes */
-            auto list = theme_bg(vbox(std::move(els)) | vscroll_indicator | yframe | flex | border);
+            auto list = theme_border(theme_bg(vbox(std::move(els)) | vscroll_indicator | yframe | flex | border));
             if (s.loading)
                 return dbox({list, render_spinner(s) | center});
             return list;
@@ -334,14 +334,14 @@ Element render_song_list(const AppState &s) {
         Elements vis;
         for (int i = off; i < off + h && i < n; i++)
             vis.push_back(els[i]);
-        auto list = theme_bg(vbox(std::move(vis)) | vscroll_indicator | yframe | flex | border);
+        auto list = theme_border(theme_bg(vbox(std::move(vis)) | vscroll_indicator | yframe | flex | border));
         if (s.loading) {
             return dbox({list, render_spinner(s) | center});
         }
         return list;
     }
 
-    auto list = theme_bg(vbox(std::move(els)) | vscroll_indicator | yframe | flex | border);
+    auto list = theme_border(theme_bg(vbox(std::move(els)) | vscroll_indicator | yframe | flex | border));
     if (s.loading) {
         /* Overlay spinner on top of list so it's visible even when scrolled */
         return dbox({list, render_spinner(s) | center});
