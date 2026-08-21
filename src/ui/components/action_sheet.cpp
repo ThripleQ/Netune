@@ -93,3 +93,26 @@ Element render_action_sheet(const AppState &s) {
 
     return vbox({filler(), hbox({filler(), box})});
 }
+
+/* ── Song detail popup (key d) ───────────────────────── */
+Element render_song_detail(const AppState &s) {
+    if (!s.song_detail_open) return text("");
+    auto &th = ThemeManager::instance().current();
+    Elements body;
+    for (const auto &l : s.song_detail_lines) {
+        if (!l.empty() && l[0] == '\t')
+            body.push_back(text(l.substr(1)) | color(Color::RGB(255,255,255)));
+        else
+            body.push_back(text(l));
+    }
+    auto box = vbox({
+        text(" \u6B4C\u66F2\u8BE6\u60C5 ") | bold,   /* 歌曲详情 */
+        separator(),
+        vbox(std::move(body)),
+        separator(),
+        text(" Enter/Esc \u5173\u95ED ") | dim,       /* 关闭 */
+    }) | borderRounded
+      | bgcolor(Color::RGB(0, 0, 0))
+      | color(Color::RGB(th.accent.r, th.accent.g, th.accent.b));
+    return vbox({filler(), hbox({filler(), box})});
+}

@@ -1836,11 +1836,27 @@ int run_app(int argc, char **argv) {
             /* Ctrl+X action sheet overlays the normal UI */
             return dbox({main, render_action_sheet(s)});
         }
+        if (s.song_detail_open) {
+            /* song detail popup (key d) */
+            return dbox({main, render_song_detail(s)});
+        }
 
         return main;
     });
 
     component |= CatchEvent([&](ftxui::Event event) -> bool {
+        /* ── Song detail popup: Esc/Enter close ── */
+        if (state.state().song_detail_open) {
+            std::string k2;
+            if (event.is_character()) k2 = event.character();
+            else k2 = event_to_key_name(event);
+            if (k2 == "escape" || k2 == "enter" || k2 == "\r") {
+                StateStore::instance().set_song_detail(false, {});
+                return true;
+            }
+            return true;  /* swallow all keys while open */
+        }
+
         /* ── Action sheet (Ctrl+X) modal state machine ── */
         {
             const AppState &as = state.state();
@@ -2788,6 +2804,46 @@ int run_app(int argc, char **argv) {
                 }
             }
             return true;
+
+        case Action::ShowSongDetail: {
+            /* popup with song metadata for the selected right-panel item */
+            if (cur.active_panel != 1 || cur.playlist.empty()) return true;
+            const auto &item = cur.playlist[cur.selected_index];
+            if (item.is_playlist) return true;  /* songs only */
+            std::string id = item.id ? item.id : "";
+            if (id.empty()) return true;
+            StateStore::instance().set_song_detail(true, {"  \u52A0\u8F7D\u4E2D..."});  /* 加载中... */
+            std::thread([id]() {
+                SongDetail d;
+                if (netease_song_detail(id.c_str(), &d) != 0) {
+                    StateStore::instance().set_song_detail(
+                        true, {"  \u83B7\u53D6\u5931\u8D25" });  /* 获取失败 */
+                    return;
+                }
+                std::vector<std::string> lines;
+                char buf[128];
+                std::string t = d.title ? d.title : "?";
+                std::string a = d.artist ? d.artist : "?";
+                std::string al = d.album ? d.album : "?";
+                lines.push_back("  \u6B4C\u66F2:  " + t);     /* 歌曲 */
+                lines.push_back("  \u6B4C\u624B:  " + a);     /* 歌手 */
+                lines.push_back("  \u4E13\u8F91:  " + al);    /* 专辑 */
+                int m = d.duration_sec / 60, s2 = d.duration_sec % 60;
+                snprintf(buf, sizeof(buf), "%d:%02d", m, s2);
+                lines.push_back("  \u65F6\u957F:  " + std::string(buf));  /* 时长 */
+                const char *fees[] = {"\u514D\u8D39", "\u4F1A\u5458", "\u4ED8\u8D39", "", "", "", "", "", "\u4F1A\u5458"};
+                const char *fee = (d.fee >= 0 && d.fee < 9) ? fees[d.fee] : "";
+                lines.push_back("  \u8D39\u7528:  " + std::string(fee ? fee : "?"));  /* 费用 */
+                if (d.publish) lines.push_back("  \u53D1\u884C:  " + std::string(d.publish));  /* 发行 */
+                if (d.pop >= 0) {
+                    snprintf(buf, sizeof(buf), "%d/100", d.pop);
+                    lines.push_back("  \u70ED\u5EA6:  " + std::string(buf));  /* 热度 */
+                }
+                song_detail_free(&d);
+                StateStore::instance().set_song_detail(true, lines);
+            }).detach();
+            return true;
+        }
 
         case Action::CycleLoop: {
             int next = ((int)cur.loop_mode + 1) % 4;

@@ -42,6 +42,7 @@ static const HelpEntry kMisc[] = {
     {Action::ToggleLyrics, "Toggle lyrics"},
     {Action::ShowHelp,     "Toggle this help"},
     {Action::ShowActions,  "Like song / subscribe playlist"},
+    {Action::ShowSongDetail, "Show song detail popup"},
     {Action::Quit,         "Quit"},
 };
 

@@ -355,6 +355,11 @@ void StateStore::set_detail_playlist_mine(bool v) {
     state_.detail_playlist_mine = v;
 }
 
+void StateStore::set_song_detail(bool open, const std::vector<std::string> &lines) {
+    state_.song_detail_open = open;
+    state_.song_detail_lines = lines;
+}
+
 void StateStore::set_loading(bool v) {
     state_.loading = v;
 }

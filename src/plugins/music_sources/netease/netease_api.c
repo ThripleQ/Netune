@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "compat/utf8.h"
 #ifndef _WIN32
 #include <unistd.h>
@@ -1008,4 +1009,82 @@ char* netease_download(const char *id, const char *url) {
     int rc = system(cmd);
     if (rc != 0) { remove_utf8(path); return NULL; }
     return strdup(path);
+}
+
+/* ── Song detail ────────────────────────────────────── */
+void song_detail_free(SongDetail *d) {
+    if (!d) return;
+    free(d->title);   d->title   = NULL;
+    free(d->artist);  d->artist  = NULL;
+    free(d->album);   d->album   = NULL;
+    free(d->publish); d->publish = NULL;
+    free(d->cover_url); d->cover_url = NULL;
+}
+
+int netease_song_detail(const char *song_id, SongDetail *out) {
+    if (!out) return -1;
+    memset(out, 0, sizeof(*out));
+    out->pop = -1;
+    char *esc = shell_escape(song_id);
+    char *j = run("%s song-detail %s%s", CLI, esc, STDERR_REDIRECT);
+    free(esc);
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *songs = root ? jget_arr(root, "songs") : NULL;
+    if (!songs || yyjson_arr_size(songs) < 1) {
+        yyjson_doc_free(doc);
+        return -1;
+    }
+    yyjson_val *v = yyjson_arr_get_first(songs);
+    const char *nm  = jget_str(v, "name");   out->title = nm  ? strdup(nm) : NULL;
+    yyjson_val *al  = jget_obj(v, "al");
+    const char *an  = al ? jget_str(al, "name") : NULL;
+    out->album = an ? strdup(an) : NULL;
+    const char *al_pic = al ? jget_str(al, "picUrl") : NULL;
+    out->cover_url = al_pic ? strdup(al_pic) : NULL;
+
+    /* artists joined with " / " */
+    yyjson_val *ar = jget_arr(v, "ar");
+    if (ar && yyjson_arr_size(ar) > 0) {
+        yyjson_arr_iter iter = yyjson_arr_iter_with(ar);
+        yyjson_val *a;
+        size_t len = 0;
+        while ((a = yyjson_arr_iter_next(&iter))) {
+            const char *n = jget_str(a, "name");
+            if (n) len += strlen(n) + 3;
+        }
+        char *buf = malloc(len + 1);
+        buf[0] = 0;
+        iter = yyjson_arr_iter_with(ar);
+        bool first = true;
+        while ((a = yyjson_arr_iter_next(&iter))) {
+            const char *n = jget_str(a, "name");
+            if (!n) continue;
+            if (!first) strcat(buf, " / ");
+            strcat(buf, n);
+            first = false;
+        }
+        out->artist = buf;
+    }
+    out->duration_sec = (int)(jget_sint64(v, "dt") / 1000);
+    out->fee = (int)jget_int(v, "fee");
+    yyjson_val *pv = yyjson_obj_get(v, "pop");
+    out->pop = pv ? (int)yyjson_get_real(pv) : -1;
+
+    /* publish time (ms epoch) → local YYYY-MM-DD */
+    int64_t pt = jget_sint64(v, "publishTime");
+    if (pt > 0) {
+        time_t t = (time_t)(pt / 1000);
+        struct tm tmv;
+        localtime_r(&t, &tmv);
+        char buf[32];
+        strftime(buf, sizeof(buf), "%Y-%m-%d", &tmv);
+        out->publish = strdup(buf);
+    }
+
+    yyjson_doc_free(doc);
+    return 0;
 }

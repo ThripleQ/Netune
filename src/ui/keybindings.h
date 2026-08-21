@@ -22,6 +22,7 @@ enum class Action {
     ToggleLyrics,
     ShowHelp,
     ShowActions,
+    ShowSongDetail,
     Quit,
 };
 
