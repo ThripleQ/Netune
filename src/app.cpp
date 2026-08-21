@@ -623,17 +623,23 @@ static void activate_netease_menu_item(int idx) {
             }
         }).detach();
 
-    } else if (type == 0 || type == 1 || type == 5) {
-        /* 每日推荐 (0, songs) / 推荐歌单 (1, playlists) / 排行榜 (5, playlists) */
-        if (!netease_is_logged_in() && type == 0) {
-            start_login();  /* daily recommends need a session */
+    } else if (type == 0 || type == 1 || type == 5 ||
+               type == 6 || type == 7) {
+        /* 每日推荐 (0, songs) / 推荐歌单 (1, playlists) / 排行榜 (5)
+           最近播放 (6, songs) / 每日歌单 (7, playlists) */
+        if (!netease_is_logged_in() &&
+            (type == 0 || type == 6 || type == 7)) {
+            start_login();  /* these need a session */
         } else {
             StateStore::instance().nav_push();
             StateStore::instance().set_loading(true);
             std::thread([type]() {
                 SongInfo *songs = NULL; int sc = 0;
-                int ret = (type == 5) ? netease_toplist(&songs, &sc)
-                                      : netease_menu_songs(type, 30, &songs, &sc);
+                int ret = -1;
+                if (type == 5)            ret = netease_toplist(&songs, &sc);
+                else if (type == 6)       ret = netease_recent_songs(&songs, &sc);
+                else if (type == 7)       ret = netease_daily_playlists(&songs, &sc);
+                else                      ret = netease_menu_songs(type, 30, &songs, &sc);
                 LOG_INFO("MENU SONGS: type=%d ret=%d count=%d", type, ret, sc);
                 LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
                 if (ret == 0 && sc > 0) {
@@ -642,7 +648,8 @@ static void activate_netease_menu_item(int idx) {
                     ld->songs = NULL; ld->count = 0;
                     free(songs);
                 }
-                EventType ev = (type == 1 || type == 5) ? EV_PLAYLIST_LIST_LOADED : EV_PLAYLIST_LOADED;
+                EventType ev = (type == 1 || type == 5 || type == 7)
+                    ? EV_PLAYLIST_LIST_LOADED : EV_PLAYLIST_LOADED;
                 if (event_bus_publish(ev, ld, sizeof(*ld)) != 0) {
                     if (ld->songs) {
                         for (int i = 0; i < ld->count; i++)
@@ -960,6 +967,22 @@ static void ev_playback_finish(const BusEvent *ev, void *data) {
     }
     const SongInfo *song = store.queue_current();
     LOG_INFO("ADV: next=%d path=%s", next,
+             (song && song->id) ? song->id : "null");
+    play_queue_index(next);
+}
+
+/* A track could not be played (no copyright / no stream URL) — auto
+   advance to the next track so listening isn't interrupted. */
+static void ev_playback_skip(const BusEvent *ev, void *data) {
+    (void)ev; (void)data;
+    auto &store = StateStore::instance();
+    int next = store.queue_advance();
+    if (next < 0) {
+        store.set_playback_state(PlaybackState::Stopped);
+        return;
+    }
+    const SongInfo *song = store.queue_current();
+    LOG_WARN("SKIP unplayable track, next=%d id=%s", next,
              (song && song->id) ? song->id : "null");
     play_queue_index(next);
 }
@@ -1492,6 +1515,7 @@ int run_app(int argc, char **argv) {
     event_bus_subscribe(EV_PLAYBACK_RESUME,   ev_playback_resume, NULL);
     event_bus_subscribe(EV_PLAYBACK_STOP,     ev_playback_stop, NULL);
     event_bus_subscribe(EV_PLAYBACK_FINISH,   ev_playback_finish, NULL);
+    event_bus_subscribe(EV_PLAYBACK_SKIP,     ev_playback_skip, NULL);
     event_bus_subscribe(EV_MPRIS_COMMAND,     ev_mpris_command, NULL);
         event_bus_subscribe(EV_PLAYLIST_LOADED, ev_playlist_loaded, NULL);
     event_bus_subscribe(EV_MENU_LOADED, ev_menu_loaded, NULL);

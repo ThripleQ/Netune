@@ -80,6 +80,44 @@ func main() {
 		_, body := s.Search()
 		output(body)
 
+	case "check-music":
+		// check-music <song_id> — 检测歌曲是否可播放(无版权/下架)
+		if len(os.Args) < 3 {
+			die("usage: netease-cli check-music <song_id>")
+		}
+		svc := service.CheckMusicService{ID: os.Args[2]}
+		_, body := svc.CheckMusic()
+		var raw map[string]interface{}
+		playable := false
+		if json.Unmarshal(body, &raw) == nil {
+			if code, ok := raw["code"].(float64); ok && int(code) == 200 {
+				if data, ok := raw["data"].([]interface{}); ok && len(data) > 0 {
+					if first, ok := data[0].(map[string]interface{}); ok {
+						if u, ok := first["url"].(string); ok && u != "" {
+							playable = true
+						}
+					}
+				}
+			}
+		}
+		output([]byte(fmt.Sprintf("{\"code\":200,\"playable\":%t}", playable)))
+
+	case "record-recent":
+		// record-recent [limit] — 最近播放的歌曲 (需登录)
+		limit := "100"
+		if len(os.Args) > 2 {
+			limit = os.Args[2]
+		}
+		svc := service.RecordRecentSongsService{Limit: limit}
+		_, body, _ := svc.RecordRecentSongs()
+		output(body)
+
+	case "recommend-resource":
+		// 每日推荐歌单
+		svc := service.RecommendResourceService{}
+		_, body := svc.RecommendResource()
+		output(body)
+
 	case "song-url":
 		if len(os.Args) < 3 {
 			die("usage: netease-cli song-url <id> [level]")
