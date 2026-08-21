@@ -515,8 +515,8 @@ int netease_check_music(const char *song_id, bool *playable) {
 }
 
 /* Recently played songs (api/play-record/song/list). Response shape:
-   {"code":200,"data":{"list":[{"song":{...}}, ...]}} — each entry may
-   hold the song under "song" or be the song object itself. */
+   {"code":200,"data":{"list":[{"resourceType":"SONG","data":{...song...}}, ...]}}
+   The song object sits in "data" (older API versions may use "song"). */
 int netease_recent_songs(SongInfo **out, int *count) {
     *out = NULL; *count = 0;
     char *j = run("%s record-recent%s", CLI, STDERR_REDIRECT);
@@ -538,7 +538,11 @@ int netease_recent_songs(SongInfo **out, int *count) {
     yyjson_val *v;
     while ((v = yyjson_arr_iter_next(&iter))) {
         if (!yyjson_is_obj(v)) continue;
-        yyjson_val *song = jget_obj(v, "song");
+        /* keep only song entries (skip albums/DJ/etc.) */
+        const char *rtype = jget_str(v, "resourceType");
+        if (rtype && strcmp(rtype, "SONG") != 0) continue;
+        yyjson_val *song = jget_obj(v, "data");
+        if (!song) song = jget_obj(v, "song");
         if (!song) song = v;  /* entry may be the song itself */
         if (!yyjson_is_obj(song)) continue;
         fill(&(*out)[oi], song);
