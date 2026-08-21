@@ -172,6 +172,10 @@ std::vector<std::string> ThemeManager::list_builtin_themes() {
     return names;
 }
 
+void ThemeManager::reset() {
+    theme_ = Theme{};
+}
+
 bool ThemeManager::load(const std::string &yaml_path) {
     FILE *fp = fopen_utf8(yaml_path.c_str(), "rb");
     if (fp) {

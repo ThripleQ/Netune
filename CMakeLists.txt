@@ -350,6 +350,7 @@ add_executable(netune-config
   src/infra/path.c
   src/infra/log.c
   src/ui/keybindings.cpp
+  src/ui/theme.cpp
 )
 
 target_include_directories(netune-config PRIVATE src)

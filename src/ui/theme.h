@@ -41,6 +41,7 @@ class ThemeManager {
 public:
     static ThemeManager& instance();
     bool load(const std::string &yaml_path);
+    void reset();  /* clear the loaded theme (for fresh reloads) */
     const Theme& current() const { return theme_; }
 
     /* Resolve a theme name to a file path.
