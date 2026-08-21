@@ -58,42 +58,55 @@ netune
 ## Features
 
 - Local MP3/FLAC/WAV playback
-- Netease Cloud Music (search, playlists, daily recommend)
-- Theme system with 5 presets
-- Fiter mode (`/`) and global search
-- Seek forward/backward (`←`/`→`)
-- Loop modes: Off / One / All (`l` key)
+- Netease Cloud Music: search, playlists, daily recommend, playlist management (create / favorite / rename / delete), song detail
+- Theme system: 15 color slots (bg / text / borders / spectrum / logo ...), 5 presets, slots can be "none" (terminal background shows through)
+- Filter mode (`/`) and global search
+- Seek (`←`/`→`), loop modes (`r`)
+- Mouse support: click to select, wheel to scroll
+- Lyrics mode (`l`)
 - ALSA, PulseAudio, SDL2 auto-detection
 - Navigation stack: `Esc` to go back
+- `netune-config`: config manager (theme editing / keybindings / local music dirs)
 
 ## Keybindings
+
+Full table: press `?` (reflects your current keybindings). Common:
 
 | Key | Action |
 |-----|--------|
 | `Tab` | Switch panel (groups / songs) |
-| `j / Down` | Move down |
-| `k / Up` | Move up |
+| `j / k` or `Down / Up` | Move |
 | `Enter` | Play selected |
 | `Space` | Play / Pause |
-| `n` | Next track |
-| `p` | Previous track |
-| `Right` | Seek forward |
-| `Left` | Seek backward |
-| `+ / =` | Volume up |
-| `-` | Volume down |
+| `n / p` | Next / Previous track |
+| `Right / Left` | Seek forward / backward |
+| `+ / -` | Volume up / down |
 | `r` | Cycle loop mode |
-| `l` | Toggle lyrics |
-| `m` | Toggle mute |
+| `l` | Lyrics |
+| `m` | Mute |
 | `s` | Stop playback |
 | `/` | Search |
-| `?` | Help |
-| `q / Esc` | Quit |
+| `?` | Help (press again or `Esc` to close) |
+| `Ctrl+X` | Actions popup (like / favorite / remove) |
+| `d` | Song detail |
+| `q` | Quit |
 
 ## Configuration
 
-Edit `data/config.json` (a custom path can also be specified at runtime):
+Config files live in `~/.config/netune/data/`:
 
-### Local Music
+- `config.json` — main config (local music dirs, theme, keybindings, playback)
+- `themes/*.yaml` — themes
+- `keybindings/default.yaml` — keybindings
+- `layouts/*.yaml` — layouts
+
+Use `netune-config` (built next to `netune`) for day-to-day config:
+
+```bash
+./build/netune-config
+```
+
+Five pages: Theme (`x` to edit color slots, `Enter` to apply), Keybindings (edit / apply), Local Music (`a` to add dirs), Main config, Playback (volume / loop / seek step). Or edit `config.json` directly:
 
 ```json
 "music_sources": {
@@ -104,29 +117,7 @@ Edit `data/config.json` (a custom path can also be specified at runtime):
 }
 ```
 
-`dirs` supports `~` and `$HOME` shell expansion. Leave empty to skip scanning entirely.
-
-### Theme
-
-```json
-"ui": {
-  "theme": "default"
-}
-```
-
-Options: `default`, `catppuccin`, `dracula`, `netease_dark`, `netease_light`.
-
-### Audio Backend
-
-```json
-"audio": {
-  "backend": "auto",
-  "sample_rate": 44100,
-  "volume": 80
-}
-```
-
-`backend`: `auto` | `alsa` | `pulseaudio` | `sdl`.
+`dirs` supports `~` expansion. Leave empty to skip scanning entirely.
 
 ## License
 
