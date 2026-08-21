@@ -257,6 +257,8 @@ void StateStore::set_music_mode(MusicMode mode) {
         state_.netease_menu = {
             {"\u626B\u7801\u767B\u5F55",   200, ""},        /* 扫码登录 */
             {"\u65E5\u5E38\u63A8\u8350",   0, ""},          /* 每日推荐 */
+            {"\u6BCF\u65E5\u6B4C\u5355",   7, ""},          /* 每日歌单 */
+            {"\u6700\u8FD1\u64AD\u653E",   6, ""},          /* 最近播放 */
             {"\u63A8\u8350\u6B4C\u5355",   1, ""},          /* 推荐歌单 */
             {"\u6211\u7684\u6B4C\u5355",   2, ""},          /* 我的歌单 */
             {"\u6536\u85CF\u6B4C\u5355",   3, ""},          /* 收藏歌单 */
@@ -316,6 +318,46 @@ void StateStore::set_action_sheet(bool open, int selected) {
 
 void StateStore::set_action_sheet_active(int active) {
     state_.action_sheet_active = active;
+}
+
+void StateStore::set_action_sheet_menu(int menu) {
+    state_.action_sheet_menu = menu;
+}
+
+void StateStore::set_action_sheet_opt_count(int n) {
+    state_.action_sheet_opt_count = n;
+}
+
+void StateStore::set_action_sheet_input(const std::string &text) {
+    state_.action_sheet_input = text;
+}
+
+void StateStore::set_action_sheet_ctx(const std::string &ctx) {
+    state_.action_sheet_ctx = ctx;
+}
+
+void StateStore::set_action_sheet_pls(const std::vector<SongInfo> &pls) {
+    for (auto &s : state_.action_sheet_pls)
+        song_info_free(&s);
+    state_.action_sheet_pls.clear();
+    for (auto &s : pls) {
+        SongInfo c = {};
+        song_info_copy(&c, &s);
+        state_.action_sheet_pls.push_back(c);
+    }
+}
+
+void StateStore::set_current_playlist_id(const std::string &id) {
+    state_.current_playlist_id = id;
+}
+
+void StateStore::set_detail_playlist_mine(bool v) {
+    state_.detail_playlist_mine = v;
+}
+
+void StateStore::set_song_detail(bool open, const std::vector<std::string> &lines) {
+    state_.song_detail_open = open;
+    state_.song_detail_lines = lines;
 }
 
 void StateStore::set_loading(bool v) {
@@ -508,6 +550,16 @@ void StateStore::set_top_row_width(int cols) {
 void StateStore::set_screen_height(int rows) {
     if (rows < 10) rows = 10;
     state_.screen_height = rows;
+}
+
+void StateStore::set_song_list_offset(int rows) {
+    if (rows < 0) rows = 0;
+    state_.song_list_offset = rows;
+}
+
+void StateStore::set_menu_list_offset(int rows) {
+    if (rows < 0) rows = 0;
+    state_.menu_list_offset = rows;
 }
 
 void StateStore::set_spectrum(const float *bands) {

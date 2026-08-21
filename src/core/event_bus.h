@@ -15,6 +15,7 @@ typedef enum {
     EV_PLAYBACK_STOP,
     EV_PLAYBACK_FINISH,
     EV_PLAYBACK_ERROR,
+    EV_PLAYBACK_SKIP,  /* song unplayable (no copyright/url) — auto next */
     EV_PROGRESS_UPDATE,
     EV_BUFFERING_UPDATE,
 

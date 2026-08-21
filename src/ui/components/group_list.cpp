@@ -77,5 +77,5 @@ Element render_group_list(const AppState &s) {
             els.push_back(theme_fg(text("  无匹配")) | dim);
     }
 
-    return theme_bg(vbox(std::move(els)) | frame | size(WIDTH, EQUAL, 22) | border);
+    return theme_border(theme_bg(vbox(std::move(els)) | yframe | size(WIDTH, EQUAL, 18) | border));
 }

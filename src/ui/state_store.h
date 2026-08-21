@@ -115,6 +115,18 @@ struct AppState {
     int  action_sheet_selected = 0;
     /* -1 = status querying, 0 = not liked/subscribed, 1 = liked/subscribed */
     int  action_sheet_active = -1;
+    /* state machine: 0=main menu, 1=playlist picker, 2=text input, 3=confirm */
+    int  action_sheet_menu = 0;
+    int  action_sheet_opt_count = 3;  /* number of options in menu 0 */
+    std::string action_sheet_input;   /* text input buffer */
+    std::string action_sheet_ctx;     /* operation context (song id / playlist id) */
+    std::vector<SongInfo> action_sheet_pls;  /* my playlists for the picker */
+
+    /* current playlist context (for "remove from this playlist") */
+    std::string current_playlist_id;
+    bool        detail_playlist_mine = false;  /* open playlist is user-owned */
+    bool        song_detail_open = false;      /* Song detail popup (key d) */
+    std::vector<std::string> song_detail_lines;
 
     /* spectrum */
     float spectrum[SPECTRUM_BANDS] = {0};
@@ -133,6 +145,8 @@ struct AppState {
 
     /* terminal height, updated per-frame (drives spectrum bar rows) */
     int  screen_height = 24;
+    int  song_list_offset = 0;   /* manual viewport top row (no filter) */
+    int  menu_list_offset = 0;
 
     /* top search row width: full terminal width, updated per-frame */
     int  top_row_width = 80;
@@ -186,6 +200,8 @@ public:
     void set_song_panel_width(int cols);
     void set_top_row_width(int cols);
     void set_screen_height(int rows);
+    void set_song_list_offset(int rows);
+    void set_menu_list_offset(int rows);
     void set_playlist(const std::vector<SongInfo> &list, int index);
     void set_selected_index(int idx);
     void set_loop_mode(LoopMode mode);
@@ -225,6 +241,14 @@ public:
     void set_show_help(bool show);
     void set_action_sheet(bool open, int selected);
     void set_action_sheet_active(int active);
+    void set_action_sheet_menu(int menu);
+    void set_action_sheet_opt_count(int n);
+    void set_action_sheet_input(const std::string &text);
+    void set_action_sheet_ctx(const std::string &ctx);
+    void set_action_sheet_pls(const std::vector<SongInfo> &pls);
+    void set_current_playlist_id(const std::string &id);
+    void set_detail_playlist_mine(bool v);
+    void set_song_detail(bool open, const std::vector<std::string> &lines);
 
     /* loading */
     void set_loading(bool v);

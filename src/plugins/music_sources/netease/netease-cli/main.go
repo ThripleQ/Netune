@@ -80,6 +80,44 @@ func main() {
 		_, body := s.Search()
 		output(body)
 
+	case "check-music":
+		// check-music <song_id> — 检测歌曲是否可播放(无版权/下架)
+		if len(os.Args) < 3 {
+			die("usage: netease-cli check-music <song_id>")
+		}
+		svc := service.CheckMusicService{ID: os.Args[2]}
+		_, body := svc.CheckMusic()
+		var raw map[string]interface{}
+		playable := false
+		if json.Unmarshal(body, &raw) == nil {
+			if code, ok := raw["code"].(float64); ok && int(code) == 200 {
+				if data, ok := raw["data"].([]interface{}); ok && len(data) > 0 {
+					if first, ok := data[0].(map[string]interface{}); ok {
+						if u, ok := first["url"].(string); ok && u != "" {
+							playable = true
+						}
+					}
+				}
+			}
+		}
+		output([]byte(fmt.Sprintf("{\"code\":200,\"playable\":%t}", playable)))
+
+	case "record-recent":
+		// record-recent [limit] — 最近播放的歌曲 (需登录)
+		limit := "100"
+		if len(os.Args) > 2 {
+			limit = os.Args[2]
+		}
+		svc := service.RecordRecentSongsService{Limit: limit}
+		_, body, _ := svc.RecordRecentSongs()
+		output(body)
+
+	case "recommend-resource":
+		// 每日推荐歌单
+		svc := service.RecommendResourceService{}
+		_, body := svc.RecommendResource()
+		output(body)
+
 	case "song-url":
 		if len(os.Args) < 3 {
 			die("usage: netease-cli song-url <id> [level]")
@@ -317,6 +355,52 @@ func main() {
 		}
 		svc := service.PlaylistSubscribeService{T: t, ID: os.Args[2]}
 		code, body := svc.PlaylistSubscribe()
+		output([]byte(fmt.Sprintf("{\"code\":%.0f,\"body\":%s}", code, string(body))))
+
+	case "track-add":
+		// track-add <playlist_id> <song_id> — 加歌到歌单
+		// (weapi/playlist/manipulate/tracks, trackIds=纯字符串数组 + imme)
+		if len(os.Args) < 4 {
+			die("usage: netease-cli track-add <playlist_id> <song_id>")
+		}
+		svc := service.PlaylistTracksService{Op: "add", Pid: os.Args[2], TrackIds: []string{os.Args[3]}}
+		code, body := svc.PlaylistTracks()
+		output([]byte(fmt.Sprintf("{\"code\":%.0f,\"body\":%s}", code, string(body))))
+
+	case "track-del":
+		// track-del <playlist_id> <song_id> — 从歌单移除歌曲
+		if len(os.Args) < 4 {
+			die("usage: netease-cli track-del <playlist_id> <song_id>")
+		}
+		svc := service.PlaylistTracksService{Op: "del", Pid: os.Args[2], TrackIds: []string{os.Args[3]}}
+		code, body := svc.PlaylistTracks()
+		output([]byte(fmt.Sprintf("{\"code\":%.0f,\"body\":%s}", code, string(body))))
+
+	case "playlist-create":
+		// playlist-create <name> — 新建歌单(公开)
+		if len(os.Args) < 3 {
+			die("usage: netease-cli playlist-create <name>")
+		}
+		svc := service.PlaylistCreateService{Name: os.Args[2], Privacy: "0"}
+		code, body := svc.PlaylistCreate()
+		output([]byte(fmt.Sprintf("{\"code\":%.0f,\"body\":%s}", code, string(body))))
+
+	case "playlist-rename":
+		// playlist-rename <playlist_id> <new_name>
+		if len(os.Args) < 4 {
+			die("usage: netease-cli playlist-rename <playlist_id> <new_name>")
+		}
+		svc := service.PlaylistNameUpdateService{Id: os.Args[2], Name: os.Args[3]}
+		code, body := svc.PlaylistNameUpdate()
+		output([]byte(fmt.Sprintf("{\"code\":%.0f,\"body\":%s}", code, string(body))))
+
+	case "playlist-delete":
+		// playlist-delete <playlist_id>
+		if len(os.Args) < 3 {
+			die("usage: netease-cli playlist-delete <playlist_id>")
+		}
+		svc := service.PlaylistDeleteService{ID: os.Args[2]}
+		code, body := svc.PlaylistDelete()
 		output([]byte(fmt.Sprintf("{\"code\":%.0f,\"body\":%s}", code, string(body))))
 
 	case "toplist":

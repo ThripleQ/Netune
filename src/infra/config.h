@@ -26,10 +26,18 @@ double      config_get_double(Config *cfg, const char *key, double fallback);
 /* array size */
 int         config_get_array_size(Config *cfg, const char *key);
 
+/* array append / remove (string arrays, e.g. music_sources.local.dirs) */
+bool        config_array_push_str(Config *cfg, const char *key, const char *value);
+bool        config_array_remove(Config *cfg, const char *key, int idx);
+
+/* key existence check (dotted path resolves to a non-null node) */
+bool        config_has(Config *cfg, const char *key);
+
 /* scalar write + persist. config_set_int() updates the in-memory config;
    config_save() writes it back to the file it was loaded from. Returns
    false on failure (e.g. NULL cfg). */
 bool        config_set_int(Config *cfg, const char *key, int value);
+bool        config_set_str(Config *cfg, const char *key, const char *value);
 bool        config_save(Config *cfg);
 
 

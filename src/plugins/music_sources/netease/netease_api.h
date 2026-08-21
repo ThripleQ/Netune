@@ -21,6 +21,9 @@ typedef struct { NSSong *songs; int count; } NSSearchResult;
 int  netease_search(const char *kw, int limit, int offset, NSSearchResult *out);
 void netease_search_free(NSSearchResult *r);
 int  netease_search_playlists(const char *kw, SongInfo **out, int *count); /* playlist results, is_playlist=1 */
+int  netease_check_music(const char *song_id, bool *playable); /* 0 = ok */
+int  netease_recent_songs(SongInfo **out, int *count);        /* recently played (needs login) */
+int  netease_daily_playlists(SongInfo **out, int *count);     /* daily recommend playlists */
 
 /* ── Login ─────────────────────────────────────────── */
 int  netease_qr_key(char *unikey, size_t uk_sz, char *url, size_t url_sz);
@@ -42,6 +45,24 @@ int  netease_like_song(const char *song_id, bool like); /* 0 = ok */
 int  netease_liked_check(const char *song_id, bool *liked); /* 0 = ok, liked set */
 int  netease_subscribe_playlist(const char *pl_id, bool sub); /* 0 = ok */
 int  netease_toplist(SongInfo **out, int *count);       /* chart list */
+/* ── Song detail ──────────────────────────────────── */
+typedef struct {
+    char *title;
+    char *artist;      /* joined artists */
+    char *album;
+    int   duration_sec;
+    int   fee;         /* 0 free, 1/8 vip, 4 paid */
+    char *publish;     /* YYYY-MM-DD (local) */
+    int   pop;         /* hotness 0..100, -1 unknown */
+    char *cover_url;
+} SongDetail;
+void song_detail_free(SongDetail *d);
+int  netease_song_detail(const char *song_id, SongDetail *out); /* 0 = ok */
+int  netease_track_add(const char *pl_id, const char *song_id);   /* 0 = ok */
+int  netease_track_remove(const char *pl_id, const char *song_id);/* 0 = ok */
+int  netease_playlist_create(const char *name, char *new_id, size_t id_sz); /* 0 = ok */
+int  netease_playlist_rename(const char *pl_id, const char *name);   /* 0 = ok */
+int  netease_playlist_delete(const char *pl_id);                    /* 0 = ok */
 
 /* ── Play URL + Download ──────────────────────────── */
 /* Get streaming URL.                                      */

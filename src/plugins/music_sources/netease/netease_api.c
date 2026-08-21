@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include "compat/utf8.h"
 #ifndef _WIN32
 #include <unistd.h>
@@ -495,6 +496,105 @@ int netease_search_playlists(const char *kw, SongInfo **out, int *count) {
     return oi > 0 ? 0 : -1;
 }
 
+/* Check whether a song is playable (has a stream URL — no copyright /
+   delisted songs return an empty url). */
+int netease_check_music(const char *song_id, bool *playable) {
+    *playable = false;
+    char *esc = shell_escape(song_id);
+    char *j = run("%s check-music %s%s", CLI, esc, STDERR_REDIRECT);
+    free(esc);
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    long long code = root ? jget_int(root, "code") : 0;
+    if (code == 200)
+        *playable = jget_bool(root, "playable");
+    yyjson_doc_free(doc);
+    return code == 200 ? 0 : -1;
+}
+
+/* Recently played songs (api/play-record/song/list). Response shape:
+   {"code":200,"data":{"list":[{"resourceType":"SONG","data":{...song...}}, ...]}}
+   The song object sits in "data" (older API versions may use "song"). */
+int netease_recent_songs(SongInfo **out, int *count) {
+    *out = NULL; *count = 0;
+    char *j = run("%s record-recent%s", CLI, STDERR_REDIRECT);
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *data = root ? jget_obj(root, "data") : NULL;
+    yyjson_val *list = data ? jget_arr(data, "list") : NULL;
+    if (!list) { yyjson_doc_free(doc); return 0; }
+
+    size_t n = yyjson_arr_size(list);
+    if (n == 0) { yyjson_doc_free(doc); return 0; }
+
+    *out = calloc(n, sizeof(SongInfo));
+    int oi = 0;
+    yyjson_arr_iter iter = yyjson_arr_iter_with(list);
+    yyjson_val *v;
+    while ((v = yyjson_arr_iter_next(&iter))) {
+        if (!yyjson_is_obj(v)) continue;
+        /* keep only song entries (skip albums/DJ/etc.) */
+        const char *rtype = jget_str(v, "resourceType");
+        if (rtype && strcmp(rtype, "SONG") != 0) continue;
+        yyjson_val *song = jget_obj(v, "data");
+        if (!song) song = jget_obj(v, "song");
+        if (!song) song = v;  /* entry may be the song itself */
+        if (!yyjson_is_obj(song)) continue;
+        fill(&(*out)[oi], song);
+        oi++;
+    }
+    *count = oi;
+    yyjson_doc_free(doc);
+    return oi > 0 ? 0 : -1;
+}
+
+/* Daily recommend playlists (weapi/v1/discovery/recommend/resource).
+   Response key is "recommend": [{id, name, playCount, ...}] */
+int netease_daily_playlists(SongInfo **out, int *count) {
+    *out = NULL; *count = 0;
+    char *j = run("%s recommend-resource%s", CLI, STDERR_REDIRECT);
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    long long code = root ? jget_int(root, "code") : 0;
+    yyjson_val *pl = root ? jget_arr(root, "recommend") : NULL;
+    if (code != 200 || !pl) { yyjson_doc_free(doc); return -1; }
+
+    size_t n = yyjson_arr_size(pl);
+    if (n == 0) { yyjson_doc_free(doc); return 0; }
+
+    *out = calloc(n, sizeof(SongInfo));
+    int oi = 0;
+    yyjson_arr_iter iter = yyjson_arr_iter_with(pl);
+    yyjson_val *v;
+    while ((v = yyjson_arr_iter_next(&iter))) {
+        if (!yyjson_is_obj(v)) continue;
+        SongInfo *s = &(*out)[oi];
+        memset(s,0,sizeof(*s));
+        s->source    = strdup("netease");
+        s->cover_url = strdup("");
+        s->aux_label = strdup("歌单");
+        s->is_playlist = 1;
+        int64_t sid = jget_sint64(v, "id");
+        char id_str[32];
+        snprintf(id_str, sizeof(id_str), "%ld", (long)sid);
+        s->id = strdup(id_str);
+        const char *nm = jget_str(v, "name"); s->title = nm ? strdup(nm) : strdup("");
+        oi++;
+    }
+    *count = oi;
+    yyjson_doc_free(doc);
+    return oi > 0 ? 0 : -1;
+}
+
 /* ── Login QR ─────────────────────────────────────── */
 int netease_qr_key(char *u, size_t usz, char *url, size_t usz2) {
     char *j=run("%s qr-key",CLI); if(!j){LOG_ERROR("netease-cli not found");return -1;}
@@ -624,6 +724,72 @@ int netease_subscribe_playlist(const char *pl_id, bool sub) {
     long long code = root ? jget_int(root, "code") : 0;
     yyjson_doc_free(doc);
     return code == 200 ? 0 : -1;
+}
+
+/* ── Playlist management ──────────────────────────── */
+/* Generic response-code checker for the *-cli JSON wrappers */
+static int cli_code_ok(char *j) {
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    long long code = root ? jget_int(root, "code") : 0;
+    yyjson_doc_free(doc);
+    return code == 200 ? 0 : -1;
+}
+
+int netease_track_add(const char *pl_id, const char *song_id) {
+    char *e1 = shell_escape(pl_id);
+    char *e2 = shell_escape(song_id);
+    char *j = run("%s track-add %s %s%s", CLI, e1, e2, STDERR_REDIRECT);
+    free(e1); free(e2);
+    return cli_code_ok(j);
+}
+
+int netease_track_remove(const char *pl_id, const char *song_id) {
+    char *e1 = shell_escape(pl_id);
+    char *e2 = shell_escape(song_id);
+    char *j = run("%s track-del %s %s%s", CLI, e1, e2, STDERR_REDIRECT);
+    free(e1); free(e2);
+    return cli_code_ok(j);
+}
+
+int netease_playlist_create(const char *name, char *new_id, size_t id_sz) {
+    if (new_id && id_sz) new_id[0] = 0;
+    char *esc = shell_escape(name);
+    char *j = run("%s playlist-create %s%s", CLI, esc, STDERR_REDIRECT);
+    free(esc);
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    long long code = root ? jget_int(root, "code") : 0;
+    if (code == 200 && new_id && id_sz) {
+        yyjson_val *body = root ? jget_obj(root, "body") : NULL;
+        yyjson_val *pl = body ? jget_obj(body, "playlist") : NULL;
+        int64_t pid = pl ? jget_sint64(pl, "id") : 0;
+        if (pid > 0)
+            snprintf(new_id, id_sz, "%ld", (long)pid);
+    }
+    yyjson_doc_free(doc);
+    return code == 200 ? 0 : -1;
+}
+
+int netease_playlist_rename(const char *pl_id, const char *name) {
+    char *e1 = shell_escape(pl_id);
+    char *e2 = shell_escape(name);
+    char *j = run("%s playlist-rename %s %s%s", CLI, e1, e2, STDERR_REDIRECT);
+    free(e1); free(e2);
+    return cli_code_ok(j);
+}
+
+int netease_playlist_delete(const char *pl_id) {
+    char *esc = shell_escape(pl_id);
+    char *j = run("%s playlist-delete %s%s", CLI, esc, STDERR_REDIRECT);
+    free(esc);
+    return cli_code_ok(j);
 }
 
 int netease_toplist(SongInfo **out, int *count) {
@@ -843,4 +1009,82 @@ char* netease_download(const char *id, const char *url) {
     int rc = system(cmd);
     if (rc != 0) { remove_utf8(path); return NULL; }
     return strdup(path);
+}
+
+/* ── Song detail ────────────────────────────────────── */
+void song_detail_free(SongDetail *d) {
+    if (!d) return;
+    free(d->title);   d->title   = NULL;
+    free(d->artist);  d->artist  = NULL;
+    free(d->album);   d->album   = NULL;
+    free(d->publish); d->publish = NULL;
+    free(d->cover_url); d->cover_url = NULL;
+}
+
+int netease_song_detail(const char *song_id, SongDetail *out) {
+    if (!out) return -1;
+    memset(out, 0, sizeof(*out));
+    out->pop = -1;
+    char *esc = shell_escape(song_id);
+    char *j = run("%s song-detail %s%s", CLI, esc, STDERR_REDIRECT);
+    free(esc);
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *songs = root ? jget_arr(root, "songs") : NULL;
+    if (!songs || yyjson_arr_size(songs) < 1) {
+        yyjson_doc_free(doc);
+        return -1;
+    }
+    yyjson_val *v = yyjson_arr_get_first(songs);
+    const char *nm  = jget_str(v, "name");   out->title = nm  ? strdup(nm) : NULL;
+    yyjson_val *al  = jget_obj(v, "al");
+    const char *an  = al ? jget_str(al, "name") : NULL;
+    out->album = an ? strdup(an) : NULL;
+    const char *al_pic = al ? jget_str(al, "picUrl") : NULL;
+    out->cover_url = al_pic ? strdup(al_pic) : NULL;
+
+    /* artists joined with " / " */
+    yyjson_val *ar = jget_arr(v, "ar");
+    if (ar && yyjson_arr_size(ar) > 0) {
+        yyjson_arr_iter iter = yyjson_arr_iter_with(ar);
+        yyjson_val *a;
+        size_t len = 0;
+        while ((a = yyjson_arr_iter_next(&iter))) {
+            const char *n = jget_str(a, "name");
+            if (n) len += strlen(n) + 3;
+        }
+        char *buf = malloc(len + 1);
+        buf[0] = 0;
+        iter = yyjson_arr_iter_with(ar);
+        bool first = true;
+        while ((a = yyjson_arr_iter_next(&iter))) {
+            const char *n = jget_str(a, "name");
+            if (!n) continue;
+            if (!first) strcat(buf, " / ");
+            strcat(buf, n);
+            first = false;
+        }
+        out->artist = buf;
+    }
+    out->duration_sec = (int)(jget_sint64(v, "dt") / 1000);
+    out->fee = (int)jget_int(v, "fee");
+    yyjson_val *pv = yyjson_obj_get(v, "pop");
+    out->pop = pv ? (int)yyjson_get_real(pv) : -1;
+
+    /* publish time (ms epoch) → local YYYY-MM-DD */
+    int64_t pt = jget_sint64(v, "publishTime");
+    if (pt > 0) {
+        time_t t = (time_t)(pt / 1000);
+        struct tm tmv;
+        localtime_r(&t, &tmv);
+        char buf[32];
+        strftime(buf, sizeof(buf), "%Y-%m-%d", &tmv);
+        out->publish = strdup(buf);
+    }
+
+    yyjson_doc_free(doc);
+    return 0;
 }

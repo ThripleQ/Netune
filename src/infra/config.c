@@ -122,6 +122,7 @@ static yyjson_mut_val* resolve_mut_read(Config *cfg, const char *key) {
 }
 
 const char* config_get_str(Config *cfg, const char *key, const char *fallback) {
+    if (!cfg) return fallback;
     yyjson_mut_val *mv = resolve_mut_read(cfg, key);
     if (mv && yyjson_mut_is_str(mv)) return yyjson_mut_get_str(mv);
     yyjson_val *v = resolve(cfg, key);
@@ -130,6 +131,7 @@ const char* config_get_str(Config *cfg, const char *key, const char *fallback) {
 }
 
 int config_get_int(Config *cfg, const char *key, int fallback) {
+    if (!cfg) return fallback;
     yyjson_mut_val *mv = resolve_mut_read(cfg, key);
     if (mv && yyjson_mut_is_int(mv)) return (int)yyjson_mut_get_int(mv);
     yyjson_val *v = resolve(cfg, key);
@@ -138,6 +140,7 @@ int config_get_int(Config *cfg, const char *key, int fallback) {
 }
 
 bool config_get_bool(Config *cfg, const char *key, bool fallback) {
+    if (!cfg) return fallback;
     yyjson_mut_val *mv = resolve_mut_read(cfg, key);
     if (mv && yyjson_mut_is_bool(mv)) return yyjson_mut_get_bool(mv);
     yyjson_val *v = resolve(cfg, key);
@@ -146,6 +149,7 @@ bool config_get_bool(Config *cfg, const char *key, bool fallback) {
 }
 
 double config_get_double(Config *cfg, const char *key, double fallback) {
+    if (!cfg) return fallback;
     yyjson_mut_val *mv = resolve_mut_read(cfg, key);
     if (mv && yyjson_mut_is_num(mv)) return yyjson_mut_get_num(mv);
     yyjson_val *v = resolve(cfg, key);
@@ -154,9 +158,15 @@ double config_get_double(Config *cfg, const char *key, double fallback) {
 }
 
 int config_get_array_size(Config *cfg, const char *key) {
+    if (!cfg) return 0;
     yyjson_val *v = resolve(cfg, key);
     if (!v || !yyjson_is_arr(v)) return 0;
     return (int)yyjson_arr_size(v);
+}
+
+bool config_has(Config *cfg, const char *key) {
+    if (!cfg || !key) return false;
+    return resolve(cfg, key) != NULL;
 }
 
 /* ── Mutable access (set + persist) ─────────────────── */
@@ -231,6 +241,7 @@ static yyjson_mut_val* resolve_mut_path(Config *cfg, yyjson_mut_doc *mdoc,
 }
 
 bool config_set_int(Config *cfg, const char *key, int value) {
+    if (!cfg) return false;
     yyjson_mut_doc *mdoc = config_mut_doc(cfg);
     if (!mdoc) return false;
     yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);
@@ -244,6 +255,104 @@ bool config_set_int(Config *cfg, const char *key, int value) {
 
     yyjson_mut_set_int(leaf, value);
     return true;
+}
+
+bool config_set_str(Config *cfg, const char *key, const char *value) {
+    if (!cfg) return false;
+    yyjson_mut_doc *mdoc = config_mut_doc(cfg);
+    if (!mdoc) return false;
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);
+    if (!root) return false;
+
+    const char *leaf_key = NULL;
+    yyjson_mut_val *leaf = NULL;
+    yyjson_mut_val *parent = resolve_mut_path(cfg, mdoc, root, key,
+                                              &leaf_key, &leaf);
+    if (!parent || !leaf_key) return false;
+
+    /* yyjson_mut_set_str only stores the pointer without copying.  Callers
+       may pass transient buffers (std::string::c_str() etc), so copy the
+       string into the doc arena instead of keeping a dangling reference.
+       The leaf node keeps its own tag/next chain — only payload (tag+uni)
+       is replaced, since the string data must outlive the caller's buffer. */
+    size_t len = value ? strlen(value) : 0;
+    yyjson_mut_val *nv = yyjson_mut_strncpy(mdoc, value, len);
+    if (!nv) return false;
+    leaf->tag = nv->tag;
+    leaf->uni = nv->uni;
+    return true;
+}
+
+/* ── Array access ───────────────────────────────────── */
+
+/* Resolve a dotted key to a mutable array, creating any missing
+   intermediate objects and the array itself on the way. */
+static yyjson_mut_val* resolve_mut_arr(Config *cfg, yyjson_mut_doc *mdoc,
+                                       const char *key) {
+    if (!cfg || !mdoc || !key) return NULL;
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);
+    if (!root) return NULL;
+
+    char *k = strdup(key);
+    if (!k) return NULL;
+    yyjson_mut_val *v = root;
+    char *tok = strtok(k, ".");
+    while (tok) {
+        char *next = strtok(NULL, ".");
+        if (!yyjson_mut_is_obj(v)) { free(k); return NULL; }
+        yyjson_mut_val *node = yyjson_mut_obj_get(v, tok);
+        if (!node) {
+            const char *owned = config_own_key(cfg, tok);
+            if (!owned) { free(k); return NULL; }
+            node = next ? (yyjson_mut_val*)yyjson_mut_obj(mdoc)
+                        : (yyjson_mut_val*)yyjson_mut_arr(mdoc);
+            if (!node ||
+                !yyjson_mut_obj_add_val(mdoc, v, owned, node)) {
+                free(k);
+                return NULL;
+            }
+        }
+        v = node;
+        tok = next;
+    }
+    free(k);
+    return yyjson_mut_is_arr(v) ? v : NULL;
+}
+
+bool config_array_push_str(Config *cfg, const char *key, const char *value) {
+    if (!cfg || !value) return false;
+    yyjson_mut_doc *mdoc = config_mut_doc(cfg);
+    if (!mdoc) return false;
+    yyjson_mut_val *arr = resolve_mut_arr(cfg, mdoc, key);
+    if (!arr) return false;
+    yyjson_mut_val *strv = yyjson_mut_strncpy(mdoc, value, strlen(value));
+    if (!strv) return false;
+    return yyjson_mut_arr_add_val(arr, strv);
+}
+
+bool config_array_remove(Config *cfg, const char *key, int idx) {
+    if (!cfg || idx < 0) return false;
+    yyjson_mut_doc *mdoc = config_mut_doc(cfg);
+    if (!mdoc) return false;
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);
+    if (!root) return false;
+    yyjson_mut_val *arr = NULL;
+    char *k = strdup(key);
+    if (!k) return false;
+    yyjson_mut_val *v = root;
+    char *tok = strtok(k, ".");
+    while (tok) {
+        if (!yyjson_mut_is_obj(v)) { free(k); return false; }
+        v = yyjson_mut_obj_get(v, tok);
+        if (!v) { free(k); return false; }
+        tok = strtok(NULL, ".");
+    }
+    free(k);
+    arr = yyjson_mut_is_arr(v) ? v : NULL;
+    if (!arr) return false;
+    size_t n = yyjson_mut_arr_size(arr);
+    if ((size_t)idx >= n) return false;
+    return yyjson_mut_arr_remove(arr, (size_t)idx) != NULL;
 }
 
 bool config_save(Config *cfg) {

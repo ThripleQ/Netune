@@ -11,8 +11,8 @@
 #include <algorithm>
 using namespace ftxui;
 
-#define MARQUEE_SPEED  8
-#define MARQUEE_PAUSE 45
+#define MARQUEE_SPEED_MS 130   /* ms per column scrolled */
+#define MARQUEE_PAUSE_MS 750   /* ms hold at each end */
 
 /* ── Truncate or marquee-scroll text within width ─── */
 static std::string fit_text(const std::string &text, int width) {
@@ -36,17 +36,23 @@ static std::string fit_text(const std::string &text, int width) {
 }
 
 static std::string marquee_text(const std::string &text, int width) {
-    static int         frame = 0;
-    static std::string last_text;
-    if (text != last_text) { frame = 0; last_text = text; }
-    frame++;
+    /* wall-clock driven so the speed is stable regardless of frame rate */
+    static std::string                        last_text;
+    static std::chrono::steady_clock::time_point start;
+    if (text != last_text) {
+        last_text = text;
+        start = std::chrono::steady_clock::now();
+    }
     if (text.empty() || width <= 0) return text;
     int total_w = string_width(text);
     if (total_w <= width) return text;
     int max_offset = total_w - width;
     if (max_offset < 0) max_offset = 0;
-    int cycle = max_offset + MARQUEE_PAUSE;
-    int pos = (frame / MARQUEE_SPEED) % cycle;
+    int cycle = max_offset + (int)(MARQUEE_PAUSE_MS / MARQUEE_SPEED_MS);
+    auto now = std::chrono::steady_clock::now();
+    long long elapsed =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+    int pos = (int)((elapsed / MARQUEE_SPEED_MS) % cycle);
     int offset_cols = (pos < max_offset) ? pos : max_offset;
     size_t start_i = 0;
     int col_run = 0;
@@ -98,7 +104,7 @@ static std::string build_info_row(const std::string &content, int avail_w, bool 
 Element render_song_list(const AppState &s) {
     int mw = s.song_panel_width;
     if (mw < 10) mw = 10;
-    int avail_w = mw - 2;  /* minus prefix */
+    int avail_w = mw - 5;  /* minus prefix (marker + spaces) */
     if (avail_w < 5) avail_w = 5;
 
     Elements els;
@@ -162,7 +168,7 @@ Element render_song_list(const AppState &s) {
                 if (shown >= 30) break;
                 bool selected = (shown == s.search_selected);
                 std::string prefix;
-                if (song.fee == 1) prefix = "\u25c6 ";
+                if (song.fee == 1) prefix = "\xEF\xBC\x84 ";  /* ＄ full-width */
                 std::string label;
                 if (song.title) label += prefix + song.title;
                 if (song.artist) { label += " \u2014 "; label += song.artist; }
@@ -222,7 +228,7 @@ Element render_song_list(const AppState &s) {
 
             Elements logo_els;
             for (int i = 0; i < logo_rows; i++)
-                logo_els.push_back(theme_accent(text(logo[i])));
+                logo_els.push_back(theme_logo(text(logo[i])));
 
             /* Center horizontally (adapts to actual panel width) and vertically */
             els.push_back(filler());
@@ -242,10 +248,10 @@ Element render_song_list(const AppState &s) {
             shown_rows++;
             bool sel = ((int)i == s.selected_index);
 
-            /* Character-position background markers: only the TEXT gets
-               the marker background (prefix spaces stay plain), so no
-               alignment impact. Selected rows use the FULL marker color
-               (accentuated) instead of the generic selection color. */
+            /* Row markers: full-width symbols for playlist (＠) and
+               paid/VIP (＄) rows. Full-width chars render as exactly
+               2 columns in both FTXUI (fullwidth table) and CJK
+               terminals, so prefix alignment is safe. */
             std::string title = (song.title && song.title[0]) ? song.title : "(unknown)";
             Element line = text(title);
             if (song.artist && song.artist[0])
@@ -260,13 +266,25 @@ Element render_song_list(const AppState &s) {
             }
 
             bool active_sel = (sel && s.active_panel == 1 && !s.top_search_active);
+            std::string pad = active_sel ? "> " : "  ";
+            auto &th = ThemeManager::instance().current();
+            Element prefix;
+            if (song.is_playlist || song.fee == 1) {
+                Color mc = song.is_playlist
+                    ? Color::RGB(th.playlist.r, th.playlist.g, th.playlist.b)
+                    : Color::RGB(th.vip.r, th.vip.g, th.vip.b);
+                const char *sym = song.is_playlist ? "\xEF\xBC\xA0"      /* ＠ */
+                                                  : "\xEF\xBC\x84";      /* ＄ */
+                prefix = hbox({text(pad), text(sym) | color(mc), text(" ")});
+            } else {
+                prefix = text(pad + "   ");
+            }
+
             if (active_sel) {
-                /* selected: accentuated marker background, or the
+                /* selected: full marker background accent, or the
                    generic selection color for plain rows */
-                auto &th = ThemeManager::instance().current();
                 if (song.is_playlist) {
                     line = theme_playlist_sel_bg(line);
-                    /* dark text on the full marker color */
                     line = line | color(Color::RGB(th.bg.r, th.bg.g, th.bg.b));
                 } else if (song.fee == 1) {
                     line = theme_vip_sel_bg(line);
@@ -279,28 +297,51 @@ Element render_song_list(const AppState &s) {
                            : Color::RGB(80, 80, 80));
                     line = line | bgcolor(sel_bg);
                 }
-                /* marker rows: dark text on the full marker color;
-                   plain rows: fg text on the selection background */
-                if (song.is_playlist || song.fee == 1) {
-                    els.push_back(hbox({text("> ") | bold, line}) | focus);
-                } else {
-                    els.push_back(theme_fg(hbox({text("> "), line}) | bold | focus));
-                }
+                els.push_back(theme_fg(hbox({prefix | bold, line}) | focus));
             } else if (sel) {
-                els.push_back(theme_fg(hbox({text("  "), line}) | bold | focus));
+                els.push_back(theme_fg(hbox({prefix | bold, line}) | focus));
             } else {
-                if (song.is_playlist)
-                    line = theme_playlist_bg(line);
-                else if (song.fee == 1)
-                    line = theme_vip_bg(line);
-                els.push_back(theme_fg(hbox({text("  "), line})));
+                els.push_back(theme_fg(hbox({prefix, line})));
             }
         }
         if (shown_rows == 0 && !filter_q.empty())
             els.push_back(theme_fg(text("  无匹配")) | dim);
+
+        if (!filter_q.empty() || s.search_active) {
+            /* filtered/search rows map 1:1 to visible lines — keep the
+               FTXUI frame auto-scroll for those modes */
+            auto list = theme_border(theme_bg(vbox(std::move(els)) | vscroll_indicator | yframe | flex | border));
+            if (s.loading)
+                return dbox({list, render_spinner(s) | center});
+            return list;
+        }
+
+        /* unfiltered list: manual viewport so mouse clicks can map to
+           rows. Clamp the offset to keep the selection visible, then
+           slice — content never exceeds the panel, so the frame
+           auto-scroll (which would fight the offset) stays inert. */
+        const int h = s.screen_height - 5;  /* top 1 + status 2 + borders 2 */
+        int n = (int)els.size();
+        int off = s.song_list_offset;
+        int sel = s.selected_index;
+        if (sel < 0) sel = 0;
+        if (sel >= off + h) off = sel - h + 1;
+        if (sel < off) off = sel;
+        if (off > n - h) off = n - h;
+        if (off < 0) off = 0;
+        if (off != s.song_list_offset)
+            StateStore::instance().set_song_list_offset(off);
+        Elements vis;
+        for (int i = off; i < off + h && i < n; i++)
+            vis.push_back(els[i]);
+        auto list = theme_border(theme_bg(vbox(std::move(vis)) | vscroll_indicator | yframe | flex | border));
+        if (s.loading) {
+            return dbox({list, render_spinner(s) | center});
+        }
+        return list;
     }
 
-    auto list = theme_bg(vbox(std::move(els)) | vscroll_indicator | frame | flex | border);
+    auto list = theme_border(theme_bg(vbox(std::move(els)) | vscroll_indicator | yframe | flex | border));
     if (s.loading) {
         /* Overlay spinner on top of list so it's visible even when scrolled */
         return dbox({list, render_spinner(s) | center});

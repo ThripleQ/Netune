@@ -57,6 +57,15 @@ Element theme_bg(Element e) {
     return e;  /* no bg → terminal native background shows through */
 }
 
+Element theme_overlay_bg(Element e) {
+    auto &t = ThemeManager::instance().current();
+    ThemeColor c = t.overlay_bg.has_color ? t.overlay_bg
+                 : (t.bg.has_color ? t.bg : ThemeColor{});
+    if (c.has_color)
+        return e | bgcolor(Color::RGB(c.r, c.g, c.b));
+    return e;  /* both transparent → terminal background shows through */
+}
+
 Element theme_accent(Element e) {
     return e | color(pick_accent(ThemeManager::instance().current()));
 }
@@ -75,6 +84,19 @@ Element theme_vip(Element e) {
 
 Element theme_playlist(Element e) {
     return e | color(pick_playlist(ThemeManager::instance().current()));
+}
+
+Element theme_logo(Element e) {
+    auto &t = ThemeManager::instance().current();
+    ThemeColor c = t.logo.has_color ? t.logo : t.accent;
+    return e | color(Color::RGB(c.r, c.g, c.b));
+}
+
+Element theme_border(Element e) {
+    auto &t = ThemeManager::instance().current();
+    if (t.border.has_color)
+        return e | color(Color::RGB(t.border.r, t.border.g, t.border.b));
+    return e;
 }
 
 /* ── Background markers (whole-row) ───────────────────

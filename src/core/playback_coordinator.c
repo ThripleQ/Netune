@@ -296,6 +296,10 @@ static void* playback_thread(void *arg) {
                         }
                     } else {
                         LOG_WARN("No play URL for %s", cmd.path);
+                        /* unplayable (no copyright / delisted): skip to
+                           the next track instead of stalling */
+                        event_bus_publish(EV_PLAYBACK_SKIP, NULL, 0);
+                        continue;
                     }
                 }
 

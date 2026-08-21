@@ -5,6 +5,7 @@
 #include <thread>
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/screen.hpp>
+#include <ftxui/screen/terminal.hpp>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/component/loop.hpp>
@@ -87,6 +88,13 @@ static volatile bool g_running = true;
    mouse, cursor updates, IME text (multi-byte UTF-8), etc.
    ──────────────────────────────────────────────────── */
 static std::string event_to_key_name(const ftxui::Event &event) {
+    /* Alt combos: terminal sends ESC + char (2 bytes) */
+    if (event.input().size() == 2 &&
+        (unsigned char)event.input()[0] == 0x1b &&
+        (unsigned char)event.input()[1] >= 32 &&
+        (unsigned char)event.input()[1] != 127) {
+        return "alt+" + event.input().substr(1, 1);
+    }
     /* ── Special events (C0 control chars) ──
        ftxui routes every byte < 0x20 to Event::Special; Ctrl+/ is
        US (0x1f) or NUL (0x00) depending on the terminal. */
@@ -94,6 +102,12 @@ static std::string event_to_key_name(const ftxui::Event &event) {
         unsigned char c = (unsigned char)event.input()[0];
         if (c == 0x1f || c == 0x00)
             return "ctrl+/";
+        if (c == 0x1c)
+            return "ctrl+\\";
+        if (c == 0x1d)
+            return "ctrl+]";
+        if (c == 0x1e)
+            return "ctrl+^";
     }
     /* ── Navigation / editing keys ── */
     if (event == ftxui::Event::ArrowUp)        return "up";
@@ -195,6 +209,11 @@ static std::string event_to_key_name(const ftxui::Event &event) {
 /* ── Seek accumulation ────────────────────────────── */
 /* Press: accumulate. Release (>150ms idle): fire once. */
 static int g_seek_accum = 0;
+/* Baseline terminal size for disambiguating resize signals
+   (ftxui routes SIGWINCH as Event::Special({0}), the same bytes as a
+   real Ctrl+/ on some terminals). Seeded at startup so the FIRST
+   resize after launch is also recognized as a resize. */
+static int g_resize_w = -1, g_resize_h = -1;
 static int g_seek_target = -1;   /* seek destination (sec), -1 = none; cleared when progress reaches target */
 static std::chrono::steady_clock::time_point g_last_seek_tp;
 
@@ -528,6 +547,7 @@ static void activate_netease_menu_item(int idx) {
             {"\u6211\u559C\u6B22\u7684\u97F3\u4E50", 302, ""},
             {"\u5237\u65B0\u767B\u5F55", 303, ""},
             {"\u9000\u51FA\u767B\u5F55", 304, ""},
+            {"+ \u65B0\u5EFA\u6B4C\u5355", 305, ""},
         });
         StateStore::instance().set_netease_selected(0);
     } else if (type == 301) {
@@ -539,6 +559,7 @@ static void activate_netease_menu_item(int idx) {
             int ret = netease_playlists(false, &pl, &pc);
             LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
             if (ret == 0 && pc > 0) {
+                for (int i = 0; i < pc; i++) pl[i].mine = 1;
                 ld->songs = pl; ld->count = pc;
             } else {
                 ld->songs = NULL; ld->count = 0;
@@ -596,10 +617,19 @@ static void activate_netease_menu_item(int idx) {
         StateStore::instance().clear_nav_stack();
         StateStore::instance().set_netease_menu({});
         StateStore::instance().set_music_mode(MusicMode::Netease);
+    } else if (type == 305) {
+        /* create playlist: open the action sheet in text-input mode */
+        StateStore::instance().set_action_sheet(true, 0);
+        StateStore::instance().set_action_sheet_menu(2);
+        StateStore::instance().set_action_sheet_ctx("create");
+        StateStore::instance().set_action_sheet_input("");
     } else if (!pl_id.empty()) {
         /* entering a playlist's songs from a playlist list — push with
            playlist restore so Esc lands back on the playlist list */
         StateStore::instance().nav_push_restore_playlist();
+        StateStore::instance().set_current_playlist_id(pl_id);
+        StateStore::instance().set_detail_playlist_mine(
+            !cur.playlist.empty() && cur.playlist[cur.selected_index].mine == 1);
         StateStore::instance().set_loading(true);
         std::string _pl_id = pl_id;
         std::thread([_pl_id]() {
@@ -623,17 +653,23 @@ static void activate_netease_menu_item(int idx) {
             }
         }).detach();
 
-    } else if (type == 0 || type == 1 || type == 5) {
-        /* 每日推荐 (0, songs) / 推荐歌单 (1, playlists) / 排行榜 (5, playlists) */
-        if (!netease_is_logged_in() && type == 0) {
-            start_login();  /* daily recommends need a session */
+    } else if (type == 0 || type == 1 || type == 5 ||
+               type == 6 || type == 7) {
+        /* 每日推荐 (0, songs) / 推荐歌单 (1, playlists) / 排行榜 (5)
+           最近播放 (6, songs) / 每日歌单 (7, playlists) */
+        if (!netease_is_logged_in() &&
+            (type == 0 || type == 6 || type == 7)) {
+            start_login();  /* these need a session */
         } else {
             StateStore::instance().nav_push();
             StateStore::instance().set_loading(true);
             std::thread([type]() {
                 SongInfo *songs = NULL; int sc = 0;
-                int ret = (type == 5) ? netease_toplist(&songs, &sc)
-                                      : netease_menu_songs(type, 30, &songs, &sc);
+                int ret = -1;
+                if (type == 5)            ret = netease_toplist(&songs, &sc);
+                else if (type == 6)       ret = netease_recent_songs(&songs, &sc);
+                else if (type == 7)       ret = netease_daily_playlists(&songs, &sc);
+                else                      ret = netease_menu_songs(type, 30, &songs, &sc);
                 LOG_INFO("MENU SONGS: type=%d ret=%d count=%d", type, ret, sc);
                 LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
                 if (ret == 0 && sc > 0) {
@@ -642,7 +678,8 @@ static void activate_netease_menu_item(int idx) {
                     ld->songs = NULL; ld->count = 0;
                     free(songs);
                 }
-                EventType ev = (type == 1 || type == 5) ? EV_PLAYLIST_LIST_LOADED : EV_PLAYLIST_LOADED;
+                EventType ev = (type == 1 || type == 5 || type == 7)
+                    ? EV_PLAYLIST_LIST_LOADED : EV_PLAYLIST_LOADED;
                 if (event_bus_publish(ev, ld, sizeof(*ld)) != 0) {
                     if (ld->songs) {
                         for (int i = 0; i < ld->count; i++)
@@ -960,6 +997,22 @@ static void ev_playback_finish(const BusEvent *ev, void *data) {
     }
     const SongInfo *song = store.queue_current();
     LOG_INFO("ADV: next=%d path=%s", next,
+             (song && song->id) ? song->id : "null");
+    play_queue_index(next);
+}
+
+/* A track could not be played (no copyright / no stream URL) — auto
+   advance to the next track so listening isn't interrupted. */
+static void ev_playback_skip(const BusEvent *ev, void *data) {
+    (void)ev; (void)data;
+    auto &store = StateStore::instance();
+    int next = store.queue_advance();
+    if (next < 0) {
+        store.set_playback_state(PlaybackState::Stopped);
+        return;
+    }
+    const SongInfo *song = store.queue_current();
+    LOG_WARN("SKIP unplayable track, next=%d id=%s", next,
              (song && song->id) ? song->id : "null");
     play_queue_index(next);
 }
@@ -1346,7 +1399,9 @@ static const char *DEFAULT_KEYBINDINGS_YAML =
     "  toggle_mute:   [\"m\"]\n"
     "  cycle_loop:    [\"r\"]\n"
     "  toggle_lyrics: [\"l\"]\n"
-    "  show_help:     [\"?\", \"escape\"]\n"
+    "  show_help:     [\"?\"]\n"
+    "  show_actions:  [\"ctrl+x\"]\n"
+    "  show_song_detail: [\"d\"]\n"
     "  quit:          [\"q\"]\n";
 
 static const char *DEFAULT_THEME_DEFAULT_YAML =
@@ -1363,6 +1418,7 @@ static const char *DEFAULT_THEME_DEFAULT_YAML =
     "  error: \"#f7768e\"\n"
     "  vip: \"#e0af68\"\n"
     "  playlist: \"#7dcfff\"\n"
+    "  logo: \"#7dcfff\"\n"
     "  overlay_bg: \"#16161e\"\n";
 
 static const char *DEFAULT_THEME_CATPPUCCIN_YAML =
@@ -1372,7 +1428,8 @@ static const char *DEFAULT_THEME_CATPPUCCIN_YAML =
     "  fg: \"#cdd6f4\"\n"
     "  accent: \"#89b4fa\"\n"
     "  vip: \"#f9e2af\"\n"
-    "  playlist: \"#94e2d5\"\n";
+    "  playlist: \"#94e2d5\"\n"
+    "  logo: \"#94e2d5\"\n";
 
 static const char *DEFAULT_THEME_DRACULA_YAML =
     "name: \"Dracula\"\n"
@@ -1381,7 +1438,8 @@ static const char *DEFAULT_THEME_DRACULA_YAML =
     "  fg: \"#f8f8f2\"\n"
     "  accent: \"#bd93f9\"\n"
     "  vip: \"#f1fa8c\"\n"
-    "  playlist: \"#8be9fd\"\n";
+    "  playlist: \"#8be9fd\"\n"
+    "  logo: \"#8be9fd\"\n";
 
 static const char *DEFAULT_THEME_NETEASE_DARK_YAML =
     "name: \"Netease Dark\"\n"
@@ -1390,7 +1448,8 @@ static const char *DEFAULT_THEME_NETEASE_DARK_YAML =
     "  fg: \"#c8c8dc\"\n"
     "  accent: \"#e3322d\"\n"
     "  vip: \"#e8c547\"\n"
-    "  playlist: \"#4aa3df\"\n";
+    "  playlist: \"#4aa3df\"\n"
+    "  logo: \"#4aa3df\"\n";
 
 static const char *DEFAULT_THEME_NETEASE_LIGHT_YAML =
     "name: \"Netease Light\"\n"
@@ -1399,7 +1458,8 @@ static const char *DEFAULT_THEME_NETEASE_LIGHT_YAML =
     "  fg: \"#333333\"\n"
     "  accent: \"#d43c33\"\n"
     "  vip: \"#c9a227\"\n"
-    "  playlist: \"#2d7bb5\"\n";
+    "  playlist: \"#2d7bb5\"\n"
+    "  logo: \"#2d7bb5\"\n";
 
 /* ── Ensure the full default data tree exists ──────── */
 /* On startup, walks the canonical data root and creates
@@ -1413,13 +1473,21 @@ static void ensure_default_data_tree(void) {
     ensure_dir(root);
 
     /* Helper: create a default file (with parent dirs) if it
-       does not already exist. Never touches existing files. */
+       does not already exist. Never touches existing non-empty files.
+       0-byte files count as missing and get rebuilt. */
     auto ensure_file = [&](const char *rel, const char *content) {
         char path[2048];
         snprintf(path, sizeof(path), "%s" PATH_SEP "%s", root, rel);
-        if (access_utf8(path, F_OK) == 0) return;  /* already there */
+        FILE *f = fopen_utf8(path, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long sz = ftell(f);
+            fclose(f);
+            if (sz > 0) return;  /* non-empty: already there */
+            LOG_WARN("Rebuilding empty data file: %s", path);
+        }
         ensure_dir(path);
-        FILE *f = fopen_utf8(path, "w");
+        f = fopen_utf8(path, "w");
         if (f) {
             fputs(content, f);
             fclose(f);
@@ -1471,6 +1539,15 @@ int run_app(int argc, char **argv) {
     if (!cfg) LOG_WARN("No config loaded, using defaults");
     config_set_global(cfg);
 
+    /* Backfill missing core sections (older configs / partial writes):
+       without music_sources the local source silently disables itself. */
+    if (cfg && !config_has(cfg, "music_sources")) {
+        LOG_WARN("config.json missing 'music_sources' — backfilling defaults");
+        config_set_str(cfg, "music_sources.local.enabled", "true");
+        config_set_str(cfg, "music_sources.netease.enabled", "true");
+        config_save(cfg);
+    }
+
     /* ── Cache (XDG_CACHE_HOME) ─────────────────────── */
     const char *cache_dir = xdg_dir("XDG_CACHE_HOME", NULL);
     ensure_dir(cache_dir);
@@ -1492,6 +1569,7 @@ int run_app(int argc, char **argv) {
     event_bus_subscribe(EV_PLAYBACK_RESUME,   ev_playback_resume, NULL);
     event_bus_subscribe(EV_PLAYBACK_STOP,     ev_playback_stop, NULL);
     event_bus_subscribe(EV_PLAYBACK_FINISH,   ev_playback_finish, NULL);
+    event_bus_subscribe(EV_PLAYBACK_SKIP,     ev_playback_skip, NULL);
     event_bus_subscribe(EV_MPRIS_COMMAND,     ev_mpris_command, NULL);
         event_bus_subscribe(EV_PLAYLIST_LOADED, ev_playlist_loaded, NULL);
     event_bus_subscribe(EV_MENU_LOADED, ev_menu_loaded, NULL);
@@ -1663,7 +1741,13 @@ int run_app(int argc, char **argv) {
             int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open)
                       ? 33 : 200;
 #else
-            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open)
+            /* marquee-scrolling selected row needs smooth frames even
+               when idle — otherwise the 130ms/column scroll jumps 1-2
+               columns per 200ms idle frame (visible stutter) */
+            bool marquee_row = (st.active_panel == 1 &&
+                                !st.playlist.empty() &&
+                                !st.top_search_active);
+            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open || marquee_row)
                       ? 16 : 200;
 #endif
             std::this_thread::sleep_for(std::chrono::milliseconds(ms));
@@ -1707,9 +1791,9 @@ int run_app(int argc, char **argv) {
         consume_seek();
         const AppState &s = state.state();
 
-        state.set_song_panel_width(screen.dimx() - 29);
-        state.set_screen_height(screen.dimy());
-        state.set_top_row_width(screen.dimx());
+        state.set_song_panel_width(Terminal::Size().dimx - 22);
+        state.set_screen_height(Terminal::Size().dimy);
+        state.set_top_row_width(Terminal::Size().dimx);
 
         /* Login polling: wall-clock based (the render loop runs at
            200ms/frame when idle — tick counting would slow polling to
@@ -1801,41 +1885,348 @@ int run_app(int argc, char **argv) {
             /* Ctrl+X action sheet overlays the normal UI */
             return dbox({main, render_action_sheet(s)});
         }
+        if (s.song_detail_open) {
+            /* song detail popup (key d) */
+            return dbox({main, render_song_detail(s)});
+        }
 
         return main;
     });
 
     component |= CatchEvent([&](ftxui::Event event) -> bool {
-        /* ── Action sheet (Ctrl+X) modal handling ── */
+        /* ── Terminal resize signal ──
+           ftxui routes SIGWINCH as Event::Special({0}) — the SAME bytes
+           as a real Ctrl+/ on some terminals. Disambiguate by checking
+           whether the terminal size actually changed since the last
+           known size (baseline seeded at startup); if so this is a
+           resize, swallow it (a real Ctrl+/ leaves the size untouched). */
+        {
+            if (event.input().size() == 1 &&
+                (unsigned char)event.input()[0] == 0x00) {
+                auto tsz = Terminal::Size();
+                if (tsz.dimx != g_resize_w || tsz.dimy != g_resize_h) {
+                    g_resize_w = tsz.dimx;
+                    g_resize_h = tsz.dimy;
+                    return true;  /* swallow the resize signal */
+                }
+            }
+        }
+
+        /* ── Song detail popup: Esc/Enter close ── */
+        if (state.state().song_detail_open) {
+            std::string k2;
+            if (event.is_character()) k2 = event.character();
+            else k2 = event_to_key_name(event);
+            if (k2 == "escape" || k2 == "enter" || k2 == "\r" || k2 == "d") {
+                StateStore::instance().set_song_detail(false, {});
+                return true;
+            }
+            return true;  /* swallow all keys while open */
+        }
+
+        /* ── Action sheet (Ctrl+X) modal state machine ── */
         {
             const AppState &as = state.state();
             if (as.action_sheet_open) {
                 std::string k;
                 if (event.is_character()) k = event.character();
                 else k = event_to_key_name(event);
-                if (k == "enter" || k == "\r") {
-                    const auto &item = as.playlist[as.selected_index];
-                    bool is_pl = item.is_playlist;
-                    std::string id = item.id ? item.id : "";
-                    bool active = as.action_sheet_active == 1;
-                    if (id.empty() || as.action_sheet_active < 0) return true;
-                    std::thread([id, is_pl, active]() {
-                        int rv = is_pl
-                            ? netease_subscribe_playlist(id.c_str(), !active)
-                            : netease_like_song(id.c_str(), !active);
-                        LOG_INFO("ACTION SHEET: %s %s toggle->%d = %d",
-                                 is_pl ? "subscribe" : "like", id.c_str(), !active, rv);
-                        if (rv == 0)
-                            StateStore::instance().set_action_sheet_active(active ? 0 : 1);
-                    }).detach();
+                if (k.empty()) k = "";
+
+                if (k == "ctrl+x") {
+                    /* press Ctrl+X again to close at any layer */
+                    state.set_action_sheet(false, 0);
+                    return true;
+                }
+
+                if (as.action_sheet_menu == 2) {
+                    /* text input layer: characters append, backspace
+                       deletes, Enter submits, Esc cancels */
+                    if (k == "enter" || k == "\r") {
+                        std::string name = as.action_sheet_input;
+                        std::string ctx = as.action_sheet_ctx;
+                        std::string cur_pl = as.current_playlist_id;
+                        state.set_action_sheet(false, 0);
+                        if (!name.empty()) {
+                            std::thread([name, ctx, cur_pl]() {
+                                if (ctx == "rename") {
+                                    netease_playlist_rename(cur_pl.c_str(), name.c_str());
+                                } else {
+                                    char nid[32] = {0};
+                                    if (netease_playlist_create(name.c_str(), nid, sizeof(nid)) == 0 && nid[0])
+                                        LOG_INFO("created playlist %s", nid);
+                                }
+                            }).detach();
+                        }
+                        return true;
+                    }
+                    if (k == "escape") {
+                        state.set_action_sheet(false, 0);
+                        return true;
+                    }
+                    if (k == "backspace") {
+                        std::string q = as.action_sheet_input;
+                        if (!q.empty()) {
+                            int n = (int)q.size() - 1;
+                            while (n > 0 && ((unsigned char)q[n] & 0xC0) == 0x80) n--;
+                            q.resize((size_t)n);
+                            state.set_action_sheet_input(q);
+                        }
+                        return true;
+                    }
+                    if (k.size() >= 1) {
+                        bool control = (unsigned char)k[0] < 32 ||
+                                       (unsigned char)k[0] == 127;
+                        if (!control)
+                            state.set_action_sheet_input(as.action_sheet_input + k);
+                        return true;
+                    }
+                    return true;
+                }
+
+                if (as.action_sheet_menu == 3) {
+                    /* confirm layer */
+                    if (k == "enter" || k == "\r") {
+                        std::string id = as.action_sheet_ctx;
+                        state.set_action_sheet(false, 0);
+                        std::thread([id]() {
+                            LOG_INFO("ACTION SHEET: delete playlist %s -> %d",
+                                     id.c_str(), netease_playlist_delete(id.c_str()));
+                        }).detach();
+                        return true;
+                    }
+                    if (k == "escape") {
+                        state.set_action_sheet(true, 0);
+                        state.set_action_sheet_menu(0);
+                        return true;
+                    }
+                    return true;
+                }
+
+                /* menu 0 (main) and menu 1 (playlist picker) share
+                   j/k navigation + Enter */
+                if (k == "j" || k == "down") {
+                    int n = (as.action_sheet_menu == 1)
+                        ? (int)as.action_sheet_pls.size()
+                        : as.action_sheet_opt_count;
+                    if (n <= 0) n = 1;
+                    state.set_action_sheet(true, (as.action_sheet_selected + 1) % n);
+                    return true;
+                }
+                if (k == "k" || k == "up") {
+                    int n = (as.action_sheet_menu == 1)
+                        ? (int)as.action_sheet_pls.size()
+                        : as.action_sheet_opt_count;
+                    if (n <= 0) n = 1;
+                    state.set_action_sheet(true, (as.action_sheet_selected + n - 1) % n);
                     return true;
                 }
                 if (k == "escape") {
-                    state.set_action_sheet(false, 0);
+                    if (as.action_sheet_menu == 1) {
+                        state.set_action_sheet_menu(0);
+                        state.set_action_sheet(true, 0);
+                    } else {
+                        state.set_action_sheet(false, 0);
+                    }
+                    return true;
+                }
+                if (k == "enter" || k == "\r") {
+                    const auto &item = as.playlist[as.selected_index];
+                    std::string id = item.id ? item.id : "";
+                    if (as.action_sheet_menu == 1) {
+                        /* playlist picker: add song to selected playlist */
+                        if (as.action_sheet_selected >= 0 &&
+                            as.action_sheet_selected < (int)as.action_sheet_pls.size()) {
+                            std::string plid = as.action_sheet_pls[as.action_sheet_selected].id ? as.action_sheet_pls[as.action_sheet_selected].id : "";
+                            state.set_action_sheet(false, 0);
+                            if (!plid.empty() && !id.empty()) {
+                                std::thread([plid, id]() {
+                                    LOG_INFO("ACTION SHEET: add %s to %s -> %d",
+                                             id.c_str(), plid.c_str(),
+                                             netease_track_add(plid.c_str(), id.c_str()));
+                                }).detach();
+                            }
+                        }
+                        return true;
+                    }
+                    /* menu 0 — selection index matches render order
+                       (playlist: 0 subscribe, 1 rename, 2 delete;
+                        song:     0 like,    1 add-to-playlist, 2 remove) */
+                    bool is_pl = item.is_playlist;
+                    /* active<0 = state query still in flight: treat as
+                       inactive (idempotent on the API side) */
+                    bool active = as.action_sheet_active == 1;
+                    bool in_own = is_pl ? (item.mine == 1)
+                                        : as.detail_playlist_mine;
+                    int idx = as.action_sheet_selected;
+                    if (id.empty()) return true;
+                    if (is_pl) {
+                        if (idx == 0) {
+                            /* subscribe/unsubscribe */
+                            std::thread([id, active]() {
+                                int rv = netease_subscribe_playlist(id.c_str(), !active);
+                                LOG_INFO("ACTION SHEET: subscribe %s -> %d", id.c_str(), rv);
+                                if (rv == 0)
+                                    StateStore::instance().set_action_sheet_active(active ? 0 : 1);
+                            }).detach();
+                        } else if (idx == 1 && in_own) {
+                            /* rename */
+                            state.set_action_sheet_ctx("rename");
+                            state.set_action_sheet_input("");
+                            state.set_action_sheet_menu(2);
+                        } else if (idx == 2 && in_own) {
+                            /* delete (confirm) */
+                            state.set_action_sheet_ctx(id);
+                            state.set_action_sheet_menu(3);
+                        }
+                    } else {
+                        if (idx == 0) {
+                            /* like/unlike */
+                            std::thread([id, active]() {
+                                int rv = netease_like_song(id.c_str(), !active);
+                                LOG_INFO("ACTION SHEET: like %s -> %d", id.c_str(), rv);
+                                if (rv == 0)
+                                    StateStore::instance().set_action_sheet_active(active ? 0 : 1);
+                            }).detach();
+                        } else if (idx == 1) {
+                            /* add to playlist: load my playlists */
+                            state.set_action_sheet_menu(1);
+                            state.set_action_sheet(true, 0);
+                            std::thread([]() {
+                                SongInfo *pls = NULL; int pc = 0;
+                                if (netease_playlists(false, &pls, &pc) == 0 && pc > 0) {
+                                    std::vector<SongInfo> vec;
+                                    for (int i = 0; i < pc; i++)
+                                        vec.push_back(pls[i]);
+                                    free(pls);
+                                    StateStore::instance().set_action_sheet_pls(vec);
+                                } else {
+                                    StateStore::instance().set_action_sheet_pls({});
+                                }
+                            }).detach();
+                        } else if (idx == 2 && in_own) {
+                            /* remove from current playlist */
+                            std::string cid = as.current_playlist_id;
+                            state.set_action_sheet(false, 0);
+                            if (!cid.empty() && !id.empty()) {
+                                std::thread([cid, id]() {
+                                    LOG_INFO("ACTION SHEET: remove %s from %s -> %d",
+                                             id.c_str(), cid.c_str(),
+                                             netease_track_remove(cid.c_str(), id.c_str()));
+                                }).detach();
+                            }
+                        }
+                    }
                     return true;
                 }
                 return true;  /* swallow all keys while open */
             }
+        }
+
+        /* ── Mouse: click to select row / wheel to scroll ── */
+        if (event.is_mouse()) {
+            const AppState &st = state.state();
+            if (st.login_state != 0 || st.show_help || st.lyric_mode)
+                return true;  /* overlays: ignore the mouse */
+            auto &m = event.mouse();
+            /* Wheel: move the selection in the panel under the cursor */
+            if (m.button == ftxui::Mouse::WheelUp ||
+                m.button == ftxui::Mouse::WheelDown) {
+                int dir = (m.button == ftxui::Mouse::WheelUp) ? -1 : 1;
+                if (m.x >= 20) {
+                    /* right song panel */
+                    StateStore::instance().set_active_panel(1);
+                    /* search box focused: the filtered view maps rows
+                       1:1 to matches, so raw selected_index moves would
+                       jump erratically — drop back to the full list */
+                    if (st.top_search_active) {
+                        close_top_search();
+                        if (dir < 0) return true;  /* up: just exit */
+                    }
+                    int n = (int)st.playlist.size();
+                    if (n > 0) {
+                        int idx = st.selected_index + dir;
+                        if (idx < 0) idx = 0;
+                        if (idx >= n) idx = n - 1;
+                        StateStore::instance().set_selected_index(idx);
+                    }
+                } else {
+                    /* left menu/groups panel */
+                    StateStore::instance().set_active_panel(0);
+                    if (st.music_mode == MusicMode::Local) {
+                        int n = (int)st.groups.size();
+                        if (n > 0) {
+                            int idx = st.group_index + dir;
+                            if (idx < -1) idx = -1;
+                            if (idx >= n) idx = n - 1;
+                            StateStore::instance().set_group_index(idx);
+                        }
+                    } else {
+                        int n = (int)st.netease_menu.size();
+                        if (n > 0) {
+                            int idx = st.netease_selected + dir;
+                            if (idx < -1) idx = -1;
+                            if (idx >= n) idx = n - 1;
+                            StateStore::instance().set_netease_selected(idx);
+                        }
+                    }
+                }
+                return true;
+            }
+            if (m.button != ftxui::Mouse::Left ||
+                m.motion != ftxui::Mouse::Pressed)
+                return true;
+            if (m.y < 1 || m.y > st.screen_height - 3)
+                return true;  /* top/status bars */
+            if (m.x >= 20) {
+                /* right panel: row = y-2 (top bar 1 + border 1) + offset */
+                int row = (m.y - 2) + st.song_list_offset;
+                StateStore::instance().set_active_panel(1);
+                if (st.top_search_active)
+                    StateStore::instance().set_top_search_active(false, 0);
+                if (row >= 0 && row < (int)st.playlist.size()) {
+                    if (row == st.selected_index)
+                        component->OnEvent(ftxui::Event::Return);  /* re-click = activate */
+                    else
+                        StateStore::instance().set_selected_index(row);
+                }
+            } else {
+                /* left menu: rows are [nav][sep]menu... in netease mode,
+                   [nav]groups... in local mode (hidden while searching) */
+                int row = m.y - 2;
+                bool searching = !st.top_left_query.empty();
+                StateStore::instance().set_active_panel(0);
+                if (st.music_mode == MusicMode::Local) {
+                    if (searching) return true;  /* filtered view: ignore */
+                    if (row == 0) {
+                        if (st.group_index == -1)
+                            component->OnEvent(ftxui::Event::Return);
+                        else
+                            StateStore::instance().set_group_index(-1);
+                    } else if (row - 1 < (int)st.groups.size()) {
+                        if (row - 1 == st.group_index)
+                            component->OnEvent(ftxui::Event::Return);
+                        else
+                            StateStore::instance().set_group_index(row - 1);
+                    }
+                } else {
+                    if (searching) return true;  /* filtered view: ignore */
+                    if (row == 0) {
+                        if (st.netease_selected == -1)
+                            component->OnEvent(ftxui::Event::Return);
+                        else
+                            StateStore::instance().set_netease_selected(-1);
+                    } else if (row == 1) {
+                        /* separator row: ignore */
+                    } else if (row - 2 < (int)st.netease_menu.size()) {
+                        if (row - 2 == st.netease_selected)
+                            component->OnEvent(ftxui::Event::Return);
+                        else
+                            StateStore::instance().set_netease_selected(row - 2);
+                    }
+                }
+            }
+            return true;
         }
 
         /* ── Non-seek key → discard pending seek ── */
@@ -1870,6 +2261,12 @@ int run_app(int argc, char **argv) {
             ev_key = event_to_key_name(event);
         }
         if (ev_key.empty()) return false;
+
+        /* ── Help screen: Esc to close ── */
+        if (cur.show_help && ev_key == "escape") {
+            StateStore::instance().set_show_help(false);
+            return true;
+        }
 
         /* ── Lyrics mode: Esc to close ── */
         if (cur.lyric_mode && ev_key == "escape") {
@@ -2259,6 +2656,8 @@ int run_app(int argc, char **argv) {
             }
             if (!cur.nav_stack.empty()) {
                 StateStore::instance().nav_pop();
+                StateStore::instance().set_current_playlist_id("");
+                StateStore::instance().set_detail_playlist_mine(false);
                 return true;
             }
         }
@@ -2437,6 +2836,8 @@ int run_app(int argc, char **argv) {
                 const auto &song = cur.playlist[cur.selected_index];
                 if (song.is_playlist) {
                     StateStore::instance().nav_push_restore_playlist();
+                    StateStore::instance().set_current_playlist_id(song.id ? song.id : "");
+                    StateStore::instance().set_detail_playlist_mine(song.mine == 1);
                     StateStore::instance().set_loading(true);
                     std::string _pl_id = song.id ? song.id : "";
                     std::thread([_pl_id]() {
@@ -2549,8 +2950,13 @@ int run_app(int argc, char **argv) {
             /* open the action sheet for the selected right-panel item */
             if (!cur.playlist.empty()) {
                 StateStore::instance().set_action_sheet(true, 0);
+                StateStore::instance().set_action_sheet_menu(0);
                 const auto &item = cur.playlist[cur.selected_index];
                 bool is_pl = item.is_playlist;
+                bool in_own = is_pl ? (item.mine == 1)
+                                    : cur.detail_playlist_mine;
+                StateStore::instance().set_action_sheet_opt_count(
+                    is_pl ? (in_own ? 3 : 1) : (in_own ? 3 : 2));
                 std::string id = item.id ? item.id : "";
                 if (!id.empty()) {
                     std::thread([id, is_pl]() {
@@ -2563,20 +2969,66 @@ int run_app(int argc, char **argv) {
                                         active = 1; break;
                                     }
                                 }
-                                if (active < 0) active = 0;
                                 for (int i = 0; i < pc; i++) song_info_free(&pls[i]);
                                 free(pls);
+                                if (active < 0) active = 0;
+                            } else {
+                                /* no subscribed playlists (or fetch failed):
+                                   treat as not subscribed so actions work */
+                                active = 0;
                             }
                         } else {
                             bool liked = false;
                             if (netease_liked_check(id.c_str(), &liked) == 0)
                                 active = liked ? 1 : 0;
+                            else
+                                active = 0;  /* default: not liked */
                         }
                         StateStore::instance().set_action_sheet_active(active);
                     }).detach();
                 }
             }
             return true;
+
+        case Action::ShowSongDetail: {
+            /* popup with song metadata for the selected right-panel item */
+            if (cur.active_panel != 1 || cur.playlist.empty()) return true;
+            const auto &item = cur.playlist[cur.selected_index];
+            if (item.is_playlist) return true;  /* songs only */
+            std::string id = item.id ? item.id : "";
+            if (id.empty()) return true;
+            StateStore::instance().set_song_detail(true, {"  \u52A0\u8F7D\u4E2D..."});  /* 加载中... */
+            std::thread([id]() {
+                SongDetail d;
+                if (netease_song_detail(id.c_str(), &d) != 0) {
+                    StateStore::instance().set_song_detail(
+                        true, {"  \u83B7\u53D6\u5931\u8D25" });  /* 获取失败 */
+                    return;
+                }
+                std::vector<std::string> lines;
+                char buf[128];
+                std::string t = d.title ? d.title : "?";
+                std::string a = d.artist ? d.artist : "?";
+                std::string al = d.album ? d.album : "?";
+                lines.push_back("  \u6B4C\u66F2:  " + t);     /* 歌曲 */
+                lines.push_back("  \u6B4C\u624B:  " + a);     /* 歌手 */
+                lines.push_back("  \u4E13\u8F91:  " + al);    /* 专辑 */
+                int m = d.duration_sec / 60, s2 = d.duration_sec % 60;
+                snprintf(buf, sizeof(buf), "%d:%02d", m, s2);
+                lines.push_back("  \u65F6\u957F:  " + std::string(buf));  /* 时长 */
+                const char *fees[] = {"\u514D\u8D39", "\u4F1A\u5458", "\u4ED8\u8D39", "", "", "", "", "", "\u4F1A\u5458"};
+                const char *fee = (d.fee >= 0 && d.fee < 9) ? fees[d.fee] : "";
+                lines.push_back("  \u8D39\u7528:  " + std::string(fee ? fee : "?"));  /* 费用 */
+                if (d.publish) lines.push_back("  \u53D1\u884C:  " + std::string(d.publish));  /* 发行 */
+                if (d.pop >= 0) {
+                    snprintf(buf, sizeof(buf), "%d/100", d.pop);
+                    lines.push_back("  \u70ED\u5EA6:  " + std::string(buf));  /* 热度 */
+                }
+                song_detail_free(&d);
+                StateStore::instance().set_song_detail(true, lines);
+            }).detach();
+            return true;
+        }
 
         case Action::CycleLoop: {
             int next = ((int)cur.loop_mode + 1) % 4;
@@ -2610,6 +3062,11 @@ int run_app(int argc, char **argv) {
        terminal in alt-screen limbo */
     {
         ftxui::Loop loop(&screen, component);
+        /* seed the resize-detection baseline with the real size so the
+           FIRST resize after launch is recognized (and not mistaken for
+           Ctrl+/) */
+        g_resize_w = Terminal::Size().dimx;
+        g_resize_h = Terminal::Size().dimy;
         /* Raw-image cover overlay (kitty graphics protocol):
            - upload once per cover (fingerprinted inside term_gfx)
            - re-place IMMEDIATELY whenever the geometry changed (terminal
@@ -2640,10 +3097,10 @@ int run_app(int argc, char **argv) {
                            spectrum height is ADAPTIVE (2-4 rows, same
                            formula as render_spectrum_bar) — the old fixed
                            "- 2" misplaced the image on tall terminals. */
-                        int spec_rows = screen.dimy() / 12;
+                        int spec_rows = Terminal::Size().dimy / 12;
                         if (spec_rows < 2) spec_rows = 2;
                         if (spec_rows > 4) spec_rows = 4;
-                        int panel_h = screen.dimy() - 1 - spec_rows - 2;
+                        int panel_h = Terminal::Size().dimy - 1 - spec_rows - 2;
                         int row0 = 2;
                         if (panel_h > dh)
                             row0 += (panel_h - dh) / 2;
@@ -2652,10 +3109,12 @@ int run_app(int argc, char **argv) {
                         int col0 = 1 + cover_left_margin(st) + (cw - dw) / 2;
 
                         auto now = std::chrono::steady_clock::now();
+                        int tdimx = Terminal::Size().dimx;
+                        int tdimy = Terminal::Size().dimy;
                         bool geometry_changed =
                             !gfx_active ||
-                            screen.dimx() != last_dimx ||
-                            screen.dimy() != last_dimy ||
+                            tdimx != last_dimx ||
+                            tdimy != last_dimy ||
                             cw != last_cw || dw != last_dw || dh != last_dh ||
                             st.cover.stamp != last_stamp;
                         bool due =
@@ -2663,8 +3122,8 @@ int run_app(int argc, char **argv) {
                             std::chrono::milliseconds(500);
                         if (geometry_changed || due) {
                             gfx_last_place = now;
-                            last_dimx = screen.dimx();
-                            last_dimy = screen.dimy();
+                            last_dimx = tdimx;
+                            last_dimy = tdimy;
                             last_cw = cw; last_dw = dw; last_dh = dh;
                             last_stamp = st.cover.stamp;
                             printf("\x1b[%d;%dH", row0, col0);
@@ -2695,20 +3154,22 @@ int run_app(int argc, char **argv) {
                     if (rows > 12) rows = 12;
                     int cols = rows * 2;
                     int row0 = 3;
-                    int col0 = 1 + (screen.dimx() - cols) / 2;
+                    int col0 = 1 + (Terminal::Size().dimx - cols) / 2;
                     if (col0 < 1) col0 = 1;
                     auto now = std::chrono::steady_clock::now();
+                    int tdimx = Terminal::Size().dimx;
+                    int tdimy = Terminal::Size().dimy;
                     bool changed = !qr_gfx_placed ||
-                                   screen.dimx() != qr_ldx ||
-                                   screen.dimy() != qr_ldy ||
+                                   tdimx != qr_ldx ||
+                                   tdimy != qr_ldy ||
                                    rows != qr_lrows ||
                                    g_login_qr.stamp != qr_lstamp;
                     bool due = (now - qr_gfx_last) >=
                                std::chrono::milliseconds(500);
                     if (changed || due) {
                         qr_gfx_last = now;
-                        qr_ldx = screen.dimx();
-                        qr_ldy = screen.dimy();
+                        qr_ldx = tdimx;
+                        qr_ldy = tdimy;
                         qr_lrows = rows;
                         qr_lstamp = g_login_qr.stamp;
                         term_gfx_upload(&g_login_qr);

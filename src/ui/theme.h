@@ -32,6 +32,7 @@ struct Theme {
     ThemeColor error;         /* error / important          */
     ThemeColor vip;           /* VIP (◆) marker color       */
     ThemeColor playlist;      /* playlist (▣) marker color  */
+    ThemeColor logo;          /* netease logo watermark     */
     ThemeColor overlay_bg;    /* overlay/popup background   */
     ThemeColor spectrum;      /* spectrum visualization     */
 };
@@ -41,6 +42,7 @@ class ThemeManager {
 public:
     static ThemeManager& instance();
     bool load(const std::string &yaml_path);
+    void reset();  /* clear the loaded theme (for fresh reloads) */
     const Theme& current() const { return theme_; }
 
     /* Resolve a theme name to a file path.
