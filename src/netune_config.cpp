@@ -934,7 +934,6 @@ int main() {
                 config_set_int(cfg, "audio.volume", vol);
                 config_set_int(cfg, "playback.loop_mode", loop_mode);
                 config_set_int(cfg, "playback.seek_step_sec", seek);
-                config_save(cfg);
                 config_free(cfg);
             }
             screen.ExitLoopClosure()();

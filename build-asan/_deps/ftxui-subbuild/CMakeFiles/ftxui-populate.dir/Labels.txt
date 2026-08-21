@@ -1,0 +1,14 @@
+# Target labels
+ ftxui-populate
+# Source files and their labels
+/home/liu/Netune-beta/build-asan/_deps/ftxui-subbuild/CMakeFiles/ftxui-populate
+/home/liu/Netune-beta/build-asan/_deps/ftxui-subbuild/CMakeFiles/ftxui-populate.rule
+/home/liu/Netune-beta/build-asan/_deps/ftxui-subbuild/CMakeFiles/ftxui-populate-complete.rule
+/home/liu/Netune-beta/build-asan/_deps/ftxui-subbuild/ftxui-populate-prefix/src/ftxui-populate-stamp/ftxui-populate-build.rule
+/home/liu/Netune-beta/build-asan/_deps/ftxui-subbuild/ftxui-populate-prefix/src/ftxui-populate-stamp/ftxui-populate-configure.rule
+/home/liu/Netune-beta/build-asan/_deps/ftxui-subbuild/ftxui-populate-prefix/src/ftxui-populate-stamp/ftxui-populate-download.rule
+/home/liu/Netune-beta/build-asan/_deps/ftxui-subbuild/ftxui-populate-prefix/src/ftxui-populate-stamp/ftxui-populate-install.rule
+/home/liu/Netune-beta/build-asan/_deps/ftxui-subbuild/ftxui-populate-prefix/src/ftxui-populate-stamp/ftxui-populate-mkdir.rule
+/home/liu/Netune-beta/build-asan/_deps/ftxui-subbuild/ftxui-populate-prefix/src/ftxui-populate-stamp/ftxui-populate-patch.rule
+/home/liu/Netune-beta/build-asan/_deps/ftxui-subbuild/ftxui-populate-prefix/src/ftxui-populate-stamp/ftxui-populate-test.rule
+/home/liu/Netune-beta/build-asan/_deps/ftxui-subbuild/ftxui-populate-prefix/src/ftxui-populate-stamp/ftxui-populate-update.rule

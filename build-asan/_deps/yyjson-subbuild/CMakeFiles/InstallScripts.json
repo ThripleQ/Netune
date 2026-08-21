@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/liu/Netune-beta/build-asan/_deps/yyjson-subbuild/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

@@ -264,7 +264,17 @@ bool config_set_str(Config *cfg, const char *key, const char *value) {
                                               &leaf_key, &leaf);
     if (!parent || !leaf_key) return false;
 
-    return yyjson_mut_set_str(leaf, value);
+    /* yyjson_mut_set_str only stores the pointer without copying.  Callers
+       may pass transient buffers (std::string::c_str() etc), so copy the
+       string into the doc arena instead of keeping a dangling reference.
+       The leaf node keeps its own tag/next chain — only payload (tag+uni)
+       is replaced, since the string data must outlive the caller's buffer. */
+    size_t len = value ? strlen(value) : 0;
+    yyjson_mut_val *nv = yyjson_mut_strncpy(mdoc, value, len);
+    if (!nv) return false;
+    leaf->tag = nv->tag;
+    leaf->uni = nv->uni;
+    return true;
 }
 
 bool config_save(Config *cfg) {

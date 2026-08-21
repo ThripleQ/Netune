@@ -1,0 +1,3 @@
+# Hashes of file build rules.
+6a98a6580762ac58e284dc88e8c17016 CMakeFiles/netease-cli-build
+a040c2466d713610a27f2149766e6609 netease-cli
