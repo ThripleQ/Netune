@@ -1846,6 +1846,26 @@ int run_app(int argc, char **argv) {
     });
 
     component |= CatchEvent([&](ftxui::Event event) -> bool {
+        /* ── Terminal resize signal ──
+           ftxui routes SIGWINCH as Event::Special({0}) — the SAME bytes
+           as a real Ctrl+/ on some terminals. Disambiguate by checking
+           whether the terminal size actually changed since the last
+           event; if so this is a resize, swallow it (a real Ctrl+/
+           leaves the size untouched). */
+        {
+            static int g_resize_w = -1, g_resize_h = -1;
+            if (event.input().size() == 1 &&
+                (unsigned char)event.input()[0] == 0x00) {
+                auto tsz = Terminal::Size();
+                if (tsz.dimx != g_resize_w || tsz.dimy != g_resize_h) {
+                    bool first = (g_resize_w < 0);
+                    g_resize_w = tsz.dimx;
+                    g_resize_h = tsz.dimy;
+                    if (!first) return true;  /* swallow the resize signal */
+                }
+            }
+        }
+
         /* ── Song detail popup: Esc/Enter close ── */
         if (state.state().song_detail_open) {
             std::string k2;
@@ -2064,6 +2084,13 @@ int run_app(int argc, char **argv) {
                 if (m.x >= 20) {
                     /* right song panel */
                     StateStore::instance().set_active_panel(1);
+                    /* search box focused: the filtered view maps rows
+                       1:1 to matches, so raw selected_index moves would
+                       jump erratically — drop back to the full list */
+                    if (st.top_search_active) {
+                        close_top_search();
+                        if (dir < 0) return true;  /* up: just exit */
+                    }
                     int n = (int)st.playlist.size();
                     if (n > 0) {
                         int idx = st.selected_index + dir;
@@ -3007,10 +3034,10 @@ int run_app(int argc, char **argv) {
                            spectrum height is ADAPTIVE (2-4 rows, same
                            formula as render_spectrum_bar) — the old fixed
                            "- 2" misplaced the image on tall terminals. */
-                        int spec_rows = screen.dimy() / 12;
+                        int spec_rows = Terminal::Size().dimy / 12;
                         if (spec_rows < 2) spec_rows = 2;
                         if (spec_rows > 4) spec_rows = 4;
-                        int panel_h = screen.dimy() - 1 - spec_rows - 2;
+                        int panel_h = Terminal::Size().dimy - 1 - spec_rows - 2;
                         int row0 = 2;
                         if (panel_h > dh)
                             row0 += (panel_h - dh) / 2;
@@ -3019,10 +3046,12 @@ int run_app(int argc, char **argv) {
                         int col0 = 1 + cover_left_margin(st) + (cw - dw) / 2;
 
                         auto now = std::chrono::steady_clock::now();
+                        int tdimx = Terminal::Size().dimx;
+                        int tdimy = Terminal::Size().dimy;
                         bool geometry_changed =
                             !gfx_active ||
-                            screen.dimx() != last_dimx ||
-                            screen.dimy() != last_dimy ||
+                            tdimx != last_dimx ||
+                            tdimy != last_dimy ||
                             cw != last_cw || dw != last_dw || dh != last_dh ||
                             st.cover.stamp != last_stamp;
                         bool due =
@@ -3030,8 +3059,8 @@ int run_app(int argc, char **argv) {
                             std::chrono::milliseconds(500);
                         if (geometry_changed || due) {
                             gfx_last_place = now;
-                            last_dimx = screen.dimx();
-                            last_dimy = screen.dimy();
+                            last_dimx = tdimx;
+                            last_dimy = tdimy;
                             last_cw = cw; last_dw = dw; last_dh = dh;
                             last_stamp = st.cover.stamp;
                             printf("\x1b[%d;%dH", row0, col0);
@@ -3062,20 +3091,22 @@ int run_app(int argc, char **argv) {
                     if (rows > 12) rows = 12;
                     int cols = rows * 2;
                     int row0 = 3;
-                    int col0 = 1 + (screen.dimx() - cols) / 2;
+                    int col0 = 1 + (Terminal::Size().dimx - cols) / 2;
                     if (col0 < 1) col0 = 1;
                     auto now = std::chrono::steady_clock::now();
+                    int tdimx = Terminal::Size().dimx;
+                    int tdimy = Terminal::Size().dimy;
                     bool changed = !qr_gfx_placed ||
-                                   screen.dimx() != qr_ldx ||
-                                   screen.dimy() != qr_ldy ||
+                                   tdimx != qr_ldx ||
+                                   tdimy != qr_ldy ||
                                    rows != qr_lrows ||
                                    g_login_qr.stamp != qr_lstamp;
                     bool due = (now - qr_gfx_last) >=
                                std::chrono::milliseconds(500);
                     if (changed || due) {
                         qr_gfx_last = now;
-                        qr_ldx = screen.dimx();
-                        qr_ldy = screen.dimy();
+                        qr_ldx = tdimx;
+                        qr_ldy = tdimy;
                         qr_lrows = rows;
                         qr_lstamp = g_login_qr.stamp;
                         term_gfx_upload(&g_login_qr);
