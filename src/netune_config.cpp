@@ -214,7 +214,7 @@ static std::string cat_name(Cat cat) {
         case Cat::Theme:   return "主题";
         case Cat::Keybind: return "按键";
         case Cat::Layout:  return "布局";
-        case Cat::Main:    return "主配置";
+        case Cat::Main:    return "本地音乐";
         case Cat::Playback:return "播放";
     }
     return "";
@@ -673,8 +673,7 @@ int main() {
             }
             body.push_back(text(""));
             body.push_back(text("  a 添加目录   d 删除选中   (修改立即保存, 重启 netune 生效)") | dim);
-            body.push_back(text(""));
-            body.push_back(text("  config.json 其他内容由 netune 自动维护, 请勿重命名/删除") | dim);
+            body.push_back(text("  目录列表写入 config.json 的 music_sources.local.dirs") | dim);
             els.push_back(vbox(std::move(body)) | flex | border);
         } else {
             /* file list */
