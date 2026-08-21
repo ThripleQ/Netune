@@ -121,6 +121,7 @@ static yyjson_mut_val* resolve_mut_read(Config *cfg, const char *key) {
 }
 
 const char* config_get_str(Config *cfg, const char *key, const char *fallback) {
+    if (!cfg) return fallback;
     yyjson_mut_val *mv = resolve_mut_read(cfg, key);
     if (mv && yyjson_mut_is_str(mv)) return yyjson_mut_get_str(mv);
     yyjson_val *v = resolve(cfg, key);
@@ -129,6 +130,7 @@ const char* config_get_str(Config *cfg, const char *key, const char *fallback) {
 }
 
 int config_get_int(Config *cfg, const char *key, int fallback) {
+    if (!cfg) return fallback;
     yyjson_mut_val *mv = resolve_mut_read(cfg, key);
     if (mv && yyjson_mut_is_int(mv)) return (int)yyjson_mut_get_int(mv);
     yyjson_val *v = resolve(cfg, key);
@@ -137,6 +139,7 @@ int config_get_int(Config *cfg, const char *key, int fallback) {
 }
 
 bool config_get_bool(Config *cfg, const char *key, bool fallback) {
+    if (!cfg) return fallback;
     yyjson_mut_val *mv = resolve_mut_read(cfg, key);
     if (mv && yyjson_mut_is_bool(mv)) return yyjson_mut_get_bool(mv);
     yyjson_val *v = resolve(cfg, key);
@@ -145,6 +148,7 @@ bool config_get_bool(Config *cfg, const char *key, bool fallback) {
 }
 
 double config_get_double(Config *cfg, const char *key, double fallback) {
+    if (!cfg) return fallback;
     yyjson_mut_val *mv = resolve_mut_read(cfg, key);
     if (mv && yyjson_mut_is_num(mv)) return yyjson_mut_get_num(mv);
     yyjson_val *v = resolve(cfg, key);
@@ -153,6 +157,7 @@ double config_get_double(Config *cfg, const char *key, double fallback) {
 }
 
 int config_get_array_size(Config *cfg, const char *key) {
+    if (!cfg) return 0;
     yyjson_val *v = resolve(cfg, key);
     if (!v || !yyjson_is_arr(v)) return 0;
     return (int)yyjson_arr_size(v);
@@ -230,6 +235,7 @@ static yyjson_mut_val* resolve_mut_path(Config *cfg, yyjson_mut_doc *mdoc,
 }
 
 bool config_set_int(Config *cfg, const char *key, int value) {
+    if (!cfg) return false;
     yyjson_mut_doc *mdoc = config_mut_doc(cfg);
     if (!mdoc) return false;
     yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);
@@ -246,6 +252,7 @@ bool config_set_int(Config *cfg, const char *key, int value) {
 }
 
 bool config_set_str(Config *cfg, const char *key, const char *value) {
+    if (!cfg) return false;
     yyjson_mut_doc *mdoc = config_mut_doc(cfg);
     if (!mdoc) return false;
     yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);

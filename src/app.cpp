@@ -1468,13 +1468,21 @@ static void ensure_default_data_tree(void) {
     ensure_dir(root);
 
     /* Helper: create a default file (with parent dirs) if it
-       does not already exist. Never touches existing files. */
+       does not already exist. Never touches existing non-empty files.
+       0-byte files count as missing and get rebuilt. */
     auto ensure_file = [&](const char *rel, const char *content) {
         char path[2048];
         snprintf(path, sizeof(path), "%s" PATH_SEP "%s", root, rel);
-        if (access_utf8(path, F_OK) == 0) return;  /* already there */
+        FILE *f = fopen_utf8(path, "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long sz = ftell(f);
+            fclose(f);
+            if (sz > 0) return;  /* non-empty: already there */
+            LOG_WARN("Rebuilding empty data file: %s", path);
+        }
         ensure_dir(path);
-        FILE *f = fopen_utf8(path, "w");
+        f = fopen_utf8(path, "w");
         if (f) {
             fputs(content, f);
             fclose(f);
