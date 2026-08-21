@@ -1880,7 +1880,7 @@ int run_app(int argc, char **argv) {
             std::string k2;
             if (event.is_character()) k2 = event.character();
             else k2 = event_to_key_name(event);
-            if (k2 == "escape" || k2 == "enter" || k2 == "\r") {
+            if (k2 == "escape" || k2 == "enter" || k2 == "\r" || k2 == "d") {
                 StateStore::instance().set_song_detail(false, {});
                 return true;
             }
@@ -1895,6 +1895,12 @@ int run_app(int argc, char **argv) {
                 if (event.is_character()) k = event.character();
                 else k = event_to_key_name(event);
                 if (k.empty()) k = "";
+
+                if (k == "ctrl+x") {
+                    /* press Ctrl+X again to close at any layer */
+                    state.set_action_sheet(false, 0);
+                    return true;
+                }
 
                 if (as.action_sheet_menu == 2) {
                     /* text input layer: characters append, backspace
