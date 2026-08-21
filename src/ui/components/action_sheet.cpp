@@ -86,9 +86,9 @@ Element render_action_sheet(const AppState &s) {
         separator(),
         vbox(std::move(body)),
         separator(),
-        text(" j/k \u79FB\u52A8  Enter \u6267\u884C  Esc \u5173\u95ED ") | dim,
     }) | borderRounded
-      | bgcolor(Color::RGB(0, 0, 0))
+      | bgcolor(th.bg.has_color ? Color::RGB(th.bg.r, th.bg.g, th.bg.b)
+                                 : Color::RGB(0, 0, 0))
       | color(Color::RGB(th.accent.r, th.accent.g, th.accent.b));
 
     return vbox({filler(), hbox({filler(), box})});
@@ -110,9 +110,9 @@ Element render_song_detail(const AppState &s) {
         separator(),
         vbox(std::move(body)),
         separator(),
-        text(" Enter/Esc \u5173\u95ED ") | dim,       /* 关闭 */
     }) | borderRounded
-      | bgcolor(Color::RGB(0, 0, 0))
+      | bgcolor(th.bg.has_color ? Color::RGB(th.bg.r, th.bg.g, th.bg.b)
+                                 : Color::RGB(0, 0, 0))
       | color(Color::RGB(th.accent.r, th.accent.g, th.accent.b));
     return vbox({filler(), hbox({filler(), box})});
 }
