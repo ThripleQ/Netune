@@ -98,7 +98,7 @@ static std::string build_info_row(const std::string &content, int avail_w, bool 
 Element render_song_list(const AppState &s) {
     int mw = s.song_panel_width;
     if (mw < 10) mw = 10;
-    int avail_w = mw - 6;  /* minus prefix (marker + spaces) */
+    int avail_w = mw - 5;  /* minus prefix (marker + spaces) */
     if (avail_w < 5) avail_w = 5;
 
     Elements els;
@@ -269,9 +269,9 @@ Element render_song_list(const AppState &s) {
                     : Color::RGB(th.vip.r, th.vip.g, th.vip.b);
                 const char *sym = song.is_playlist ? "\xEF\xBC\xA0"      /* ＠ */
                                                   : "\xEF\xBC\x84";      /* ＄ */
-                prefix = hbox({text(pad), text(" "), text(sym) | color(mc), text(" ")});
+                prefix = hbox({text(pad), text(sym) | color(mc), text(" ")});
             } else {
-                prefix = text(pad + "    ");
+                prefix = text(pad + "   ");
             }
 
             if (active_sel) {
