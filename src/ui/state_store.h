@@ -115,6 +115,15 @@ struct AppState {
     int  action_sheet_selected = 0;
     /* -1 = status querying, 0 = not liked/subscribed, 1 = liked/subscribed */
     int  action_sheet_active = -1;
+    /* state machine: 0=main menu, 1=playlist picker, 2=text input, 3=confirm */
+    int  action_sheet_menu = 0;
+    int  action_sheet_opt_count = 3;  /* number of options in menu 0 */
+    std::string action_sheet_input;   /* text input buffer */
+    std::string action_sheet_ctx;     /* operation context (song id / playlist id) */
+    std::vector<SongInfo> action_sheet_pls;  /* my playlists for the picker */
+
+    /* current playlist context (for "remove from this playlist") */
+    std::string current_playlist_id;
 
     /* spectrum */
     float spectrum[SPECTRUM_BANDS] = {0};
@@ -225,6 +234,12 @@ public:
     void set_show_help(bool show);
     void set_action_sheet(bool open, int selected);
     void set_action_sheet_active(int active);
+    void set_action_sheet_menu(int menu);
+    void set_action_sheet_opt_count(int n);
+    void set_action_sheet_input(const std::string &text);
+    void set_action_sheet_ctx(const std::string &ctx);
+    void set_action_sheet_pls(const std::vector<SongInfo> &pls);
+    void set_current_playlist_id(const std::string &id);
 
     /* loading */
     void set_loading(bool v);

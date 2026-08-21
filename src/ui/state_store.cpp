@@ -320,6 +320,37 @@ void StateStore::set_action_sheet_active(int active) {
     state_.action_sheet_active = active;
 }
 
+void StateStore::set_action_sheet_menu(int menu) {
+    state_.action_sheet_menu = menu;
+}
+
+void StateStore::set_action_sheet_opt_count(int n) {
+    state_.action_sheet_opt_count = n;
+}
+
+void StateStore::set_action_sheet_input(const std::string &text) {
+    state_.action_sheet_input = text;
+}
+
+void StateStore::set_action_sheet_ctx(const std::string &ctx) {
+    state_.action_sheet_ctx = ctx;
+}
+
+void StateStore::set_action_sheet_pls(const std::vector<SongInfo> &pls) {
+    for (auto &s : state_.action_sheet_pls)
+        song_info_free(&s);
+    state_.action_sheet_pls.clear();
+    for (auto &s : pls) {
+        SongInfo c = {};
+        song_info_copy(&c, &s);
+        state_.action_sheet_pls.push_back(c);
+    }
+}
+
+void StateStore::set_current_playlist_id(const std::string &id) {
+    state_.current_playlist_id = id;
+}
+
 void StateStore::set_loading(bool v) {
     state_.loading = v;
 }

@@ -528,6 +528,7 @@ static void activate_netease_menu_item(int idx) {
             {"\u6211\u559C\u6B22\u7684\u97F3\u4E50", 302, ""},
             {"\u5237\u65B0\u767B\u5F55", 303, ""},
             {"\u9000\u51FA\u767B\u5F55", 304, ""},
+            {"+ \u65B0\u5EFA\u6B4C\u5355", 305, ""},
         });
         StateStore::instance().set_netease_selected(0);
     } else if (type == 301) {
@@ -596,10 +597,17 @@ static void activate_netease_menu_item(int idx) {
         StateStore::instance().clear_nav_stack();
         StateStore::instance().set_netease_menu({});
         StateStore::instance().set_music_mode(MusicMode::Netease);
+    } else if (type == 305) {
+        /* create playlist: open the action sheet in text-input mode */
+        StateStore::instance().set_action_sheet(true, 0);
+        StateStore::instance().set_action_sheet_menu(2);
+        StateStore::instance().set_action_sheet_ctx("create");
+        StateStore::instance().set_action_sheet_input("");
     } else if (!pl_id.empty()) {
         /* entering a playlist's songs from a playlist list — push with
            playlist restore so Esc lands back on the playlist list */
         StateStore::instance().nav_push_restore_playlist();
+        StateStore::instance().set_current_playlist_id(pl_id);
         StateStore::instance().set_loading(true);
         std::string _pl_id = pl_id;
         std::thread([_pl_id]() {
@@ -1830,32 +1838,184 @@ int run_app(int argc, char **argv) {
     });
 
     component |= CatchEvent([&](ftxui::Event event) -> bool {
-        /* ── Action sheet (Ctrl+X) modal handling ── */
+        /* ── Action sheet (Ctrl+X) modal state machine ── */
         {
             const AppState &as = state.state();
             if (as.action_sheet_open) {
                 std::string k;
                 if (event.is_character()) k = event.character();
                 else k = event_to_key_name(event);
-                if (k == "enter" || k == "\r") {
-                    const auto &item = as.playlist[as.selected_index];
-                    bool is_pl = item.is_playlist;
-                    std::string id = item.id ? item.id : "";
-                    bool active = as.action_sheet_active == 1;
-                    if (id.empty() || as.action_sheet_active < 0) return true;
-                    std::thread([id, is_pl, active]() {
-                        int rv = is_pl
-                            ? netease_subscribe_playlist(id.c_str(), !active)
-                            : netease_like_song(id.c_str(), !active);
-                        LOG_INFO("ACTION SHEET: %s %s toggle->%d = %d",
-                                 is_pl ? "subscribe" : "like", id.c_str(), !active, rv);
-                        if (rv == 0)
-                            StateStore::instance().set_action_sheet_active(active ? 0 : 1);
-                    }).detach();
+                if (k.empty()) k = "";
+
+                if (as.action_sheet_menu == 2) {
+                    /* text input layer: characters append, backspace
+                       deletes, Enter submits, Esc cancels */
+                    if (k == "enter" || k == "\r") {
+                        std::string name = as.action_sheet_input;
+                        std::string ctx = as.action_sheet_ctx;
+                        std::string cur_pl = as.current_playlist_id;
+                        state.set_action_sheet(false, 0);
+                        if (!name.empty()) {
+                            std::thread([name, ctx, cur_pl]() {
+                                if (ctx == "rename") {
+                                    netease_playlist_rename(cur_pl.c_str(), name.c_str());
+                                } else {
+                                    char nid[32] = {0};
+                                    if (netease_playlist_create(name.c_str(), nid, sizeof(nid)) == 0 && nid[0])
+                                        LOG_INFO("created playlist %s", nid);
+                                }
+                            }).detach();
+                        }
+                        return true;
+                    }
+                    if (k == "escape") {
+                        state.set_action_sheet(false, 0);
+                        return true;
+                    }
+                    if (k == "backspace") {
+                        std::string q = as.action_sheet_input;
+                        if (!q.empty()) {
+                            int n = (int)q.size() - 1;
+                            while (n > 0 && ((unsigned char)q[n] & 0xC0) == 0x80) n--;
+                            q.resize((size_t)n);
+                            state.set_action_sheet_input(q);
+                        }
+                        return true;
+                    }
+                    if (k.size() == 1 && (unsigned char)k[0] >= 32) {
+                        state.set_action_sheet_input(as.action_sheet_input + k);
+                        return true;
+                    }
+                    return true;
+                }
+
+                if (as.action_sheet_menu == 3) {
+                    /* confirm layer */
+                    if (k == "enter" || k == "\r") {
+                        std::string id = as.action_sheet_ctx;
+                        state.set_action_sheet(false, 0);
+                        std::thread([id]() {
+                            LOG_INFO("ACTION SHEET: delete playlist %s -> %d",
+                                     id.c_str(), netease_playlist_delete(id.c_str()));
+                        }).detach();
+                        return true;
+                    }
+                    if (k == "escape") {
+                        state.set_action_sheet(true, 0);
+                        state.set_action_sheet_menu(0);
+                        return true;
+                    }
+                    return true;
+                }
+
+                /* menu 0 (main) and menu 1 (playlist picker) share
+                   j/k navigation + Enter */
+                if (k == "j" || k == "down") {
+                    int n = (as.action_sheet_menu == 1)
+                        ? (int)as.action_sheet_pls.size()
+                        : as.action_sheet_opt_count;
+                    if (n <= 0) n = 1;
+                    state.set_action_sheet(true, (as.action_sheet_selected + 1) % n);
+                    return true;
+                }
+                if (k == "k" || k == "up") {
+                    int n = (as.action_sheet_menu == 1)
+                        ? (int)as.action_sheet_pls.size()
+                        : as.action_sheet_opt_count;
+                    if (n <= 0) n = 1;
+                    state.set_action_sheet(true, (as.action_sheet_selected + n - 1) % n);
                     return true;
                 }
                 if (k == "escape") {
-                    state.set_action_sheet(false, 0);
+                    if (as.action_sheet_menu == 1) {
+                        state.set_action_sheet_menu(0);
+                        state.set_action_sheet(true, 0);
+                    } else {
+                        state.set_action_sheet(false, 0);
+                    }
+                    return true;
+                }
+                if (k == "enter" || k == "\r") {
+                    const auto &item = as.playlist[as.selected_index];
+                    std::string id = item.id ? item.id : "";
+                    if (as.action_sheet_menu == 1) {
+                        /* playlist picker: add song to selected playlist */
+                        if (as.action_sheet_selected >= 0 &&
+                            as.action_sheet_selected < (int)as.action_sheet_pls.size()) {
+                            std::string plid = as.action_sheet_pls[as.action_sheet_selected].id ? as.action_sheet_pls[as.action_sheet_selected].id : "";
+                            state.set_action_sheet(false, 0);
+                            if (!plid.empty() && !id.empty()) {
+                                std::thread([plid, id]() {
+                                    LOG_INFO("ACTION SHEET: add %s to %s -> %d",
+                                             id.c_str(), plid.c_str(),
+                                             netease_track_add(plid.c_str(), id.c_str()));
+                                }).detach();
+                            }
+                        }
+                        return true;
+                    }
+                    /* menu 0 */
+                    bool is_pl = item.is_playlist;
+                    bool active = as.action_sheet_active == 1;
+                    int opt = as.action_sheet_selected;
+                    if (id.empty() || as.action_sheet_active < 0) return true;
+                    if (is_pl) {
+                        if (opt == 1) {
+                            /* subscribe/unsubscribe */
+                            std::thread([id, active]() {
+                                int rv = netease_subscribe_playlist(id.c_str(), !active);
+                                LOG_INFO("ACTION SHEET: subscribe %s -> %d", id.c_str(), rv);
+                                if (rv == 0)
+                                    StateStore::instance().set_action_sheet_active(active ? 0 : 1);
+                            }).detach();
+                        } else if (opt == 2) {
+                            /* rename */
+                            state.set_action_sheet_ctx("rename");
+                            state.set_action_sheet_input("");
+                            state.set_action_sheet_menu(2);
+                        } else if (opt == 3) {
+                            /* delete (confirm) */
+                            state.set_action_sheet_ctx(id);
+                            state.set_action_sheet_menu(3);
+                        }
+                    } else {
+                        if (opt == 1) {
+                            /* like/unlike */
+                            std::thread([id, active]() {
+                                int rv = netease_like_song(id.c_str(), !active);
+                                LOG_INFO("ACTION SHEET: like %s -> %d", id.c_str(), rv);
+                                if (rv == 0)
+                                    StateStore::instance().set_action_sheet_active(active ? 0 : 1);
+                            }).detach();
+                        } else if (opt == 4) {
+                            /* add to playlist: load my playlists */
+                            state.set_action_sheet_menu(1);
+                            state.set_action_sheet(true, 0);
+                            std::thread([]() {
+                                SongInfo *pls = NULL; int pc = 0;
+                                if (netease_playlists(false, &pls, &pc) == 0 && pc > 0) {
+                                    std::vector<SongInfo> vec;
+                                    for (int i = 0; i < pc; i++)
+                                        vec.push_back(pls[i]);
+                                    free(pls);
+                                    StateStore::instance().set_action_sheet_pls(vec);
+                                } else {
+                                    StateStore::instance().set_action_sheet_pls({});
+                                }
+                            }).detach();
+                        } else if (opt == 5) {
+                            /* remove from current playlist */
+                            std::string cid = as.current_playlist_id;
+                            state.set_action_sheet(false, 0);
+                            if (!cid.empty() && !id.empty()) {
+                                std::thread([cid, id]() {
+                                    LOG_INFO("ACTION SHEET: remove %s from %s -> %d",
+                                             id.c_str(), cid.c_str(),
+                                             netease_track_remove(cid.c_str(), id.c_str()));
+                                }).detach();
+                            }
+                        }
+                    }
                     return true;
                 }
                 return true;  /* swallow all keys while open */
@@ -2283,6 +2443,7 @@ int run_app(int argc, char **argv) {
             }
             if (!cur.nav_stack.empty()) {
                 StateStore::instance().nav_pop();
+                StateStore::instance().set_current_playlist_id("");
                 return true;
             }
         }
@@ -2461,6 +2622,7 @@ int run_app(int argc, char **argv) {
                 const auto &song = cur.playlist[cur.selected_index];
                 if (song.is_playlist) {
                     StateStore::instance().nav_push_restore_playlist();
+                    StateStore::instance().set_current_playlist_id(song.id ? song.id : "");
                     StateStore::instance().set_loading(true);
                     std::string _pl_id = song.id ? song.id : "";
                     std::thread([_pl_id]() {
@@ -2573,8 +2735,12 @@ int run_app(int argc, char **argv) {
             /* open the action sheet for the selected right-panel item */
             if (!cur.playlist.empty()) {
                 StateStore::instance().set_action_sheet(true, 0);
+                StateStore::instance().set_action_sheet_menu(0);
                 const auto &item = cur.playlist[cur.selected_index];
                 bool is_pl = item.is_playlist;
+                bool in_own = !cur.current_playlist_id.empty();
+                StateStore::instance().set_action_sheet_opt_count(
+                    is_pl ? (in_own ? 3 : 1) : (in_own ? 3 : 2));
                 std::string id = item.id ? item.id : "";
                 if (!id.empty()) {
                     std::thread([id, is_pl]() {
