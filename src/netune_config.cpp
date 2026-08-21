@@ -74,7 +74,7 @@ static const ActionInfo kActions[] = {
     {Action::Quit,         "quit",           "退出"},
 };
 
-enum class Mode { Normal, Input, Confirm, KeyEdit, Capture };
+enum class Mode { Normal, Input, Confirm, KeyEdit, Capture, ThemeEdit, ColorEdit };
 
 struct CfgFile {
     std::string name;   /* file name (with extension) */
@@ -106,8 +106,92 @@ struct CfgState {
 
     bool dirty_kb = false;
 
+    /* theme edit sub-view */
+    std::string theme_editing;      /* file name being edited */
+    Theme theme_edit;
+    int slot_sel = 0;
+    bool dirty_theme = false;
+
+    /* color edit popup */
+    std::string hex_buf;
+    int palette_sel = 0;
+
     std::string notice;
 };
+
+/* ── Theme color slots ──────────────────────────────── */
+struct ColorSlot {
+    const char *key;
+    const char *name;
+    ThemeColor Theme::*member;
+};
+
+static const ColorSlot kSlots[] = {
+    {"bg",             "背景",      &Theme::bg},
+    {"fg",             "文字",      &Theme::fg},
+    {"accent",         "强调色",    &Theme::accent},
+    {"accent_bg",      "选中背景",  &Theme::accent_bg},
+    {"muted",          "次要文字",  &Theme::muted},
+    {"border",         "边框",      &Theme::border},
+    {"success",        "成功",      &Theme::success},
+    {"warning",        "警告",      &Theme::warning},
+    {"error",          "错误",      &Theme::error},
+    {"overlay_bg",     "弹窗背景",  &Theme::overlay_bg},
+    {"progress_track", "进度条轨道", &Theme::progress_track},
+    {"spectrum",       "频谱",      &Theme::spectrum},
+    {"vip",            "VIP 标记",  &Theme::vip},
+    {"playlist",       "歌单标记",  &Theme::playlist},
+};
+
+/* ── Preset palette (16 colors) ─────────────────────── */
+static const char *kPalette[] = {
+    "#000000", "#37474f", "#888888", "#b0bec5", "#ffffff",
+    "#e53935", "#fb8c00", "#fdd835", "#43a047", "#00acc1",
+    "#1e88e5", "#8e24aa", "#e91e63", "#795548", "#9ece6a", "#f7768e",
+};
+static const int kPaletteN = (int)(sizeof(kPalette)/sizeof(kPalette[0]));
+
+static bool write_theme_yaml(const std::string &path, const std::string &name, const Theme &t) {
+    FILE *fp = fopen(path.c_str(), "wb");
+    if (!fp) return false;
+    yaml_emitter_t em;
+    yaml_document_t doc;
+    yaml_emitter_initialize(&em);
+    yaml_emitter_set_output_file(&em, fp);
+    yaml_emitter_set_encoding(&em, YAML_UTF8_ENCODING);
+    yaml_document_initialize(&doc, NULL, NULL, NULL, 1, 1);
+    int root = yaml_document_add_mapping(&doc, NULL, YAML_BLOCK_MAPPING_STYLE);
+    int colors = yaml_document_add_mapping(&doc, NULL, YAML_BLOCK_MAPPING_STYLE);
+    yaml_document_append_mapping_pair(&doc, root,
+        yaml_document_add_scalar(&doc, NULL, (yaml_char_t*)"name", 4, YAML_PLAIN_SCALAR_STYLE),
+        yaml_document_add_scalar(&doc, NULL, (yaml_char_t*)name.c_str(), (int)name.size(), YAML_PLAIN_SCALAR_STYLE));
+    yaml_document_append_mapping_pair(&doc, root,
+        yaml_document_add_scalar(&doc, NULL, (yaml_char_t*)"colors", 6, YAML_PLAIN_SCALAR_STYLE),
+        colors);
+    for (auto &slot : kSlots) {
+        const ThemeColor &c = t.*(slot.member);
+        std::string hex = theme_color_to_hex(c);
+        yaml_document_append_mapping_pair(&doc, colors,
+            yaml_document_add_scalar(&doc, NULL, (yaml_char_t*)slot.key, (int)strlen(slot.key), YAML_PLAIN_SCALAR_STYLE),
+            yaml_document_add_scalar(&doc, NULL, (yaml_char_t*)hex.c_str(), (int)hex.size(), YAML_PLAIN_SCALAR_STYLE));
+    }
+    yaml_emitter_dump(&em, &doc);
+    yaml_document_delete(&doc);
+    yaml_emitter_delete(&em);
+    fclose(fp);
+    return true;
+}
+
+static bool load_theme_file(CfgState &st, const std::string &path, const std::string &fname) {
+    auto &tm = ThemeManager::instance();
+    tm.reset();
+    if (!tm.load(path)) return false;
+    st.theme_edit = tm.current();
+    st.theme_editing = fname;
+    st.slot_sel = 0;
+    st.dirty_theme = false;
+    return true;
+}
 
 /* ── Small utilities ────────────────────────────────── */
 static std::string dir_of(Cat cat) {
@@ -446,6 +530,31 @@ int main() {
                        | color(Color::RGB(122,162,247));
             return vbox({filler(), hbox({filler(), box})});
         }
+        if (th.mode == Mode::ColorEdit) {
+            const ColorSlot &slot = kSlots[th.slot_sel];
+            ThemeColor &c = th.theme_edit.*(slot.member);
+            Elements body;
+            body.push_back(text(std::string("  编辑颜色 [") + slot.name + "]  当前 " +
+                                theme_color_to_hex(c)) | bold);
+            body.push_back(separator());
+            auto swatch = text("  ") | bgcolor(Color::RGB(c.r, c.g, c.b));
+            body.push_back(hbox({swatch, text("  输入 hex (如 #1a1b26): "),
+                                 text(th.hex_buf + "\u258C")}));
+            Elements pal;
+            for (int i = 0; i < kPaletteN; i++) {
+                ThemeColor pc = theme_color_from_hex(kPalette[i]);
+                auto p = text("  ");
+                if (i == th.palette_sel)
+                    p = p | bold | inverted;
+                pal.push_back(p | bgcolor(Color::RGB(pc.r, pc.g, pc.b)));
+            }
+            body.push_back(hbox(std::move(pal)));
+            body.push_back(text("  ←/→ 选色板  Enter 应用  ESC 取消") | dim);
+            auto box = vbox(std::move(body)) | borderRounded
+                       | bgcolor(Color::RGB(26,27,38))
+                       | color(Color::RGB(122,162,247));
+            return vbox({filler(), hbox({filler(), box})});
+        }
         return text("");
     };
 
@@ -494,6 +603,27 @@ int main() {
             body.push_back(text(""));
             body.push_back(text("  Enter: 绑定  Backspace: 删除最后绑定  ESC: 返回") | dim);
             els.push_back(vbox(std::move(body)) | flex | border);
+        } else if (th.mode == Mode::ThemeEdit) {
+            /* theme color-slot editor sub-view */
+            Elements body;
+            body.push_back(text("  编辑主题: " + th.theme_editing + "   (ESC 保存返回)") | bold);
+            body.push_back(separator());
+            for (size_t i = 0; i < sizeof(kSlots)/sizeof(kSlots[0]); i++) {
+                const ColorSlot &slot = kSlots[i];
+                const ThemeColor &c = th.theme_edit.*(slot.member);
+                bool sel = ((int)i == th.slot_sel);
+                auto swatch = text("  ") | bgcolor(Color::RGB(c.r, c.g, c.b));
+                std::string line = "  " + std::string(slot.name) + " = " +
+                                   theme_color_to_hex(c);
+                Element row = hbox({swatch, text(line)});
+                if (sel)
+                    body.push_back(hbox({text("> "), row | bold}) | inverted);
+                else
+                    body.push_back(hbox({text("  "), row}));
+            }
+            body.push_back(text(""));
+            body.push_back(text("  Enter: 编辑颜色(hex/色板)  ↑/↓: 选择  ESC: 保存返回") | dim);
+            els.push_back(vbox(std::move(body)) | flex | border);
         } else if (th.cat == Cat::Main) {
             els.push_back(vbox({
                 text("  config.json — 主配置文件 (主题/布局/按键/播放 默认值)") | dim,
@@ -533,9 +663,9 @@ int main() {
         /* action hints */
         std::string hints;
         switch (th.cat) {
-            case Cat::Theme:   hints = "Enter 应用   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
-            case Cat::Keybind: hints = "Enter 编辑按键   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
-            case Cat::Layout:  hints = "Enter 查看   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
+            case Cat::Theme:   hints = "Enter 选用   x 编辑颜色   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
+            case Cat::Keybind: hints = "Enter 选用(复制为default)   x 编辑按键   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
+            case Cat::Layout:  hints = "Enter 选用   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
             case Cat::Main:    hints = "主配置文件"; break;
             case Cat::Playback:hints = "←/→ 音量   l 循环   + / - 快进步长"; break;
         }
@@ -556,6 +686,81 @@ int main() {
             if (event.is_character()) return event.character();
             return event_to_key_name(event);
         };
+
+        /* ── Color edit popup ── */
+        if (st.mode == Mode::ColorEdit) {
+            std::string k = key_of();
+            if (event == Event::Escape) { st.mode = Mode::ThemeEdit; return true; }
+            if (event == Event::ArrowLeft || k == "left") {
+                st.palette_sel = (st.palette_sel + kPaletteN - 1) % kPaletteN;
+                return true;
+            }
+            if (event == Event::ArrowRight || k == "right") {
+                st.palette_sel = (st.palette_sel + 1) % kPaletteN;
+                return true;
+            }
+            if (event == Event::Backspace) {
+                if (!st.hex_buf.empty()) st.hex_buf.pop_back();
+                return true;
+            }
+            if (event == Event::Return || k == "\r") {
+                ThemeColor nc;
+                std::string hex = st.hex_buf;
+                if (!hex.empty() && hex[0] != '#') hex = "#" + hex;
+                bool ok = !hex.empty() && theme_color_from_hex(hex).has_color;
+                if (ok) {
+                    nc = theme_color_from_hex(hex);
+                } else {
+                    nc = theme_color_from_hex(kPalette[st.palette_sel]);
+                    ok = nc.has_color;
+                }
+                if (ok) {
+                    st.theme_edit.*(kSlots[st.slot_sel].member) = nc;
+                    st.dirty_theme = true;
+                    st.notice = std::string("已设置 ") + kSlots[st.slot_sel].name +
+                                " = " + theme_color_to_hex(nc);
+                } else {
+                    st.notice = "无效的 hex 颜色";
+                }
+                st.hex_buf.clear();
+                st.mode = Mode::ThemeEdit;
+                return true;
+            }
+            if (k.size() == 1 && st.hex_buf.size() < 9) {
+                char c = k[0];
+                if (c == '#' || (c >= '0' && c <= '9') ||
+                    (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))
+                    st.hex_buf += c;
+            }
+            return true;
+        }
+
+        /* ── Theme edit sub-view ── */
+        if (st.mode == Mode::ThemeEdit) {
+            std::string k = key_of();
+            if (event == Event::Escape) {
+                if (st.dirty_theme)
+                    write_theme_yaml(dir_of(Cat::Theme) + "/" + st.theme_editing,
+                                     st.theme_editing, st.theme_edit);
+                st.mode = Mode::Normal;
+                refresh_files(st);
+                return true;
+            }
+            if (k == "up" || k == "down" || k == "j" || k == "k") {
+                int dir = (k == "up" || k == "k") ? -1 : 1;
+                int n = (int)(sizeof(kSlots)/sizeof(kSlots[0]));
+                st.slot_sel = (st.slot_sel + dir + n) % n;
+                return true;
+            }
+            if (k == "enter" || k == "\r") {
+                st.hex_buf.clear();
+                st.palette_sel = 0;
+                st.mode = Mode::ColorEdit;
+                st.notice.clear();
+                return true;
+            }
+            return true;
+        }
 
         /* ── Capture (keybinding) ── */
         if (st.mode == Mode::Capture) {
@@ -771,15 +976,46 @@ int main() {
         }
         if (k == "enter" || k == "\r") {
             if (st.cat == Cat::Theme && !st.files.empty()) {
+                /* Enter = use (apply) the theme */
                 std::string base = st.files[st.sel].name;
                 if (base.size() > 5) base = base.substr(0, base.size() - 5);
                 apply_theme(st, cfg, base);
             } else if (st.cat == Cat::Keybind && !st.files.empty()) {
+                /* Enter = use: make this file the active keybindings
+                   (netune reads keybindings/default.yaml) */
+                std::string sel = st.files[st.sel].name;
+                if (sel == "default.yaml") {
+                    st.notice = "default.yaml 已是当前按键配置";
+                } else if (copy_file(dir_of(Cat::Keybind) + "/" + sel,
+                                     dir_of(Cat::Keybind) + "/default.yaml")) {
+                    st.notice = "已选用按键配置: " + sel + " (重启 netune 生效)";
+                } else {
+                    st.notice = "选用失败";
+                }
+            } else if (st.cat == Cat::Layout && !st.files.empty()) {
+                std::string base = st.files[st.sel].name;
+                if (base.size() > 5) base = base.substr(0, base.size() - 5);
+                if (cfg) {
+                    config_set_str(cfg, "ui.layout", base.c_str());
+                    config_save(cfg);
+                    st.notice = "已选用布局: " + base;
+                }
+            }
+            return true;
+        }
+        if (k == "x" && (st.cat == Cat::Theme || st.cat == Cat::Keybind) &&
+            !st.files.empty()) {
+            /* x = edit the selected config file */
+            if (st.cat == Cat::Theme) {
+                load_theme_file(st, dir_of(Cat::Theme) + "/" + st.files[st.sel].name,
+                                st.files[st.sel].name);
+                st.mode = Mode::ThemeEdit;
+            } else {
                 st.kb_editing = st.files[st.sel].name;
                 load_kb_file(st, dir_of(Cat::Keybind) + "/" + st.kb_editing);
                 st.mode = Mode::KeyEdit;
-                st.notice.clear();
             }
+            st.notice.clear();
             return true;
         }
         if ((k == "r" || k == "e" || k == "i" || k == "n" || k == "d") &&
