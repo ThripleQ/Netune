@@ -124,6 +124,7 @@ struct AppState {
 
     /* current playlist context (for "remove from this playlist") */
     std::string current_playlist_id;
+    bool        detail_playlist_mine = false;  /* open playlist is user-owned */
 
     /* spectrum */
     float spectrum[SPECTRUM_BANDS] = {0};
@@ -240,6 +241,7 @@ public:
     void set_action_sheet_ctx(const std::string &ctx);
     void set_action_sheet_pls(const std::vector<SongInfo> &pls);
     void set_current_playlist_id(const std::string &id);
+    void set_detail_playlist_mine(bool v);
 
     /* loading */
     void set_loading(bool v);

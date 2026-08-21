@@ -351,6 +351,10 @@ void StateStore::set_current_playlist_id(const std::string &id) {
     state_.current_playlist_id = id;
 }
 
+void StateStore::set_detail_playlist_mine(bool v) {
+    state_.detail_playlist_mine = v;
+}
+
 void StateStore::set_loading(bool v) {
     state_.loading = v;
 }

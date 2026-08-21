@@ -540,6 +540,7 @@ static void activate_netease_menu_item(int idx) {
             int ret = netease_playlists(false, &pl, &pc);
             LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
             if (ret == 0 && pc > 0) {
+                for (int i = 0; i < pc; i++) pl[i].mine = 1;
                 ld->songs = pl; ld->count = pc;
             } else {
                 ld->songs = NULL; ld->count = 0;
@@ -608,6 +609,8 @@ static void activate_netease_menu_item(int idx) {
            playlist restore so Esc lands back on the playlist list */
         StateStore::instance().nav_push_restore_playlist();
         StateStore::instance().set_current_playlist_id(pl_id);
+        StateStore::instance().set_detail_playlist_mine(
+            !cur.playlist.empty() && cur.playlist[cur.selected_index].mine == 1);
         StateStore::instance().set_loading(true);
         std::string _pl_id = pl_id;
         std::thread([_pl_id]() {
@@ -1964,7 +1967,8 @@ int run_app(int argc, char **argv) {
                     /* active<0 = state query still in flight: treat as
                        inactive (idempotent on the API side) */
                     bool active = as.action_sheet_active == 1;
-                    bool in_own = !as.current_playlist_id.empty();
+                    bool in_own = is_pl ? (item.mine == 1)
+                                        : as.detail_playlist_mine;
                     int idx = as.action_sheet_selected;
                     if (id.empty()) return true;
                     if (is_pl) {
@@ -2452,6 +2456,7 @@ int run_app(int argc, char **argv) {
             if (!cur.nav_stack.empty()) {
                 StateStore::instance().nav_pop();
                 StateStore::instance().set_current_playlist_id("");
+                StateStore::instance().set_detail_playlist_mine(false);
                 return true;
             }
         }
@@ -2631,6 +2636,7 @@ int run_app(int argc, char **argv) {
                 if (song.is_playlist) {
                     StateStore::instance().nav_push_restore_playlist();
                     StateStore::instance().set_current_playlist_id(song.id ? song.id : "");
+                    StateStore::instance().set_detail_playlist_mine(song.mine == 1);
                     StateStore::instance().set_loading(true);
                     std::string _pl_id = song.id ? song.id : "";
                     std::thread([_pl_id]() {
@@ -2746,7 +2752,8 @@ int run_app(int argc, char **argv) {
                 StateStore::instance().set_action_sheet_menu(0);
                 const auto &item = cur.playlist[cur.selected_index];
                 bool is_pl = item.is_playlist;
-                bool in_own = !cur.current_playlist_id.empty();
+                bool in_own = is_pl ? (item.mine == 1)
+                                    : cur.detail_playlist_mine;
                 StateStore::instance().set_action_sheet_opt_count(
                     is_pl ? (in_own ? 3 : 1) : (in_own ? 3 : 2));
                 std::string id = item.id ? item.id : "";

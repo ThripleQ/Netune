@@ -15,19 +15,21 @@ Element render_action_sheet(const AppState &s) {
                        s.playlist[s.selected_index];
     bool is_playlist = item.is_playlist;
     std::string title = item.title ? item.title : "(nothing selected)";
-    bool in_own_pl = !s.current_playlist_id.empty();
     auto &th = ThemeManager::instance().current();
 
     Elements body;
 
     if (s.action_sheet_menu == 0) {
-        /* main menu */
+        /* main menu — options depend on the selected object:
+           playlist:  subscribe/unsubscribe (any) + rename/delete (own only)
+           song:      like/unlike (any) + add-to-playlist (any) +
+                     remove-from-current (own playlist detail only) */
         std::vector<ActionOpt> opts;
         if (is_playlist) {
             opts.push_back({s.action_sheet_active == 1
                 ? " \u2606 \u53D6\u6D88\u6536\u85CF\u6B4C\u5355 "   /* ☆ 取消收藏歌单 */
                 : " \u2606 \u6536\u85CF\u6B4C\u5355 ", 1});       /* ☆ 收藏歌单 */
-            if (in_own_pl) {
+            if (item.mine == 1) {
                 opts.push_back({" \u270E \u91CD\u547D\u540D... ", 2});     /* ✎ 重命名... */
                 opts.push_back({" \u2716 \u5220\u9664\u6B4C\u5355 ", 3});  /* ✖ 删除歌单 */
             }
@@ -36,7 +38,7 @@ Element render_action_sheet(const AppState &s) {
                 ? " \u2665 \u53D6\u6D88\u559C\u6B22 "   /* ♥ 取消喜欢 */
                 : " \u2665 \u559C\u6B22\u6B64\u6B4C\u66F2 ", 1});  /* ♥ 喜欢此歌曲 */
             opts.push_back({" \u21D2 \u6536\u85CF\u5230\u6B4C\u5355... ", 4});  /* ⇒ 收藏到歌单... */
-            if (in_own_pl) {
+            if (s.detail_playlist_mine) {
                 opts.push_back({" \u2716 \u4ECE\u5F53\u524D\u6B4C\u5355\u79FB\u9664 ", 5}); /* ✖ 从当前歌单移除 */
             }
         }
@@ -64,9 +66,9 @@ Element render_action_sheet(const AppState &s) {
         }
     } else if (s.action_sheet_menu == 2) {
         /* text input */
-        std::string label = is_playlist
-            ? " \u91CD\u547D\u540D: "   /* 重命名: */
-            : " \u65B0\u5EFA\u6B4C\u5355: ";  /* 新建歌单: */
+        std::string label = s.action_sheet_ctx == "rename"
+            ? " \u91CD\u547D\u540D: "        /* 重命名: */
+            : " \u65B0\u5EFA\u6B4C\u5355: "; /* 新建歌单: */
         body.push_back(text(label) | bold);
         body.push_back(text(" \u2502" + s.action_sheet_input + "\u258C\u2502 ") | bold
                        | bgcolor(Color::RGB(th.accent.r, th.accent.g, th.accent.b))
