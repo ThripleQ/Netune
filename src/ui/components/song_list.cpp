@@ -11,8 +11,8 @@
 #include <algorithm>
 using namespace ftxui;
 
-#define MARQUEE_SPEED  8
-#define MARQUEE_PAUSE 45
+#define MARQUEE_SPEED_MS 130   /* ms per column scrolled */
+#define MARQUEE_PAUSE_MS 750   /* ms hold at each end */
 
 /* ── Truncate or marquee-scroll text within width ─── */
 static std::string fit_text(const std::string &text, int width) {
@@ -36,17 +36,23 @@ static std::string fit_text(const std::string &text, int width) {
 }
 
 static std::string marquee_text(const std::string &text, int width) {
-    static int         frame = 0;
-    static std::string last_text;
-    if (text != last_text) { frame = 0; last_text = text; }
-    frame++;
+    /* wall-clock driven so the speed is stable regardless of frame rate */
+    static std::string                        last_text;
+    static std::chrono::steady_clock::time_point start;
+    if (text != last_text) {
+        last_text = text;
+        start = std::chrono::steady_clock::now();
+    }
     if (text.empty() || width <= 0) return text;
     int total_w = string_width(text);
     if (total_w <= width) return text;
     int max_offset = total_w - width;
     if (max_offset < 0) max_offset = 0;
-    int cycle = max_offset + MARQUEE_PAUSE;
-    int pos = (frame / MARQUEE_SPEED) % cycle;
+    int cycle = max_offset + (int)(MARQUEE_PAUSE_MS / MARQUEE_SPEED_MS);
+    auto now = std::chrono::steady_clock::now();
+    long long elapsed =
+        std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+    int pos = (int)((elapsed / MARQUEE_SPEED_MS) % cycle);
     int offset_cols = (pos < max_offset) ? pos : max_offset;
     size_t start_i = 0;
     int col_run = 0;

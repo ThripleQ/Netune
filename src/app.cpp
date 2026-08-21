@@ -5,6 +5,7 @@
 #include <thread>
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/screen.hpp>
+#include <ftxui/screen/terminal.hpp>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/component/loop.hpp>
@@ -1742,9 +1743,9 @@ int run_app(int argc, char **argv) {
         consume_seek();
         const AppState &s = state.state();
 
-        state.set_song_panel_width(screen.dimx() - 29);
-        state.set_screen_height(screen.dimy());
-        state.set_top_row_width(screen.dimx());
+        state.set_song_panel_width(Terminal::Size().dimx - 22);
+        state.set_screen_height(Terminal::Size().dimy);
+        state.set_top_row_width(Terminal::Size().dimx);
 
         /* Login polling: wall-clock based (the render loop runs at
            200ms/frame when idle — tick counting would slow polling to
