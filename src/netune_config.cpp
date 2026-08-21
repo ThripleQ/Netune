@@ -1,11 +1,12 @@
-/* netune-config — interactive settings editor for Netune.
-   Sections: keybindings / theme / playback.
-   - Keybindings: list all actions, capture new keys (ctrl/alt combos),
-     Backspace removes keys one by one; export/import the yaml.
-   - Theme: pick a theme, edit each of the 14 color slots (hex input +
-     preset palette); export/import theme files.
-   - Playback: volume / loop mode / seek step.
-   Everything is written back to the files Netune reads at startup. */
+/* netune-config — interactive configuration file manager for Netune.
+   Browses the config tree (data/themes, data/keybindings, data/layouts,
+   data/config.json) and lets the user:
+     - apply a theme / edit a keybindings file / tweak playback settings
+     - rename, export (copy to a path), delete configuration files
+     - import a config file from an arbitrary path into the tree
+     - create template files
+   UI: top tabs (categories) + file list + bottom action hints; modal
+   input/confirm popups; a key-capture editor for keybinding files. */
 
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/screen.hpp>
@@ -21,6 +22,7 @@
 #include <algorithm>
 #include <dirent.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 #include "infra/config.h"
 #include "ui/keybindings.h"
@@ -38,15 +40,15 @@ static std::string data_root(void) {
     return std::string(home) + "/.config/netune/data";
 }
 
-static std::string kb_path(void)  { return data_root() + "/keybindings/default.yaml"; }
-static std::string cfg_path(void) { return data_root() + "/config.json"; }
-static std::string themes_dir(void) { return data_root() + "/themes"; }
+enum class Cat { Theme, Keybind, Layout, Main, Playback };
+
+static std::string dir_of(Cat cat);  /* fwd */
 
 /* ── Action metadata ────────────────────────────────── */
 struct ActionInfo {
     Action act;
-    const char *name;      /* yaml key */
-    const char *desc;      /* zh display */
+    const char *name;
+    const char *desc;
 };
 
 static const ActionInfo kActions[] = {
@@ -72,76 +74,61 @@ static const ActionInfo kActions[] = {
     {Action::Quit,         "quit",           "退出"},
 };
 
-/* ── Theme color slots ──────────────────────────────── */
-struct ColorSlot {
-    const char *key;
-    const char *name;
-    ThemeColor Theme::*member;
-};
+enum class Mode { Normal, Input, Confirm, KeyEdit, Capture };
 
-static const ColorSlot kSlots[] = {
-    {"bg",             "背景",      &Theme::bg},
-    {"fg",             "文字",      &Theme::fg},
-    {"accent",         "强调色",    &Theme::accent},
-    {"accent_bg",      "选中背景",  &Theme::accent_bg},
-    {"muted",          "次要文字",  &Theme::muted},
-    {"border",         "边框",      &Theme::border},
-    {"success",        "成功",      &Theme::success},
-    {"warning",        "警告",      &Theme::warning},
-    {"error",          "错误",      &Theme::error},
-    {"overlay_bg",     "弹窗背景",  &Theme::overlay_bg},
-    {"progress_track", "进度条轨道", &Theme::progress_track},
-    {"spectrum",       "频谱",      &Theme::spectrum},
-    {"vip",            "VIP 标记",  &Theme::vip},
-    {"playlist",       "歌单标记",  &Theme::playlist},
+struct CfgFile {
+    std::string name;   /* file name (with extension) */
+    long size = 0;
 };
-
-/* ── Preset palette (16 colors) ─────────────────────── */
-static const char *kPalette[] = {
-    "#000000", "#37474f", "#888888", "#b0bec5", "#ffffff",
-    "#e53935", "#fb8c00", "#fdd835", "#43a047", "#00acc1",
-    "#1e88e5", "#8e24aa", "#e91e63", "#795548", "#9ece6a", "#f7768e",
-};
-static const int kPaletteN = (int)(sizeof(kPalette)/sizeof(kPalette[0]));
-
-/* ── Modes ──────────────────────────────────────────── */
-enum class Mode { Normal, Capture, ColorEdit, PathInput, Confirm };
 
 struct CfgState {
     Mode mode = Mode::Normal;
 
-    int section = 0;                       /* 0 keybindings, 1 theme, 2 playback */
+    Cat cat = Cat::Theme;
+    int sel = 0;
+    std::vector<CfgFile> files;
+    std::vector<CfgFile> kbfiles;   /* cached keybindings list for the editor */
+
+    std::string cur_theme;          /* applied theme name (from config.json) */
+
+    /* input popup */
+    std::string input_title;
+    std::string input_buf;
+
+    /* confirm popup */
+    std::string confirm_msg;
+    int confirm_kind = 0;           /* 0 delete, 1 overwrite */
+
+    /* key edit sub-view */
     int kb_sel = 0;
-    int theme_sel = 0;
-    int slot_sel = 0;
-    int palette_sel = 0;
+    std::string kb_editing;         /* file name being edited */
+    std::vector<std::pair<Action, std::vector<std::string>>> kb_map;
 
     bool dirty_kb = false;
-    bool dirty_theme = false;
-
-    std::vector<std::pair<Action, std::vector<std::string>>> kb_map;
-    std::vector<std::string> themes;
-
-    /* color edit */
-    std::string hex_buf;
-
-    /* path input: import/export */
-    std::string path_buf;
-    bool path_import = false;   /* false = export */
-    bool path_for_theme = false;
 
     std::string notice;
-    std::string theme_name;
-    Theme theme;
 };
 
-static std::string key_list_str(const std::vector<std::string> &keys) {
-    std::string out;
-    for (size_t i = 0; i < keys.size(); i++) {
-        if (i) out += ", ";
-        out += keys[i];
+/* ── Small utilities ────────────────────────────────── */
+static std::string dir_of(Cat cat) {
+    switch (cat) {
+        case Cat::Theme:   return data_root() + "/themes";
+        case Cat::Keybind: return data_root() + "/keybindings";
+        case Cat::Layout:  return data_root() + "/layouts";
+        case Cat::Main:    return data_root();
+        default:           return "";
     }
-    return out.empty() ? "(未绑定)" : out;
+}
+
+static std::string cat_name(Cat cat) {
+    switch (cat) {
+        case Cat::Theme:   return "主题";
+        case Cat::Keybind: return "按键";
+        case Cat::Layout:  return "布局";
+        case Cat::Main:    return "主配置";
+        case Cat::Playback:return "播放";
+    }
+    return "";
 }
 
 static std::string basename_of(const std::string &p) {
@@ -161,6 +148,74 @@ static bool copy_file(const std::string &src, const std::string &dst) {
     fclose(in);
     fclose(out);
     return true;
+}
+
+static bool yaml_validate(const std::string &path, const std::string &key) {
+    FILE *fp = fopen(path.c_str(), "rb");
+    if (!fp) return false;
+    yaml_parser_t parser;
+    yaml_event_t event;
+    yaml_parser_initialize(&parser);
+    yaml_parser_set_input_file(&parser, fp);
+    bool found = false;
+    while (yaml_parser_parse(&parser, &event)) {
+        if (event.type == YAML_STREAM_END_EVENT) { yaml_event_delete(&event); break; }
+        if (event.type == YAML_SCALAR_EVENT &&
+            (const char*)event.data.scalar.value &&
+            strcmp((const char*)event.data.scalar.value, key.c_str()) == 0) {
+            found = true;
+            yaml_event_delete(&event);
+            break;
+        }
+        yaml_event_delete(&event);
+    }
+    yaml_parser_delete(&parser);
+    fclose(fp);
+    return found;
+}
+
+static std::string fmt_size(long n) {
+    char buf[32];
+    if (n >= 1024) snprintf(buf, sizeof(buf), "%.1f KB", n / 1024.0);
+    else           snprintf(buf, sizeof(buf), "%ld B", n);
+    return buf;
+}
+
+static void refresh_files(CfgState &st) {
+    st.files.clear();
+    if (st.cat == Cat::Main) {
+        /* config.json only */
+        std::string p = data_root() + "/config.json";
+        struct stat sb;
+        if (stat(p.c_str(), &sb) == 0) {
+            CfgFile f;
+            f.name = "config.json";
+            f.size = (long)sb.st_size;
+            st.files.push_back(f);
+        }
+        return;
+    }
+    if (st.cat == Cat::Playback) return;
+    DIR *dp = opendir(dir_of(st.cat).c_str());
+    if (!dp) return;
+    struct dirent *e;
+    while ((e = readdir(dp))) {
+        std::string n = e->d_name;
+        if (n == "." || n == "..") continue;
+        if (n.size() > 5 && n.substr(n.size() - 5) == ".yaml") {
+            CfgFile f;
+            f.name = n;
+            std::string p = dir_of(st.cat) + "/" + n;
+            struct stat sb;
+            if (stat(p.c_str(), &sb) == 0) f.size = (long)sb.st_size;
+            st.files.push_back(f);
+        }
+    }
+    closedir(dp);
+    std::sort(st.files.begin(), st.files.end(),
+              [](const CfgFile &a, const CfgFile &b) { return a.name < b.name; });
+    if (st.sel >= (int)st.files.size()) st.sel = (int)st.files.size() - 1;
+    if (st.sel < 0) st.sel = 0;
 }
 
 /* ── Key name conversion (mirrors app.cpp) ──────────── */
@@ -214,36 +269,30 @@ static std::string event_to_key_name(const Event &event) {
 }
 
 /* ── YAML writers (libyaml) ─────────────────────────── */
-
 static bool write_keybindings_yaml(const std::string &path,
                                    const std::vector<std::pair<std::string, std::vector<std::string>>> &entries) {
     FILE *fp = fopen(path.c_str(), "wb");
     if (!fp) return false;
-
     yaml_emitter_t em;
     yaml_document_t doc;
     yaml_emitter_initialize(&em);
     yaml_emitter_set_output_file(&em, fp);
     yaml_emitter_set_encoding(&em, YAML_UTF8_ENCODING);
     yaml_document_initialize(&doc, NULL, NULL, NULL, 1, 1);
-
     int root = yaml_document_add_mapping(&doc, NULL, YAML_BLOCK_MAPPING_STYLE);
     int kb = yaml_document_add_mapping(&doc, NULL, YAML_BLOCK_MAPPING_STYLE);
     yaml_document_append_mapping_pair(&doc, root,
         yaml_document_add_scalar(&doc, NULL, (yaml_char_t*)"keybindings", 12, YAML_PLAIN_SCALAR_STYLE),
         kb);
-
     for (auto &e : entries) {
         int seq = yaml_document_add_sequence(&doc, NULL, YAML_BLOCK_SEQUENCE_STYLE);
-        for (auto &key : e.second) {
+        for (auto &key : e.second)
             yaml_document_append_sequence_item(&doc, seq,
                 yaml_document_add_scalar(&doc, NULL, (yaml_char_t*)key.c_str(), (int)key.size(), YAML_PLAIN_SCALAR_STYLE));
-        }
         yaml_document_append_mapping_pair(&doc, kb,
             yaml_document_add_scalar(&doc, NULL, (yaml_char_t*)e.first.c_str(), (int)e.first.size(), YAML_PLAIN_SCALAR_STYLE),
             seq);
     }
-
     yaml_emitter_dump(&em, &doc);
     yaml_document_delete(&doc);
     yaml_emitter_delete(&em);
@@ -251,53 +300,79 @@ static bool write_keybindings_yaml(const std::string &path,
     return true;
 }
 
-static bool write_theme_yaml(const std::string &path, const std::string &name, const Theme &t) {
+/* default keybindings template (matches app.cpp) */
+static std::vector<std::pair<std::string, std::vector<std::string>>> default_kb_entries(void) {
+    KeybindingManager km;  /* no load → built-in defaults */
+    std::vector<std::pair<std::string, std::vector<std::string>>> out;
+    for (auto &a : kActions) {
+        std::vector<std::string> keys = km.keys_for(a.act);
+        if (!keys.empty())
+            out.push_back({a.name, std::move(keys)});
+    }
+    return out;
+}
+
+/* default theme template (Tokyo Night, matches app.cpp DEFAULT_THEME_DEFAULT_YAML) */
+static const char *kThemeTemplate =
+    "name: \"Tokyo Night\"\n"
+    "colors:\n"
+    "  bg: \"#1a1b26\"\n"
+    "  fg: \"#c0caf5\"\n"
+    "  accent: \"#7aa2f7\"\n"
+    "  accent_bg: \"#33467c\"\n"
+    "  muted: \"#565f89\"\n"
+    "  border: \"#292e42\"\n"
+    "  success: \"#9ece6a\"\n"
+    "  warning: \"#e0af68\"\n"
+    "  error: \"#f7768e\"\n"
+    "  overlay_bg: \"#16161e\"\n";
+
+/* default layout template (matches app.cpp DEFAULT_LAYOUT_YAML) */
+static const char *kLayoutTemplate =
+    "layout:\n"
+    "  type: \"vertical\"\n"
+    "  children:\n"
+    "    - component: \"top_bar\"\n"
+    "      height: 1\n"
+    "    - type: \"horizontal\"\n"
+    "      flex: 1\n"
+    "      children:\n"
+    "        - component: \"group_list\"\n"
+    "          width: 20\n"
+    "        - component: \"song_list\"\n"
+    "          flex: 1\n"
+    "    - component: \"status_bar\"\n"
+    "      height: 2\n";
+
+static bool write_text_file(const std::string &path, const std::string &content) {
     FILE *fp = fopen(path.c_str(), "wb");
     if (!fp) return false;
-
-    yaml_emitter_t em;
-    yaml_document_t doc;
-    yaml_emitter_initialize(&em);
-    yaml_emitter_set_output_file(&em, fp);
-    yaml_emitter_set_encoding(&em, YAML_UTF8_ENCODING);
-    yaml_document_initialize(&doc, NULL, NULL, NULL, 1, 1);
-
-    int root = yaml_document_add_mapping(&doc, NULL, YAML_BLOCK_MAPPING_STYLE);
-    int colors = yaml_document_add_mapping(&doc, NULL, YAML_BLOCK_MAPPING_STYLE);
-    yaml_document_append_mapping_pair(&doc, root,
-        yaml_document_add_scalar(&doc, NULL, (yaml_char_t*)"name", 4, YAML_PLAIN_SCALAR_STYLE),
-        yaml_document_add_scalar(&doc, NULL, (yaml_char_t*)name.c_str(), (int)name.size(), YAML_PLAIN_SCALAR_STYLE));
-    yaml_document_append_mapping_pair(&doc, root,
-        yaml_document_add_scalar(&doc, NULL, (yaml_char_t*)"colors", 6, YAML_PLAIN_SCALAR_STYLE),
-        colors);
-
-    for (auto &s : kSlots) {
-        const ThemeColor &c = t.*(s.member);
-        std::string hex = theme_color_to_hex(c);
-        yaml_document_append_mapping_pair(&doc, colors,
-            yaml_document_add_scalar(&doc, NULL, (yaml_char_t*)s.key, (int)strlen(s.key), YAML_PLAIN_SCALAR_STYLE),
-            yaml_document_add_scalar(&doc, NULL, (yaml_char_t*)hex.c_str(), (int)hex.size(), YAML_PLAIN_SCALAR_STYLE));
-    }
-
-    yaml_emitter_dump(&em, &doc);
-    yaml_document_delete(&doc);
-    yaml_emitter_delete(&em);
+    fwrite(content.data(), 1, content.size(), fp);
     fclose(fp);
     return true;
 }
 
-/* ── Theme loading helper ───────────────────────────── */
-static bool load_theme(CfgState &st, const std::string &name) {
-    std::string path = themes_dir() + "/" + name + ".yaml";
-    auto &tm = ThemeManager::instance();
-    tm.reset();
-    if (!tm.load(path)) return false;
-    st.theme = tm.current();
-    st.theme_name = name;
+/* ── Action helpers ─────────────────────────────────── */
+static void apply_theme(CfgState &st, Config *cfg, const std::string &name) {
+    st.cur_theme = name;
+    if (cfg) {
+        config_set_str(cfg, "ui.theme", name.c_str());
+        config_save(cfg);
+    }
+    st.notice = "已应用主题: " + name;
+}
+
+static bool load_kb_file(CfgState &st, const std::string &path) {
+    st.kb_map.clear();
+    KeybindingManager km;
+    km.load(path);
+    for (auto &a : kActions)
+        st.kb_map.push_back({a.act, km.keys_for(a.act)});
+    st.kb_sel = 0;
+    st.dirty_kb = false;
     return true;
 }
 
-/* ── Helpers used by event handling ─────────────────── */
 static std::vector<std::pair<std::string, std::vector<std::string>>> kb_entries(CfgState &st) {
     std::vector<std::pair<std::string, std::vector<std::string>>> entries;
     for (auto &kv : st.kb_map) {
@@ -311,62 +386,21 @@ static std::vector<std::pair<std::string, std::vector<std::string>>> kb_entries(
     return entries;
 }
 
-static void refresh_theme_list(CfgState &st) {
-    st.themes.clear();
-    DIR *dp = opendir(themes_dir().c_str());
-    if (dp) {
-        struct dirent *e;
-        while ((e = readdir(dp))) {
-            std::string n = e->d_name;
-            if (n.size() > 5 && n.substr(n.size() - 5) == ".yaml")
-                st.themes.push_back(n.substr(0, n.size() - 5));
-        }
-        closedir(dp);
-        std::sort(st.themes.begin(), st.themes.end());
+static std::string key_list_str(const std::vector<std::string> &keys) {
+    std::string out;
+    for (size_t i = 0; i < keys.size(); i++) {
+        if (i) out += ", ";
+        out += keys[i];
     }
-}
-
-static bool yaml_validate(const std::string &path, const std::string &key) {
-    FILE *fp = fopen(path.c_str(), "rb");
-    if (!fp) return false;
-    yaml_parser_t parser;
-    yaml_event_t event;
-    yaml_parser_initialize(&parser);
-    yaml_parser_set_input_file(&parser, fp);
-    bool found = false;
-    while (yaml_parser_parse(&parser, &event)) {
-        if (event.type == YAML_STREAM_END_EVENT) { yaml_event_delete(&event); break; }
-        if (event.type == YAML_SCALAR_EVENT &&
-            (const char*)event.data.scalar.value &&
-            strcmp((const char*)event.data.scalar.value, key.c_str()) == 0) {
-            found = true;
-            yaml_event_delete(&event);
-            break;
-        }
-        yaml_event_delete(&event);
-    }
-    yaml_parser_delete(&parser);
-    fclose(fp);
-    return found;
+    return out.empty() ? "(未绑定)" : out;
 }
 
 int main() {
     auto screen = ScreenInteractive::Fullscreen();
     CfgState st;
 
-    /* load keybindings */
-    {
-        KeybindingManager km;
-        km.load(kb_path());
-        for (auto &a : kActions)
-            st.kb_map.push_back({a.act, km.keys_for(a.act)});
-    }
-
-    refresh_theme_list(st);
-
-    /* current config */
-    Config *cfg = config_load(cfg_path().c_str());
-    std::string cur_theme = cfg ? config_get_str(cfg, "ui.theme", "default") : "default";
+    Config *cfg = config_load((data_root() + "/config.json").c_str());
+    st.cur_theme = cfg ? config_get_str(cfg, "ui.theme", "default") : "default";
     int cur_vol  = cfg ? config_get_int(cfg, "audio.volume", 80) : 80;
     int cur_loop = cfg ? config_get_int(cfg, "playback.loop_mode", 0) : 0;
     int cur_seek = cfg ? config_get_int(cfg, "playback.seek_step_sec", 5) : 5;
@@ -374,130 +408,147 @@ int main() {
     if (cur_seek > 60) cur_seek = 60;
     int vol = cur_vol, loop_mode = cur_loop, seek = cur_seek;
 
-    auto theme_sel_matches = [&](const std::string &name) {
-        auto it = std::find(st.themes.begin(), st.themes.end(), name);
-        st.theme_sel = (it != st.themes.end()) ? (int)(it - st.themes.begin()) : 0;
+    refresh_files(st);
+
+    /* ── Modal popups (input / confirm / capture) ────── */
+    auto render_popup = [&]() -> Element {
+        auto &th = st;
+        if (th.mode == Mode::Input) {
+            Elements body;
+            body.push_back(text("  " + th.input_title) | bold);
+            body.push_back(separator());
+            body.push_back(text("  " + th.input_buf + "\u258C"));
+            body.push_back(separator());
+            body.push_back(text("  Enter 确认   ESC 取消") | dim);
+            auto box = vbox(std::move(body)) | borderRounded
+                       | bgcolor(Color::RGB(26,27,38))
+                       | color(Color::RGB(122,162,247));
+            return vbox({filler(), hbox({filler(), box})});
+        }
+        if (th.mode == Mode::Confirm) {
+            Elements body;
+            body.push_back(text("  " + th.confirm_msg) | bold | color(Color::RGB(247,118,142)));
+            body.push_back(separator());
+            body.push_back(text("  y 确认   n/ESC 取消") | dim);
+            auto box = vbox(std::move(body)) | borderRounded
+                       | bgcolor(Color::RGB(26,27,38))
+                       | color(Color::RGB(122,162,247));
+            return vbox({filler(), hbox({filler(), box})});
+        }
+        if (th.mode == Mode::Capture) {
+            Elements body;
+            body.push_back(text("  编辑按键: 按新键=绑定(支持 ctrl/alt), 已有键=取消") | bold);
+            body.push_back(separator());
+            body.push_back(text("  当前: " + key_list_str(th.kb_map[th.kb_sel].second)));
+            body.push_back(text("  Backspace 删除最后一个  Enter 完成  ESC 取消") | dim);
+            auto box = vbox(std::move(body)) | borderRounded
+                       | bgcolor(Color::RGB(26,27,38))
+                       | color(Color::RGB(122,162,247));
+            return vbox({filler(), hbox({filler(), box})});
+        }
+        return text("");
     };
-    theme_sel_matches(cur_theme);
-    if (!load_theme(st, st.themes.empty() ? "default" : st.themes[st.theme_sel]))
-        st.theme = Theme{};
+
 
     /* ── Renderer ───────────────────────────────────── */
-    auto renderer = Renderer([&] {
+    auto render_frame = [&]() -> Element {
         auto &th = st;
-        const char *sections[] = {"快捷键", "主题", "播放"};
+        Elements els;
 
-        Elements left;
-        for (int i = 0; i < 3; i++) {
-            bool sel = (th.section == i);
-            auto row = text(sections[i]);
-            if (sel) left.push_back(hbox({text("> "), row | bold}) | inverted);
-            else     left.push_back(hbox({text("  "), row}));
+        /* top bar: tabs */
+        Elements tabs;
+        for (int i = 0; i < 5; i++) {
+            Cat c = (Cat)i;
+            bool sel = (th.cat == c);
+            auto t = text(" " + cat_name(c) + " ");
+            if (sel) tabs.push_back(t | bold | inverted);
+            else     tabs.push_back(t);
+            if (i < 4) tabs.push_back(text("│") | dim);
         }
-        left.push_back(text(""));
-        left.push_back(text(" q/ESC 保存并退出") | dim);
-        left.push_back(text(" ↑/↓ 选择  Enter 编辑") | dim);
-        left.push_back(text(" e 导出  i 导入") | dim);
+        els.push_back(hbox(std::move(tabs)) | border);
 
-        Elements right;
-        if (th.mode == Mode::Capture) {
-            right.push_back(text("  编辑按键: 按新键=绑定(支持 ctrl/alt), 已有键=取消") | bold);
-            right.push_back(text("  当前: " + key_list_str(th.kb_map[th.kb_sel].second)));
-            right.push_back(text("  Backspace 删除最后一个  Enter 完成  ESC 取消") | dim);
-        } else if (th.mode == Mode::ColorEdit) {
-            const ColorSlot &slot = kSlots[th.slot_sel];
-            ThemeColor &c = th.theme.*(slot.member);
-            right.push_back(text(std::string("  编辑颜色 [") + slot.name + "]  当前 " +
-                                 theme_color_to_hex(c)) | bold);
-            auto swatch = text("  ") | bgcolor(Color::RGB(c.r, c.g, c.b));
-            right.push_back(hbox({swatch, text("  输入 hex (如 #1a1b26): "),
-                                  text(th.hex_buf + "\u258C")}));
-            Elements pal;
-            for (int i = 0; i < kPaletteN; i++) {
-                ThemeColor pc = theme_color_from_hex(kPalette[i]);
-                auto p = text("  ");
-                if (i == th.palette_sel)
-                    p = p | bold | inverted;
-                pal.push_back(p | bgcolor(Color::RGB(pc.r, pc.g, pc.b)));
-            }
-            right.push_back(hbox(std::move(pal)));
-            right.push_back(text("  ←/→ 选色板  Enter 应用  ESC 取消") | dim);
-        } else if (th.mode == Mode::PathInput) {
-            right.push_back(text(std::string("  ") +
-                                 (th.path_import ? "导入" : "导出") +
-                                 (th.path_for_theme ? "主题" : "按键配置") +
-                                 ": 输入路径") | bold);
-            right.push_back(text("  " + th.path_buf + "\u258C"));
-            right.push_back(text("  空路径默认 ~/Downloads/  Enter 确认  ESC 取消") | dim);
-        } else if (th.mode == Mode::Confirm) {
-            right.push_back(text("  导入将覆盖当前按键配置, 继续?") | bold);
-            right.push_back(text("  y 确认  n/ESC 取消") | dim);
-        } else if (th.section == 0) {
+        /* body */
+        if (th.cat == Cat::Playback) {
+            const char *loops[] = {"顺序播放", "单曲循环", "列表循环", "随机播放"};
+            Elements body;
+            body.push_back(text(std::string("  音量:  ") + std::to_string(vol) + "   [<- / ->]"));
+            body.push_back(text(std::string("  循环:  ") + loops[loop_mode % 4] + "   [l 切换]"));
+            body.push_back(text(std::string("  快进步长: ") + std::to_string(seek) + " 秒  [+ / -]"));
+            body.push_back(text(""));
+            body.push_back(text("  修改立即保存到 config.json") | dim);
+            els.push_back(vbox(std::move(body)) | flex | border);
+        } else if (th.mode == Mode::KeyEdit) {
+            /* key editor sub-view */
+            Elements body;
+            body.push_back(text("  编辑按键: " + th.kb_editing + "   (ESC 返回)") | bold);
+            body.push_back(separator());
             for (size_t i = 0; i < sizeof(kActions)/sizeof(kActions[0]); i++) {
                 bool sel = ((int)i == th.kb_sel);
-                std::string line = std::string("  ") + kActions[i].desc + "  =  " +
+                std::string line = "  " + std::string(kActions[i].desc) + " = " +
                                    key_list_str(th.kb_map[i].second);
                 if (sel)
-                    right.push_back(hbox({text("> "), text(line) | bold}) | inverted);
+                    body.push_back(hbox({text("> "), text(line) | bold}) | inverted);
                 else
-                    right.push_back(text(line));
+                    body.push_back(text(line));
             }
-            right.push_back(text(""));
-            right.push_back(text("  Enter: 重新绑定  e: 导出  i: 导入") | dim);
-        } else if (th.section == 1) {
-            /* merged list: themes first, then color slots — same visual
-               style as the keybindings page (unified navigation) */
-            int tn = (int)th.themes.size();
-            for (size_t i = 0; i < st.themes.size(); i++) {
-                bool sel = ((int)i == th.theme_sel);
-                std::string mark = (th.themes[i] == cur_theme) ? "  (当前)" : "";
-                std::string line = std::string("  ") + th.themes[i] + mark;
-                if (sel)
-                    right.push_back(hbox({text("> "), text(line) | bold}) | inverted);
-                else
-                    right.push_back(text(line));
-            }
-            right.push_back(text(""));
-            for (size_t i = 0; i < sizeof(kSlots)/sizeof(kSlots[0]); i++) {
-                const ColorSlot &slot = kSlots[i];
-                const ThemeColor &c = th.theme.*(slot.member);
-                bool sel = ((int)i == th.slot_sel);
-                auto swatch = text("  ") | bgcolor(Color::RGB(c.r, c.g, c.b));
-                std::string line = std::string("  ") + slot.name + " = " +
-                                   theme_color_to_hex(c);
-                Element row = hbox({swatch, text(line)});
-                if (sel)
-                    right.push_back(hbox({text("> "), row | bold}) | inverted);
-                else
-                    right.push_back(hbox({text("  "), row}));
-            }
-            right.push_back(text(""));
-            right.push_back(text("  主题行 Enter: 应用  颜色行 Enter: 编辑  e: 导出  i: 导入") | dim);
+            body.push_back(text(""));
+            body.push_back(text("  Enter: 绑定  Backspace: 删除最后绑定  ESC: 返回") | dim);
+            els.push_back(vbox(std::move(body)) | flex | border);
+        } else if (th.cat == Cat::Main) {
+            els.push_back(vbox({
+                text("  config.json — 主配置文件 (主题/布局/按键/播放 默认值)") | dim,
+                text(""),
+                text("  此文件由 netune 自动维护, 请勿重命名或删除") | color(Color::Red) | bold,
+            }) | flex | border);
         } else {
-            const char *loops[] = {"顺序播放", "单曲循环", "列表循环", "随机播放"};
-            right.push_back(text(std::string("  音量:  ") + std::to_string(vol) +
-                                 "   [<- / ->]"));
-            right.push_back(text(std::string("  循环:  ") + loops[loop_mode % 4] +
-                                 "   [l 切换]"));
-            right.push_back(text(std::string("  快进步长: ") + std::to_string(seek) +
-                                 " 秒  [+ / -]"));
-            right.push_back(text(""));
-            right.push_back(text("  修改立即保存到 config.json") | dim);
+            /* file list */
+            Elements body;
+            if (th.files.empty()) {
+                body.push_back(text("  (无配置文件)") | dim);
+            }
+            for (size_t i = 0; i < th.files.size(); i++) {
+                bool sel = ((int)i == th.sel);
+                const CfgFile &f = th.files[i];
+                std::string name = f.name;
+                if (th.cat == Cat::Theme) {
+                    std::string base = f.name;
+                    if (base.size() > 5) base = base.substr(0, base.size() - 5);
+                    if (base == th.cur_theme) name += "  (当前)";
+                }
+                std::string line = std::string("  ") + name +
+                                   std::string(name.size() < 26 ? 26 - name.size() : 1, ' ') +
+                                   fmt_size(f.size);
+                if (sel)
+                    body.push_back(hbox({text("> "), text(line) | bold}) | inverted);
+                else
+                    body.push_back(text(line));
+            }
+            els.push_back(vbox(std::move(body)) | flex | border);
         }
 
-        if (!th.notice.empty()) {
-            right.push_back(text(""));
-            right.push_back(text("  " + th.notice) | color(Color::Green));
-        }
+        /* notice */
+        if (!th.notice.empty())
+            els.push_back(text("  " + th.notice) | color(Color::Green));
 
-        return hbox({
-            vbox(std::move(left)) | size(WIDTH, EQUAL, 26) | border,
-            vbox(std::move(right)) | flex | border,
+        /* action hints */
+        std::string hints;
+        switch (th.cat) {
+            case Cat::Theme:   hints = "Enter 应用   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
+            case Cat::Keybind: hints = "Enter 编辑按键   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
+            case Cat::Layout:  hints = "Enter 查看   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
+            case Cat::Main:    hints = "主配置文件"; break;
+            case Cat::Playback:hints = "←/→ 音量   l 循环   + / - 快进步长"; break;
+        }
+        els.push_back(text("  " + hints) | dim);
+        els.push_back(text("  ←/→ 或 1-5 切换分类   q 退出") | dim);
+
+        return dbox({
+            vbox(std::move(els)) | flex | border | bgcolor(Color::RGB(26,27,38)),
+            render_popup(),
         });
-    });
+    };
 
-    /* ── Event handling ─────────────────────────────── */
-    Component main = renderer;
+    auto main = Renderer(render_frame);
     main |= CatchEvent([&](Event event) -> bool {
         if (event.is_mouse()) return true;
 
@@ -506,151 +557,9 @@ int main() {
             return event_to_key_name(event);
         };
 
-        /* ── Color edit mode ── */
-        if (st.mode == Mode::ColorEdit) {
-            std::string k = key_of();
-            if (event == Event::Escape) { st.mode = Mode::Normal; return true; }
-            if (event == Event::ArrowLeft || k == "left") {
-                st.palette_sel = (st.palette_sel + kPaletteN - 1) % kPaletteN;
-                return true;
-            }
-            if (event == Event::ArrowRight || k == "right") {
-                st.palette_sel = (st.palette_sel + 1) % kPaletteN;
-                return true;
-            }
-            if (event == Event::Backspace) {
-                if (!st.hex_buf.empty()) st.hex_buf.pop_back();
-                return true;
-            }
-            if (event == Event::Return || k == "\r") {
-                /* apply: hex buffer takes priority, else palette */
-                ThemeColor nc;
-                std::string hex = st.hex_buf;
-                if (!hex.empty() && hex[0] != '#') hex = "#" + hex;
-                bool ok = !hex.empty() && theme_color_from_hex(hex).has_color;
-                if (ok) {
-                    nc = theme_color_from_hex(hex);
-                } else {
-                    nc = theme_color_from_hex(kPalette[st.palette_sel]);
-                    ok = nc.has_color;
-                }
-                if (ok) {
-                    st.theme.*(kSlots[st.slot_sel].member) = nc;
-                    st.dirty_theme = true;
-                    st.notice = std::string("已设置 ") + kSlots[st.slot_sel].name +
-                                " = " + theme_color_to_hex(nc);
-                } else {
-                    st.notice = "无效的 hex 颜色";
-                }
-                st.hex_buf.clear();
-                st.mode = Mode::Normal;
-                return true;
-            }
-            /* hex chars: # 0-9 a-f A-F */
-            if (k.size() == 1 && st.hex_buf.size() < 9) {
-                char c = k[0];
-                if (c == '#' || (c >= '0' && c <= '9') ||
-                    (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))
-                    st.hex_buf += c;
-            }
-            return true;
-        }
-
-        /* ── Path input mode (import/export) ── */
-        if (st.mode == Mode::PathInput) {
-            std::string k = key_of();
-            if (event == Event::Escape) { st.mode = Mode::Normal; return true; }
-            if (event == Event::Backspace) {
-                if (!st.path_buf.empty()) st.path_buf.pop_back();
-                return true;
-            }
-            if (event == Event::Return || k == "\r") {
-                std::string target = st.path_buf;
-                if (target.empty()) {
-                    const char *home = getenv("HOME");
-                    target = std::string(home ? home : "~") + "/Downloads/" +
-                             (st.path_for_theme ? st.theme_name : "keybindings") + ".yaml";
-                }
-                bool ok = false;
-                if (!st.path_import) {
-                    /* export */
-                    if (st.path_for_theme) {
-                        std::string src = themes_dir() + "/" + st.theme_name + ".yaml";
-                        ok = copy_file(src, target);
-                        if (!ok) ok = write_theme_yaml(target, st.theme_name, st.theme);
-                    } else {
-                        ok = write_keybindings_yaml(target, kb_entries(st));
-                    }
-                    st.notice = ok ? ("已导出: " + target) : "导出失败";
-                } else {
-                    /* import */
-                    if (st.path_for_theme) {
-                        if (!yaml_validate(target, "colors")) {
-                            st.notice = "不是有效的主题文件 (缺少 colors)";
-                        } else {
-                            std::string base = basename_of(target);
-                            if (base.size() > 5 && base.substr(base.size() - 5) == ".yaml")
-                                base = base.substr(0, base.size() - 5);
-                            if (base.empty()) base = "imported";
-                            std::string dst = themes_dir() + "/" + base + ".yaml";
-                            ok = copy_file(target, dst);
-                            if (ok) {
-                                refresh_theme_list(st);
-                                auto it = std::find(st.themes.begin(), st.themes.end(), base);
-                                st.theme_sel = (it != st.themes.end()) ? (int)(it - st.themes.begin()) : 0;
-                                cur_theme = base;
-                                load_theme(st, base);
-                                st.notice = "已导入主题: " + base;
-                            } else {
-                                st.notice = "导入失败";
-                            }
-                        }
-                    } else {
-                        /* keybindings import → confirm first */
-                        if (!yaml_validate(target, "keybindings")) {
-                            st.notice = "不是有效的按键配置 (缺少 keybindings)";
-                        } else {
-                            st.notice = "确认导入? 将覆盖当前按键配置 (y/n)";
-                            st.mode = Mode::Confirm;
-                            return true;
-                        }
-                    }
-                }
-                st.mode = Mode::Normal;
-                return true;
-            }
-            /* path chars: printable ASCII (incl space) */
-            if (event.is_character() && st.path_buf.size() < 400) {
-                const std::string &c = event.character();
-                if (!c.empty()) st.path_buf += c;
-            }
-            return true;
-        }
-
-        /* ── Confirm mode (keybindings import) ── */
-        if (st.mode == Mode::Confirm) {
-            std::string k = key_of();
-            if (k == "y" || k == "Y") {
-                if (copy_file(st.path_buf, kb_path())) {
-                    st.notice = "按键配置已导入 (重启 netune 生效)";
-                } else {
-                    st.notice = "导入失败";
-                }
-                st.mode = Mode::Normal;
-                return true;
-            }
-            if (k == "n" || k == "N" || event == Event::Escape) {
-                st.notice = "已取消导入";
-                st.mode = Mode::Normal;
-                return true;
-            }
-            return true;
-        }
-
-        /* ── Capture mode (keybindings) ── */
+        /* ── Capture (keybinding) ── */
         if (st.mode == Mode::Capture) {
-            if (event == Event::Escape) { st.mode = Mode::Normal; return true; }
-            if (event == Event::Return) { st.mode = Mode::Normal; return true; }
+            if (event == Event::Escape || event == Event::Return) { st.mode = Mode::KeyEdit; return true; }
             if (event == Event::Backspace) {
                 auto &keys = st.kb_map[st.kb_sel].second;
                 if (!keys.empty()) {
@@ -670,14 +579,141 @@ int main() {
                         kv.second.erase(it);
                 }
                 auto it = std::find(keys.begin(), keys.end(), k);
-                if (it == keys.end()) {
-                    keys.push_back(k);
-                    st.notice = "已绑定 " + k + " (再按一次取消)";
-                } else {
-                    keys.erase(it);
-                    st.notice = "已取消 " + k;
-                }
+                if (it == keys.end()) { keys.push_back(k); st.notice = "已绑定 " + k; }
+                else                  { keys.erase(it);     st.notice = "已取消 " + k; }
                 st.dirty_kb = true;
+            }
+            return true;
+        }
+
+        /* ── Confirm popup ── */
+        if (st.mode == Mode::Confirm) {
+            std::string k = key_of();
+            if (k == "y" || k == "Y") {
+                std::string target = dir_of(st.cat) + "/" + st.files[st.sel].name;
+                if (st.confirm_kind == 0) {
+                    if (remove(target.c_str()) == 0) {
+                        st.notice = "已删除 " + st.files[st.sel].name;
+                        refresh_files(st);
+                    } else {
+                        st.notice = "删除失败";
+                    }
+                } else {
+                    /* overwrite existing (import/rename/export collision) */
+                    if (copy_file(st.input_buf, target)) {
+                        st.notice = "已覆盖 " + st.files[st.sel].name;
+                        refresh_files(st);
+                    } else {
+                        st.notice = "写入失败";
+                    }
+                }
+                st.mode = Mode::Normal;
+                return true;
+            }
+            if (k == "n" || k == "N" || event == Event::Escape) {
+                st.notice = "已取消";
+                st.mode = Mode::Normal;
+                return true;
+            }
+            return true;
+        }
+
+        /* ── Input popup ── */
+        if (st.mode == Mode::Input) {
+            std::string k = key_of();
+            if (event == Event::Escape) { st.mode = Mode::Normal; return true; }
+            if (event == Event::Backspace) {
+                if (!st.input_buf.empty()) st.input_buf.pop_back();
+                return true;
+            }
+            if (event == Event::Return || k == "\r") {
+                std::string name = st.input_buf;
+                st.mode = Mode::Normal;
+                st.notice.clear();
+                if (name.empty()) return true;
+
+                /* switch on the current popup intent (stored in input_title tag) */
+                std::string action = st.input_title;
+                std::string dir = dir_of(st.cat);
+                std::string src = dir + "/" + st.files[st.sel].name;
+                if (action == "重命名") {
+                    if (name.find('.') == std::string::npos) name += ".yaml";
+                    std::string dst = dir + "/" + name;
+                    if (src == dst) return true;
+                    if (rename(src.c_str(), dst.c_str()) == 0) {
+                        st.notice = "已重命名为 " + name;
+                        refresh_files(st);
+                    } else {
+                        st.notice = "重命名失败";
+                    }
+                } else if (action == "导出到路径") {
+                    if (copy_file(src, name)) st.notice = "已导出: " + name;
+                    else st.notice = "导出失败";
+                } else if (action == "导入文件路径") {
+                    /* validate + copy into the tree (overwrite without confirm) */
+                    bool ok = false;
+                    if (st.cat == Cat::Theme)   ok = yaml_validate(name, "colors");
+                    if (st.cat == Cat::Keybind) ok = yaml_validate(name, "keybindings");
+                    if (st.cat == Cat::Layout)  ok = yaml_validate(name, "layout");
+                    if (st.cat == Cat::Main)    ok = true;
+                    if (!ok) {
+                        st.notice = "不是有效的配置文件";
+                    } else {
+                        std::string base = basename_of(name);
+                        if (st.cat != Cat::Main && base.find('.') == std::string::npos)
+                            base += ".yaml";
+                        if (st.cat == Cat::Main) base = "config.json";
+                        if (copy_file(name, dir + "/" + base)) {
+                            st.notice = "已导入: " + base;
+                            refresh_files(st);
+                        } else {
+                            st.notice = "导入失败";
+                        }
+                    }
+                } else if (action == "新建模板") {
+                    if (name.find('.') == std::string::npos) name += ".yaml";
+                    std::string dst = dir + "/" + name;
+                    bool ok = false;
+                    if (st.cat == Cat::Theme)   ok = write_text_file(dst, kThemeTemplate);
+                    if (st.cat == Cat::Keybind) ok = write_keybindings_yaml(dst, default_kb_entries());
+                    if (st.cat == Cat::Layout)  ok = write_text_file(dst, kLayoutTemplate);
+                    if (ok) {
+                        st.notice = "已创建模板: " + name;
+                        refresh_files(st);
+                    } else {
+                        st.notice = "创建失败";
+                    }
+                }
+                return true;
+            }
+            if (event.is_character() && st.input_buf.size() < 400) {
+                const std::string &c = event.character();
+                if (!c.empty()) st.input_buf += c;
+            }
+            return true;
+        }
+
+        /* ── Key edit sub-view ── */
+        if (st.mode == Mode::KeyEdit) {
+            std::string k = key_of();
+            if (event == Event::Escape) {
+                /* save & return */
+                if (st.dirty_kb)
+                    write_keybindings_yaml(dir_of(Cat::Keybind) + "/" + st.kb_editing, kb_entries(st));
+                st.mode = Mode::Normal;
+                refresh_files(st);
+                return true;
+            }
+            if (k == "up" || k == "down" || k == "j" || k == "k") {
+                int dir = (k == "up" || k == "k") ? -1 : 1;
+                int n = (int)(sizeof(kActions)/sizeof(kActions[0]));
+                st.kb_sel = (st.kb_sel + dir + n) % n;
+                return true;
+            }
+            if (k == "enter" || k == "\r") {
+                st.mode = Mode::Capture;
+                st.notice.clear();
+                return true;
             }
             return true;
         }
@@ -685,91 +721,96 @@ int main() {
         /* ── Normal mode ── */
         std::string k = key_of();
 
-        if (k == "q" || k == "ctrl+c" || k == "escape") {
-            if (st.dirty_kb) write_keybindings_yaml(kb_path(), kb_entries(st));
-            if (st.dirty_theme) write_theme_yaml(themes_dir() + "/" + st.theme_name + ".yaml",
-                                                 st.theme_name, st.theme);
+        if (k == "q" || k == "ctrl+c") {
             if (cfg) {
                 config_set_int(cfg, "audio.volume", vol);
                 config_set_int(cfg, "playback.loop_mode", loop_mode);
                 config_set_int(cfg, "playback.seek_step_sec", seek);
-                config_set_str(cfg, "ui.theme", cur_theme.c_str());
                 config_save(cfg);
                 config_free(cfg);
             }
             screen.ExitLoopClosure()();
             return true;
         }
-        if (k == "up" || k == "down" || k == "j" || k == "k") {
-            int dir = (k == "up" || k == "k") ? -1 : 1;
-            if (st.section == 0) {
-                int n = (int)(sizeof(kActions)/sizeof(kActions[0]));
-                st.kb_sel = (st.kb_sel + dir + n) % n;
-            } else if (st.section == 1) {
-                /* merged navigation over themes then slots: track the
-                   combined position so both lists move correctly */
-                int tn = (int)st.themes.size();
-                int sn = (int)(sizeof(kSlots)/sizeof(kSlots[0]));
-                int n = tn + sn;
-                int pos = (st.theme_sel < tn) ? st.theme_sel : tn + st.slot_sel;
-                pos += dir;
-                if (pos < 0) pos = 0;
-                if (pos >= n) pos = n - 1;
-                if (pos < tn) { st.theme_sel = pos; st.slot_sel = 0; }
-                else          { st.slot_sel = pos - tn; }
-            }
-            return true;
-        }
-        if (k == "tab") {
-            st.section = (st.section + 1) % 3;
+        if (k == "1") st.cat = Cat::Theme;
+        else if (k == "2") st.cat = Cat::Keybind;
+        else if (k == "3") st.cat = Cat::Layout;
+        else if (k == "4") st.cat = Cat::Main;
+        else if (k == "5") st.cat = Cat::Playback;
+        if (k == "1" || k == "2" || k == "3" || k == "4" || k == "5") {
             st.mode = Mode::Normal;
+            refresh_files(st);
             return true;
         }
-        if (k == "left" || k == "right") {
-            if (st.section == 2) {
+        if (k == "left" || k == "right" || k == "tab") {
+            if (k == "tab") {
+                st.cat = (Cat)(((int)st.cat + 1) % 5);
+                refresh_files(st);
+                return true;
+            }
+            if (st.cat == Cat::Playback) {
                 if (k == "left") vol = vol > 0 ? vol - 5 : 0;
                 else             vol = vol < 100 ? vol + 5 : 100;
             }
             return true;
         }
-        if (k == "l" && st.section == 2) {
+        if (k == "up" || k == "down" || k == "j" || k == "k") {
+            int dir = (k == "up" || k == "k") ? -1 : 1;
+            int n = (int)st.files.size();
+            if (n > 0) st.sel = (st.sel + dir + n) % n;
+            return true;
+        }
+        if (k == "l" && st.cat == Cat::Playback) {
             loop_mode = (loop_mode + 1) % 4;
             return true;
         }
-        if ((k == "+" || k == "=" || k == "-") && st.section == 2) {
+        if ((k == "+" || k == "=" || k == "-") && st.cat == Cat::Playback) {
             if (k == "-") seek = seek > 1 ? seek - 1 : 1;
             else          seek = seek < 60 ? seek + 1 : 60;
             return true;
         }
         if (k == "enter" || k == "\r") {
-            if (st.section == 0) {
-                st.mode = Mode::Capture;
+            if (st.cat == Cat::Theme && !st.files.empty()) {
+                std::string base = st.files[st.sel].name;
+                if (base.size() > 5) base = base.substr(0, base.size() - 5);
+                apply_theme(st, cfg, base);
+            } else if (st.cat == Cat::Keybind && !st.files.empty()) {
+                st.kb_editing = st.files[st.sel].name;
+                load_kb_file(st, dir_of(Cat::Keybind) + "/" + st.kb_editing);
+                st.mode = Mode::KeyEdit;
                 st.notice.clear();
-            } else if (st.section == 1) {
-                int tn = (int)st.themes.size();
-                int pos = (st.theme_sel < tn) ? st.theme_sel : tn + st.slot_sel;
-                if (pos < tn) {
-                    /* apply theme */
-                    cur_theme = st.themes[st.theme_sel];
-                    load_theme(st, cur_theme);
-                    st.notice = "已应用主题: " + cur_theme + " (退出后生效)";
-                } else {
-                    st.mode = Mode::ColorEdit;
-                    st.hex_buf.clear();
-                    st.palette_sel = 0;
-                    st.notice.clear();
-                }
             }
             return true;
         }
-        if (k == "e" || k == "i") {
-            if (st.section == 0 || st.section == 1) {
-                st.mode = Mode::PathInput;
-                st.path_import = (k == "i");
-                st.path_for_theme = (st.section == 1);
-                st.path_buf.clear();
-                st.notice.clear();
+        if ((k == "r" || k == "e" || k == "i" || k == "n" || k == "d") &&
+            st.cat != Cat::Main && st.cat != Cat::Playback) {
+            if (st.files.empty() && (k == "r" || k == "e" || k == "d")) return true;
+            st.notice.clear();
+            if (k == "r") {
+                st.input_title = "重命名";
+                st.input_buf = st.files.empty() ? "" : st.files[st.sel].name;
+                st.mode = Mode::Input;
+            } else if (k == "e") {
+                st.input_title = "导出到路径";
+                st.input_buf = "";
+                st.mode = Mode::Input;
+            } else if (k == "i") {
+                st.input_title = "导入文件路径";
+                st.input_buf = "";
+                st.mode = Mode::Input;
+            } else if (k == "n") {
+                st.input_title = "新建模板";
+                st.input_buf = "";
+                st.mode = Mode::Input;
+            } else if (k == "d") {
+                st.confirm_kind = 0;
+                st.confirm_msg = "确认删除 " + st.files[st.sel].name + " ?";
+                st.mode = Mode::Confirm;
             }
+            return true;
+        }
+        if (k == "escape") {
+            screen.ExitLoopClosure()();
             return true;
         }
         return true;
