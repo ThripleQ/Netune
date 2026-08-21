@@ -1387,6 +1387,8 @@ static const char *DEFAULT_KEYBINDINGS_YAML =
     "  cycle_loop:    [\"r\"]\n"
     "  toggle_lyrics: [\"l\"]\n"
     "  show_help:     [\"?\", \"escape\"]\n"
+    "  show_actions:  [\"ctrl+x\"]\n"
+    "  show_song_detail: [\"d\"]\n"
     "  quit:          [\"q\"]\n";
 
 static const char *DEFAULT_THEME_DEFAULT_YAML =
