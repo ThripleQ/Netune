@@ -445,9 +445,10 @@ int main() {
             right.push_back(text(""));
             right.push_back(text("  Enter: 重新绑定  e: 导出  i: 导入") | dim);
         } else if (th.section == 1) {
-            /* theme list (top) */
-            right.push_back(text("  ── 主题 ──") | bold);
-            for (size_t i = 0; i < th.themes.size(); i++) {
+            /* merged list: themes first, then color slots — same visual
+               style as the keybindings page (unified navigation) */
+            int tn = (int)th.themes.size();
+            for (size_t i = 0; i < st.themes.size(); i++) {
                 bool sel = ((int)i == th.theme_sel);
                 std::string mark = (th.themes[i] == cur_theme) ? "  (当前)" : "";
                 std::string line = std::string("  ") + th.themes[i] + mark;
@@ -457,14 +458,12 @@ int main() {
                     right.push_back(text(line));
             }
             right.push_back(text(""));
-            /* color slots (bottom) */
-            right.push_back(text("  ── 颜色槽 (选中主题) ──") | bold);
             for (size_t i = 0; i < sizeof(kSlots)/sizeof(kSlots[0]); i++) {
                 const ColorSlot &slot = kSlots[i];
                 const ThemeColor &c = th.theme.*(slot.member);
-                bool sel = ((int)i == th.slot_sel && th.theme_sel >= 0);
+                bool sel = ((int)i == th.slot_sel);
                 auto swatch = text("  ") | bgcolor(Color::RGB(c.r, c.g, c.b));
-                std::string line = std::string("  ") + slot.name + "  " +
+                std::string line = std::string("  ") + slot.name + " = " +
                                    theme_color_to_hex(c);
                 Element row = hbox({swatch, text(line)});
                 if (sel)
@@ -473,7 +472,7 @@ int main() {
                     right.push_back(hbox({text("  "), row}));
             }
             right.push_back(text(""));
-            right.push_back(text("  Enter: 编辑颜色/应用主题  e: 导出  i: 导入") | dim);
+            right.push_back(text("  主题行 Enter: 应用  颜色行 Enter: 编辑  e: 导出  i: 导入") | dim);
         } else {
             const char *loops[] = {"顺序播放", "单曲循环", "列表循环", "随机播放"};
             right.push_back(text(std::string("  音量:  ") + std::to_string(vol) +
@@ -707,14 +706,17 @@ int main() {
                 int n = (int)(sizeof(kActions)/sizeof(kActions[0]));
                 st.kb_sel = (st.kb_sel + dir + n) % n;
             } else if (st.section == 1) {
-                int n = (int)st.themes.size() + (int)(sizeof(kSlots)/sizeof(kSlots[0]));
-                int idx = (st.theme_sel + 1) + dir;
-                if (idx < 0) idx = 0;
-                if (idx >= n) idx = n - 1;
-                /* split: theme list then slot list */
+                /* merged navigation over themes then slots: track the
+                   combined position so both lists move correctly */
                 int tn = (int)st.themes.size();
-                if (idx < tn) { st.theme_sel = idx; st.slot_sel = 0; }
-                else          { st.slot_sel = idx - tn; }
+                int sn = (int)(sizeof(kSlots)/sizeof(kSlots[0]));
+                int n = tn + sn;
+                int pos = (st.theme_sel < tn) ? st.theme_sel : tn + st.slot_sel;
+                pos += dir;
+                if (pos < 0) pos = 0;
+                if (pos >= n) pos = n - 1;
+                if (pos < tn) { st.theme_sel = pos; st.slot_sel = 0; }
+                else          { st.slot_sel = pos - tn; }
             }
             return true;
         }
@@ -745,7 +747,8 @@ int main() {
                 st.notice.clear();
             } else if (st.section == 1) {
                 int tn = (int)st.themes.size();
-                if (st.theme_sel < tn) {
+                int pos = (st.theme_sel < tn) ? st.theme_sel : tn + st.slot_sel;
+                if (pos < tn) {
                     /* apply theme */
                     cur_theme = st.themes[st.theme_sel];
                     load_theme(st, cur_theme);
