@@ -236,9 +236,9 @@ int main() {
         /* right: section content */
         Elements right;
         if (th.capturing) {
-            right.push_back(text("  按下新按键... (ESC 取消)") | bold);
-            right.push_back(text(""));
-            right.push_back(text("  " + key_list_str(st.kb_map[st.kb_sel].second)) | dim);
+            right.push_back(text("  编辑按键: 按新键=绑定, 按已有键=取消") | bold);
+            right.push_back(text("  当前: " + key_list_str(st.kb_map[st.kb_sel].second)));
+            right.push_back(text("  Enter 完成  ESC 取消") | dim);
         } else if (th.section == 0) {
             for (size_t i = 0; i < sizeof(kActions)/sizeof(kActions[0]); i++) {
                 bool sel = ((int)i == th.kb_sel);
@@ -296,6 +296,10 @@ int main() {
                 st.capturing = false;
                 return true;
             }
+            if (event == Event::Return || event.character() == "\r") {
+                st.capturing = false;  /* Enter: finish editing */
+                return true;
+            }
             std::string k = event_to_key_name(event);
             if (!k.empty() && k != "enter") {
                 std::vector<std::string> &keys = st.kb_map[st.kb_sel].second;
@@ -307,11 +311,15 @@ int main() {
                         kv.second.erase(it);
                 }
                 auto it = std::find(keys.begin(), keys.end(), k);
-                if (it == keys.end()) keys.push_back(k);
-                else keys.erase(it);  /* press again to unbind */
+                if (it == keys.end()) {
+                    keys.push_back(k);
+                    st.notice = "已绑定 " + k + " (Enter 完成 / 再按一次可取消)";
+                } else {
+                    keys.erase(it);
+                    st.notice = "已取消 " + k + " (Enter 完成)";
+                }
                 st.dirty_kb = true;
-                st.capturing = false;
-                st.notice = "已绑定: " + k;
+                /* stay in capture mode: keep binding/unbinding keys */
             }
             return true;
         }
