@@ -1399,7 +1399,7 @@ static const char *DEFAULT_KEYBINDINGS_YAML =
     "  toggle_mute:   [\"m\"]\n"
     "  cycle_loop:    [\"r\"]\n"
     "  toggle_lyrics: [\"l\"]\n"
-    "  show_help:     [\"?\", \"escape\"]\n"
+    "  show_help:     [\"?\"]\n"
     "  show_actions:  [\"ctrl+x\"]\n"
     "  show_song_detail: [\"d\"]\n"
     "  quit:          [\"q\"]\n";
@@ -2247,6 +2247,12 @@ int run_app(int argc, char **argv) {
             ev_key = event_to_key_name(event);
         }
         if (ev_key.empty()) return false;
+
+        /* ── Help screen: Esc to close ── */
+        if (cur.show_help && ev_key == "escape") {
+            StateStore::instance().set_show_help(false);
+            return true;
+        }
 
         /* ── Lyrics mode: Esc to close ── */
         if (cur.lyric_mode && ev_key == "escape") {
