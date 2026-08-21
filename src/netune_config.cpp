@@ -215,6 +215,16 @@ static std::string cat_name(Cat cat) {
     return "";
 }
 
+/* Visible tabs — Layout is hidden until users are ready to edit it */
+static const Cat kTabs[] = { Cat::Theme, Cat::Keybind, Cat::Main, Cat::Playback };
+static const int kTabCount = (int)(sizeof(kTabs)/sizeof(kTabs[0]));
+
+static int tab_index(Cat cat) {
+    for (int i = 0; i < kTabCount; i++)
+        if (kTabs[i] == cat) return i;
+    return 0;
+}
+
 static std::string basename_of(const std::string &p) {
     size_t slash = p.find_last_of("/\\");
     return (slash == std::string::npos) ? p : p.substr(slash + 1);
@@ -567,13 +577,13 @@ int main() {
 
         /* top bar: tabs */
         Elements tabs;
-        for (int i = 0; i < 5; i++) {
-            Cat c = (Cat)i;
+        for (int i = 0; i < kTabCount; i++) {
+            Cat c = kTabs[i];
             bool sel = (th.cat == c);
             auto t = text(" " + cat_name(c) + " ");
             if (sel) tabs.push_back(t | bold | inverted);
             else     tabs.push_back(t);
-            if (i < 4) tabs.push_back(text("│") | dim);
+            if (i < kTabCount - 1) tabs.push_back(text("│") | dim);
         }
         els.push_back(hbox(std::move(tabs)) | border);
 
@@ -671,7 +681,7 @@ int main() {
             case Cat::Playback:hints = "←/→ 音量   l 循环   + / - 快进步长"; break;
         }
         els.push_back(text("  " + hints) | dim);
-        els.push_back(text("  ←/→ 或 1-5 切换分类   q 退出") | dim);
+        els.push_back(text("  ←/→ 或 1-4 切换分类   q 退出") | dim);
 
         return dbox({
             vbox(std::move(els)) | flex | border | bgcolor(Color::RGB(26,27,38)),
@@ -939,19 +949,15 @@ int main() {
             screen.ExitLoopClosure()();
             return true;
         }
-        if (k == "1") st.cat = Cat::Theme;
-        else if (k == "2") st.cat = Cat::Keybind;
-        else if (k == "3") st.cat = Cat::Layout;
-        else if (k == "4") st.cat = Cat::Main;
-        else if (k == "5") st.cat = Cat::Playback;
-        if (k == "1" || k == "2" || k == "3" || k == "4" || k == "5") {
+        if (k.size() == 1 && k[0] >= '1' && k[0] <= '0' + kTabCount) {
+            st.cat = kTabs[k[0] - '1'];
             st.mode = Mode::Normal;
             refresh_files(st);
             return true;
         }
         if (k == "left" || k == "right" || k == "tab") {
             if (k == "tab") {
-                st.cat = (Cat)(((int)st.cat + 1) % 5);
+                st.cat = kTabs[(tab_index(st.cat) + 1) % kTabCount];
                 refresh_files(st);
                 return true;
             }
