@@ -2060,7 +2060,7 @@ int run_app(int argc, char **argv) {
             if (m.button == ftxui::Mouse::WheelUp ||
                 m.button == ftxui::Mouse::WheelDown) {
                 int dir = (m.button == ftxui::Mouse::WheelUp) ? -1 : 1;
-                if (m.x >= 22) {
+                if (m.x >= 20) {
                     /* right song panel */
                     StateStore::instance().set_active_panel(1);
                     int n = (int)st.playlist.size();
@@ -2098,29 +2098,52 @@ int run_app(int argc, char **argv) {
                 return true;
             if (m.y < 1 || m.y > st.screen_height - 3)
                 return true;  /* top/status bars */
-            if (m.x >= 22) {
+            if (m.x >= 20) {
                 /* right panel: row = y-2 (top bar 1 + border 1) + offset */
                 int row = (m.y - 2) + st.song_list_offset;
                 StateStore::instance().set_active_panel(1);
                 if (st.top_search_active)
                     StateStore::instance().set_top_search_active(false, 0);
                 if (row >= 0 && row < (int)st.playlist.size()) {
-                    StateStore::instance().set_selected_index(row);
+                    if (row == st.selected_index)
+                        component->OnEvent(ftxui::Event::Return);  /* re-click = activate */
+                    else
+                        StateStore::instance().set_selected_index(row);
                 }
             } else {
-                /* left menu: row 0 = nav entry, then menu items */
+                /* left menu: rows are [nav][sep]menu... in netease mode,
+                   [nav]groups... in local mode (hidden while searching) */
                 int row = m.y - 2;
+                bool searching = !st.top_left_query.empty();
                 StateStore::instance().set_active_panel(0);
                 if (st.music_mode == MusicMode::Local) {
-                    if (row == 0 && st.top_left_query.empty())
-                        StateStore::instance().set_group_index(-1);
-                    else if (row > 0 && row - 1 < (int)st.groups.size())
-                        StateStore::instance().set_group_index(row - 1);
+                    if (searching) return true;  /* filtered view: ignore */
+                    if (row == 0) {
+                        if (st.group_index == -1)
+                            component->OnEvent(ftxui::Event::Return);
+                        else
+                            StateStore::instance().set_group_index(-1);
+                    } else if (row - 1 < (int)st.groups.size()) {
+                        if (row - 1 == st.group_index)
+                            component->OnEvent(ftxui::Event::Return);
+                        else
+                            StateStore::instance().set_group_index(row - 1);
+                    }
                 } else {
-                    if (row == 0 && st.top_left_query.empty())
-                        StateStore::instance().set_netease_selected(-1);
-                    else if (row > 0 && row - 1 < (int)st.netease_menu.size())
-                        StateStore::instance().set_netease_selected(row - 1);
+                    if (searching) return true;  /* filtered view: ignore */
+                    if (row == 0) {
+                        if (st.netease_selected == -1)
+                            component->OnEvent(ftxui::Event::Return);
+                        else
+                            StateStore::instance().set_netease_selected(-1);
+                    } else if (row == 1) {
+                        /* separator row: ignore */
+                    } else if (row - 2 < (int)st.netease_menu.size()) {
+                        if (row - 2 == st.netease_selected)
+                            component->OnEvent(ftxui::Event::Return);
+                        else
+                            StateStore::instance().set_netease_selected(row - 2);
+                    }
                 }
             }
             return true;
