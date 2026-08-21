@@ -437,13 +437,14 @@ static bool write_text_file(const std::string &path, const std::string &content)
 }
 
 /* ── Action helpers ─────────────────────────────────── */
-static void apply_theme(CfgState &st, Config *cfg, const std::string &name) {
+static bool apply_theme(CfgState &st, Config *cfg, const std::string &name) {
     st.cur_theme = name;
+    bool ok = true;
     if (cfg) {
         config_set_str(cfg, "ui.theme", name.c_str());
-        config_save(cfg);
+        ok = config_save(cfg);
     }
-    st.notice = "已应用主题: " + name;
+    return ok;
 }
 
 static bool load_kb_file(CfgState &st, const std::string &path) {
@@ -586,7 +587,7 @@ int main() {
             body.push_back(text(""));
             body.push_back(text("  修改立即保存到 config.json") | dim);
             els.push_back(vbox(std::move(body)) | flex | border);
-        } else if (th.mode == Mode::KeyEdit) {
+        } else if (th.mode == Mode::KeyEdit || th.mode == Mode::Capture) {
             /* key editor sub-view */
             Elements body;
             body.push_back(text("  编辑按键: " + th.kb_editing + "   (ESC 返回)") | bold);
@@ -603,7 +604,7 @@ int main() {
             body.push_back(text(""));
             body.push_back(text("  Enter: 绑定  Backspace: 删除最后绑定  ESC: 返回") | dim);
             els.push_back(vbox(std::move(body)) | flex | border);
-        } else if (th.mode == Mode::ThemeEdit) {
+        } else if (th.mode == Mode::ThemeEdit || th.mode == Mode::ColorEdit) {
             /* theme color-slot editor sub-view */
             Elements body;
             body.push_back(text("  编辑主题: " + th.theme_editing + "   (ESC 保存返回)") | bold);
@@ -739,9 +740,11 @@ int main() {
         if (st.mode == Mode::ThemeEdit) {
             std::string k = key_of();
             if (event == Event::Escape) {
-                if (st.dirty_theme)
-                    write_theme_yaml(dir_of(Cat::Theme) + "/" + st.theme_editing,
-                                     st.theme_editing, st.theme_edit);
+                if (st.dirty_theme) {
+                    bool ok = write_theme_yaml(dir_of(Cat::Theme) + "/" + st.theme_editing,
+                                               st.theme_editing, st.theme_edit);
+                    st.notice = ok ? "已保存 " + st.theme_editing : "保存失败";
+                }
                 st.mode = Mode::Normal;
                 refresh_files(st);
                 return true;
@@ -976,30 +979,28 @@ int main() {
         }
         if (k == "enter" || k == "\r") {
             if (st.cat == Cat::Theme && !st.files.empty()) {
-                /* Enter = use (apply) the theme */
                 std::string base = st.files[st.sel].name;
                 if (base.size() > 5) base = base.substr(0, base.size() - 5);
-                apply_theme(st, cfg, base);
+                st.notice = apply_theme(st, cfg, base) ? "已加载配置" : "加载失败";
             } else if (st.cat == Cat::Keybind && !st.files.empty()) {
-                /* Enter = use: make this file the active keybindings
-                   (netune reads keybindings/default.yaml) */
                 std::string sel = st.files[st.sel].name;
                 if (sel == "default.yaml") {
-                    st.notice = "default.yaml 已是当前按键配置";
+                    st.notice = "已加载配置";
                 } else if (copy_file(dir_of(Cat::Keybind) + "/" + sel,
                                      dir_of(Cat::Keybind) + "/default.yaml")) {
-                    st.notice = "已选用按键配置: " + sel + " (重启 netune 生效)";
+                    st.notice = "已加载配置";
                 } else {
-                    st.notice = "选用失败";
+                    st.notice = "加载失败";
                 }
             } else if (st.cat == Cat::Layout && !st.files.empty()) {
                 std::string base = st.files[st.sel].name;
                 if (base.size() > 5) base = base.substr(0, base.size() - 5);
+                bool ok = false;
                 if (cfg) {
                     config_set_str(cfg, "ui.layout", base.c_str());
-                    config_save(cfg);
-                    st.notice = "已选用布局: " + base;
+                    ok = config_save(cfg);
                 }
+                st.notice = ok ? "已加载配置" : "加载失败";
             }
             return true;
         }
