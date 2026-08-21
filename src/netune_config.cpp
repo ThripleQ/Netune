@@ -958,6 +958,10 @@ int main() {
             if (st.cat == Cat::Playback) {
                 if (k == "left") vol = vol > 0 ? vol - 5 : 0;
                 else             vol = vol < 100 ? vol + 5 : 100;
+                if (cfg) {
+                    config_set_int(cfg, "audio.volume", vol);
+                    config_save(cfg);
+                }
             }
             return true;
         }
@@ -969,11 +973,19 @@ int main() {
         }
         if (k == "l" && st.cat == Cat::Playback) {
             loop_mode = (loop_mode + 1) % 4;
+            if (cfg) {
+                config_set_int(cfg, "playback.loop_mode", loop_mode);
+                config_save(cfg);
+            }
             return true;
         }
         if ((k == "+" || k == "=" || k == "-") && st.cat == Cat::Playback) {
             if (k == "-") seek = seek > 1 ? seek - 1 : 1;
             else          seek = seek < 60 ? seek + 1 : 60;
+            if (cfg) {
+                config_set_int(cfg, "playback.seek_step_sec", seek);
+                config_save(cfg);
+            }
             return true;
         }
         if (k == "enter" || k == "\r") {
