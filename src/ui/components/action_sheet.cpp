@@ -85,7 +85,6 @@ Element render_action_sheet(const AppState &s) {
         text(" " + title + " ") | bold,
         separator(),
         vbox(std::move(body)),
-        separator(),
     }) | borderRounded
       | bgcolor(th.bg.has_color ? Color::RGB(th.bg.r, th.bg.g, th.bg.b)
                                  : Color::RGB(0, 0, 0))
@@ -109,7 +108,6 @@ Element render_song_detail(const AppState &s) {
         text(" \u6B4C\u66F2\u8BE6\u60C5 ") | bold,   /* 歌曲详情 */
         separator(),
         vbox(std::move(body)),
-        separator(),
     }) | borderRounded
       | bgcolor(th.bg.has_color ? Color::RGB(th.bg.r, th.bg.g, th.bg.b)
                                  : Color::RGB(0, 0, 0))
