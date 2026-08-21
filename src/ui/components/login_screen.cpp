@@ -203,5 +203,5 @@ Element render_login_screen(const AppState &s) {
     auto page = vbox(std::move(col));
     /* yframe + flex: fills available height, adds scrollbar if needed */
     auto &theme = ThemeManager::instance().current();
-    return page | yframe | flex | bgcolor(Color::RGB(theme.overlay_bg.r, theme.overlay_bg.g, theme.overlay_bg.b));
+    return theme_overlay_bg(page | yframe | flex);
 }

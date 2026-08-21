@@ -86,8 +86,8 @@ Element render_action_sheet(const AppState &s) {
         separator(),
         vbox(std::move(body)),
     }) | borderRounded
-      | bgcolor(th.bg.has_color ? Color::RGB(th.bg.r, th.bg.g, th.bg.b)
-                                 : Color::RGB(0, 0, 0))
+      | (th.bg.has_color ? bgcolor(Color::RGB(th.bg.r, th.bg.g, th.bg.b))
+                         : bgcolor(Color::Default))
       | color(Color::RGB(th.accent.r, th.accent.g, th.accent.b));
 
     /* Cap the width to the song panel: an over-wide row (long titles)
@@ -122,8 +122,8 @@ Element render_song_detail(const AppState &s) {
         separator(),
         vbox(std::move(body)),
     }) | borderRounded
-      | bgcolor(th.bg.has_color ? Color::RGB(th.bg.r, th.bg.g, th.bg.b)
-                                 : Color::RGB(0, 0, 0))
+      | (th.bg.has_color ? bgcolor(Color::RGB(th.bg.r, th.bg.g, th.bg.b))
+                         : bgcolor(Color::Default))
       | color(Color::RGB(th.accent.r, th.accent.g, th.accent.b));
     int max_w = s.top_row_width - 24;
     if (max_w < 40) max_w = 40;

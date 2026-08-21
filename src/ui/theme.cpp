@@ -40,7 +40,7 @@ static std::string xdg_config_path(const std::string &sub) {
 
 ThemeColor theme_color_from_hex(const std::string &hex) {
     ThemeColor c;
-    if (hex.empty() || hex[0] != '#') return c;
+    if (hex.empty() || hex[0] != '#') return c;  /* "none"/"transparent" → no color */
 
     const char *h = hex.c_str() + 1;
     size_t len = strlen(h);
@@ -64,6 +64,7 @@ ThemeColor theme_color_from_hex(const std::string &hex) {
 }
 
 std::string theme_color_to_hex(const ThemeColor &c) {
+    if (!c.has_color) return "none";
     char buf[8];
     snprintf(buf, sizeof(buf), "#%02x%02x%02x", c.r, c.g, c.b);
     return std::string(buf);

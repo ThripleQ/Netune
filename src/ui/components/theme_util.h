@@ -6,10 +6,13 @@
 
 using namespace ftxui;
 
-/* ── Core theme colors (legacy) ────────────────────── */
+/* Core theme colors (legacy) */
 Element theme_fg(Element e);
 Element theme_bg(Element e);
 Element theme_accent(Element e);
+
+/* Overlay/popup background (overlay_bg, falls back to bg, then transparent) */
+Element theme_overlay_bg(Element e);
 
 /* ── Extended semantic colors ──────────────────────── */
 /* Selection: sets bgcolor (accent_bg) and text color (fg) */

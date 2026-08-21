@@ -552,7 +552,9 @@ int main() {
             body.push_back(text(std::string("  编辑颜色 [") + slot.name + "]  当前 " +
                                 theme_color_to_hex(c)) | bold);
             body.push_back(separator());
-            auto swatch = text("  ") | bgcolor(Color::RGB(c.r, c.g, c.b));
+            Element swatch = c.has_color
+                ? text("  ") | bgcolor(Color::RGB(c.r, c.g, c.b))
+                : text(" · ");
             body.push_back(hbox({swatch, text("  输入 hex (如 #1a1b26): "),
                                  text(th.hex_buf + "\u258C")}));
             Elements pal;
@@ -564,7 +566,7 @@ int main() {
                 pal.push_back(p | bgcolor(Color::RGB(pc.r, pc.g, pc.b)));
             }
             body.push_back(hbox(std::move(pal)));
-            body.push_back(text("  ←/→ 选色板  Enter 应用  ESC 取消") | dim);
+            body.push_back(text("  ←/→ 选色板  x 无色  Enter 应用  ESC 取消") | dim);
             auto box = vbox(std::move(body)) | borderRounded
                        | bgcolor(Color::RGB(26,27,38))
                        | color(Color::RGB(122,162,247));
@@ -627,7 +629,9 @@ int main() {
                 const ColorSlot &slot = kSlots[i];
                 const ThemeColor &c = th.theme_edit.*(slot.member);
                 bool sel = ((int)i == th.slot_sel);
-                auto swatch = text("  ") | bgcolor(Color::RGB(c.r, c.g, c.b));
+                Element swatch = c.has_color
+                ? text("  ") | bgcolor(Color::RGB(c.r, c.g, c.b))
+                : text(" · ");
                 std::string line = "  " + std::string(slot.name) + " = " +
                                    theme_color_to_hex(c);
                 Element row = hbox({swatch, text(line)});
@@ -712,6 +716,14 @@ int main() {
             }
             if (event == Event::ArrowRight || k == "right") {
                 st.palette_sel = (st.palette_sel + 1) % kPaletteN;
+                return true;
+            }
+            if (k == "x") {
+                st.theme_edit.*(kSlots[st.slot_sel].member) = ThemeColor{};
+                st.dirty_theme = true;
+                st.notice = std::string("已设置 ") + kSlots[st.slot_sel].name + " = 无色";
+                st.hex_buf.clear();
+                st.mode = Mode::ThemeEdit;
                 return true;
             }
             if (event == Event::Backspace) {

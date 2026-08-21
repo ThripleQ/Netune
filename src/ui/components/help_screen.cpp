@@ -163,12 +163,12 @@ Element render_help_screen(const AppState &s, const KeybindingManager &kb) {
     });
 
     auto &theme = ThemeManager::instance().current();
-    return vbox(Elements{
+    auto content = vbox(Elements{
         filler(),
         theme_accent(text(" Help ") | bold),
         theme_border(body | border),
         text(" 按 ? 或 Esc 关闭 ") | dim | center,
         filler(),
-    }) | yframe | flex |
-        bgcolor(Color::RGB(theme.overlay_bg.r, theme.overlay_bg.g, theme.overlay_bg.b));
+    });
+    return theme_overlay_bg(content | yframe | flex);
 }
