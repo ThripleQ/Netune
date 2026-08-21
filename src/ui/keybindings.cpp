@@ -11,33 +11,37 @@ struct KeybindingManager::Impl {
     std::unordered_map<std::string, Action> map;
 };
 
+/* default bindings — base map, YAML overrides on top */
+static void fill_defaults(std::unordered_map<std::string, Action> &map) {
+    map["j"]      = Action::MoveDown;
+    map["down"]   = Action::MoveDown;
+    map["k"]      = Action::MoveUp;
+    map["up"]     = Action::MoveUp;
+    map["tab"]    = Action::PanelSwitch;
+    map["space"]  = Action::PlayPause;
+    map["enter"]  = Action::PlaySelected;
+    map["n"]      = Action::NextTrack;
+    map["p"]      = Action::PrevTrack;
+    map["left"]   = Action::SeekBackward;
+    map["right"]  = Action::SeekForward;
+    map["+"]      = Action::VolumeUp;
+    map["="]      = Action::VolumeUp;
+    map["-"]      = Action::VolumeDown;
+    map["r"]      = Action::CycleLoop;
+    map["l"]      = Action::ToggleLyrics;
+    map["s"]      = Action::Stop;
+    map["m"]      = Action::ToggleMute;
+    map["?"]      = Action::ShowHelp;
+    map["ctrl+x"] = Action::ShowActions;
+    map["d"]      = Action::ShowSongDetail;
+    map["ctrl+/"] = Action::OpenSearch;
+    map["q"]      = Action::Quit;
+}
+
 KeybindingManager::KeybindingManager() {
     /* default bindings — used if no YAML loaded */
     impl_ = new Impl;
-    impl_->map["j"]      = Action::MoveDown;
-    impl_->map["down"]   = Action::MoveDown;
-    impl_->map["k"]      = Action::MoveUp;
-    impl_->map["up"]     = Action::MoveUp;
-    impl_->map["tab"]    = Action::PanelSwitch;
-    impl_->map["space"]  = Action::PlayPause;
-    impl_->map["enter"]  = Action::PlaySelected;
-    impl_->map["n"]      = Action::NextTrack;
-    impl_->map["p"]      = Action::PrevTrack;
-    impl_->map["left"]   = Action::SeekBackward;
-    impl_->map["right"]  = Action::SeekForward;
-    impl_->map["+"]      = Action::VolumeUp;
-    impl_->map["="]      = Action::VolumeUp;
-    impl_->map["-"]      = Action::VolumeDown;
-    impl_->map["r"]      = Action::CycleLoop;
-    impl_->map["l"]      = Action::ToggleLyrics;
-    impl_->map["s"]      = Action::Stop;
-    impl_->map["m"]      = Action::ToggleMute;
-    impl_->map["?"]      = Action::ShowHelp;
-    impl_->map["escape"] = Action::ShowHelp;
-    impl_->map["ctrl+x"] = Action::ShowActions;
-    impl_->map["d"]      = Action::ShowSongDetail;
-    impl_->map["ctrl+/"] = Action::OpenSearch;
-    impl_->map["q"]      = Action::Quit;
+    fill_defaults(impl_->map);
 }
 
 KeybindingManager::~KeybindingManager() {
@@ -60,6 +64,12 @@ bool KeybindingManager::load(const std::string &yaml_path) {
         LOG_WARN("Cannot open keybindings: %s", yaml_path.c_str());
         return false;
     }
+
+    /* start from defaults; YAML keys override/remove them.  Without the
+       clear, keys removed from the YAML (e.g. "escape" → ShowHelp) would
+       linger forever from the constructor's default map. */
+    impl_->map.clear();
+    fill_defaults(impl_->map);
 
     yaml_parser_t parser;
     yaml_event_t  event;
