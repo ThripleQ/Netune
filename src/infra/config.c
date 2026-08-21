@@ -282,6 +282,78 @@ bool config_set_str(Config *cfg, const char *key, const char *value) {
     return true;
 }
 
+/* ── Array access ───────────────────────────────────── */
+
+/* Resolve a dotted key to a mutable array, creating any missing
+   intermediate objects and the array itself on the way. */
+static yyjson_mut_val* resolve_mut_arr(Config *cfg, yyjson_mut_doc *mdoc,
+                                       const char *key) {
+    if (!cfg || !mdoc || !key) return NULL;
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);
+    if (!root) return NULL;
+
+    char *k = strdup(key);
+    if (!k) return NULL;
+    yyjson_mut_val *v = root;
+    char *tok = strtok(k, ".");
+    while (tok) {
+        char *next = strtok(NULL, ".");
+        if (!yyjson_mut_is_obj(v)) { free(k); return NULL; }
+        yyjson_mut_val *node = yyjson_mut_obj_get(v, tok);
+        if (!node) {
+            const char *owned = config_own_key(cfg, tok);
+            if (!owned) { free(k); return NULL; }
+            node = next ? (yyjson_mut_val*)yyjson_mut_obj(mdoc)
+                        : (yyjson_mut_val*)yyjson_mut_arr(mdoc);
+            if (!node ||
+                !yyjson_mut_obj_add_val(mdoc, v, owned, node)) {
+                free(k);
+                return NULL;
+            }
+        }
+        v = node;
+        tok = next;
+    }
+    free(k);
+    return yyjson_mut_is_arr(v) ? v : NULL;
+}
+
+bool config_array_push_str(Config *cfg, const char *key, const char *value) {
+    if (!cfg || !value) return false;
+    yyjson_mut_doc *mdoc = config_mut_doc(cfg);
+    if (!mdoc) return false;
+    yyjson_mut_val *arr = resolve_mut_arr(cfg, mdoc, key);
+    if (!arr) return false;
+    yyjson_mut_val *strv = yyjson_mut_strncpy(mdoc, value, strlen(value));
+    if (!strv) return false;
+    return yyjson_mut_arr_add_val(arr, strv);
+}
+
+bool config_array_remove(Config *cfg, const char *key, int idx) {
+    if (!cfg || idx < 0) return false;
+    yyjson_mut_doc *mdoc = config_mut_doc(cfg);
+    if (!mdoc) return false;
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);
+    if (!root) return false;
+    yyjson_mut_val *arr = NULL;
+    char *k = strdup(key);
+    if (!k) return false;
+    yyjson_mut_val *v = root;
+    char *tok = strtok(k, ".");
+    while (tok) {
+        if (!yyjson_mut_is_obj(v)) { free(k); return false; }
+        v = yyjson_mut_obj_get(v, tok);
+        if (!v) { free(k); return false; }
+        tok = strtok(NULL, ".");
+    }
+    free(k);
+    arr = yyjson_mut_is_arr(v) ? v : NULL;
+    if (!arr) return false;
+    size_t n = yyjson_mut_arr_size(arr);
+    if ((size_t)idx >= n) return false;
+    return yyjson_mut_arr_remove(arr, (size_t)idx) != NULL;
+}
+
 bool config_save(Config *cfg) {
     if (!cfg || !cfg->path) return false;
     yyjson_mut_doc *mdoc = config_mut_doc(cfg);

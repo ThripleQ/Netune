@@ -116,6 +116,10 @@ struct CfgState {
     std::string hex_buf;
     int palette_sel = 0;
 
+    /* local music dirs (main config tab) */
+    std::vector<std::string> dirs;
+    int dir_sel = 0;
+
     std::string notice;
 };
 
@@ -507,6 +511,14 @@ int main() {
     if (cur_seek > 60) cur_seek = 60;
     int vol = cur_vol, loop_mode = cur_loop, seek = cur_seek;
 
+    int ndirs = cfg ? config_get_array_size(cfg, "music_sources.local.dirs") : 0;
+    for (int i = 0; i < ndirs; i++) {
+        char key[64];
+        snprintf(key, sizeof(key), "music_sources.local.dirs[%d]", i);
+        const char *d = cfg ? config_get_str(cfg, key, NULL) : NULL;
+        if (d) st.dirs.push_back(d);
+    }
+
     refresh_files(st);
 
     /* ── Modal popups (input / confirm / capture) ────── */
@@ -644,11 +656,26 @@ int main() {
             body.push_back(text("  Enter: 编辑颜色(hex/色板)  ↑/↓: 选择  ESC: 保存返回") | dim);
             els.push_back(vbox(std::move(body)) | flex | border);
         } else if (th.cat == Cat::Main) {
-            els.push_back(vbox({
-                text("  config.json — 主配置文件 (主题/布局/按键/播放 默认值)") | dim,
-                text(""),
-                text("  此文件由 netune 自动维护, 请勿重命名或删除") | color(Color::Red) | bold,
-            }) | flex | border);
+            Elements body;
+            body.push_back(text("  本地音乐目录 (music_sources.local.dirs)") | bold);
+            body.push_back(separator());
+            if (th.dirs.empty()) {
+                body.push_back(text("  (未配置 — 本地音乐不可用)") | dim);
+            } else {
+                for (size_t i = 0; i < th.dirs.size(); i++) {
+                    bool sel = ((int)i == th.dir_sel);
+                    std::string line = "  " + std::to_string(i + 1) + ". " + th.dirs[i];
+                    if (sel)
+                        body.push_back(hbox({text("> "), text(line) | bold}) | inverted);
+                    else
+                        body.push_back(text(line));
+                }
+            }
+            body.push_back(text(""));
+            body.push_back(text("  a 添加目录   d 删除选中   (修改立即保存, 重启 netune 生效)") | dim);
+            body.push_back(text(""));
+            body.push_back(text("  config.json 其他内容由 netune 自动维护, 请勿重命名/删除") | dim);
+            els.push_back(vbox(std::move(body)) | flex | border);
         } else {
             /* file list */
             Elements body;
@@ -685,7 +712,7 @@ int main() {
             case Cat::Theme:   hints = "Enter 选用   x 编辑颜色   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
             case Cat::Keybind: hints = "Enter 选用(复制为default)   x 编辑按键   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
             case Cat::Layout:  hints = "Enter 选用   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
-            case Cat::Main:    hints = "主配置文件"; break;
+            case Cat::Main:    hints = "a 添加音乐目录   d 删除选中   ↑/↓ 选择"; break;
             case Cat::Playback:hints = "←/→ 音量   l 循环   + / - 快进步长"; break;
         }
         els.push_back(text("  " + hints) | dim);
@@ -824,21 +851,38 @@ int main() {
         if (st.mode == Mode::Confirm) {
             std::string k = key_of();
             if (k == "y" || k == "Y") {
-                std::string target = dir_of(st.cat) + "/" + st.files[st.sel].name;
-                if (st.confirm_kind == 0) {
-                    if (remove(target.c_str()) == 0) {
-                        st.notice = "已删除 " + st.files[st.sel].name;
-                        refresh_files(st);
-                    } else {
-                        st.notice = "删除失败";
+                if (st.confirm_kind == 2) {
+                    /* delete a local music dir */
+                    if (cfg && st.dir_sel >= 0 &&
+                        st.dir_sel < (int)st.dirs.size()) {
+                        if (config_array_remove(cfg, "music_sources.local.dirs",
+                                                st.dir_sel) && config_save(cfg)) {
+                            st.notice = "已删除目录: " + st.dirs[st.dir_sel];
+                            st.dirs.erase(st.dirs.begin() + st.dir_sel);
+                            if (st.dir_sel >= (int)st.dirs.size())
+                                st.dir_sel = (int)st.dirs.size() - 1;
+                            if (st.dir_sel < 0) st.dir_sel = 0;
+                        } else {
+                            st.notice = "删除失败";
+                        }
                     }
                 } else {
-                    /* overwrite existing (import/rename/export collision) */
-                    if (copy_file(st.input_buf, target)) {
-                        st.notice = "已覆盖 " + st.files[st.sel].name;
-                        refresh_files(st);
+                    std::string target = dir_of(st.cat) + "/" + st.files[st.sel].name;
+                    if (st.confirm_kind == 0) {
+                        if (remove(target.c_str()) == 0) {
+                            st.notice = "已删除 " + st.files[st.sel].name;
+                            refresh_files(st);
+                        } else {
+                            st.notice = "删除失败";
+                        }
                     } else {
-                        st.notice = "写入失败";
+                        /* overwrite existing (import/rename/export collision) */
+                        if (copy_file(st.input_buf, target)) {
+                            st.notice = "已覆盖 " + st.files[st.sel].name;
+                            refresh_files(st);
+                        } else {
+                            st.notice = "写入失败";
+                        }
                     }
                 }
                 st.mode = Mode::Normal;
@@ -865,6 +909,19 @@ int main() {
                 st.mode = Mode::Normal;
                 st.notice.clear();
                 if (name.empty()) return true;
+
+                if (st.input_title == "添加音乐目录") {
+                    if (cfg && config_array_push_str(cfg,
+                            "music_sources.local.dirs", name.c_str()) &&
+                        config_save(cfg)) {
+                        st.notice = "已添加目录: " + name;
+                        st.dirs.push_back(name);
+                        st.dir_sel = (int)st.dirs.size() - 1;
+                    } else {
+                        st.notice = "添加失败";
+                    }
+                    return true;
+                }
 
                 /* switch on the current popup intent (stored in input_title tag) */
                 std::string action = st.input_title;
@@ -989,8 +1046,27 @@ int main() {
         }
         if (k == "up" || k == "down" || k == "j" || k == "k") {
             int dir = (k == "up" || k == "k") ? -1 : 1;
-            int n = (int)st.files.size();
-            if (n > 0) st.sel = (st.sel + dir + n) % n;
+            if (st.cat == Cat::Main) {
+                int n = (int)st.dirs.size();
+                if (n > 0) st.dir_sel = (st.dir_sel + dir + n) % n;
+            } else {
+                int n = (int)st.files.size();
+                if (n > 0) st.sel = (st.sel + dir + n) % n;
+            }
+            return true;
+        }
+        if (k == "a" && st.cat == Cat::Main) {
+            st.input_title = "添加音乐目录";
+            st.input_buf = "";
+            st.mode = Mode::Input;
+            st.notice.clear();
+            return true;
+        }
+        if (k == "d" && st.cat == Cat::Main && !st.dirs.empty()) {
+            st.confirm_kind = 2;
+            st.confirm_msg = "删除音乐目录: " + st.dirs[st.dir_sel] + " ? (y/n)";
+            st.mode = Mode::Confirm;
+            st.notice.clear();
             return true;
         }
         if (k == "l" && st.cat == Cat::Playback) {
