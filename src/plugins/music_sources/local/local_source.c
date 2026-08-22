@@ -10,6 +10,7 @@
 #include "compat/utf8.h"
 #include <strings.h>
 #include <dirent.h>
+#include <pthread.h>
 
 /* ── Cross-platform path helpers ────────────────────── */
 #ifdef _WIN32
@@ -38,6 +39,11 @@ static void song_array_push(SongArray *a, const SongInfo *s) {
                           (size_t)newcap * sizeof(SongInfo));
         if (!items) return;  /* keep existing array; skip this entry */
         a->items    = items;
+        /* Zero the newly-grown region: song_info_copy() frees dst's old
+           strings first, and stale garbage pointers from realloc() would
+           crash with free(): invalid pointer. */
+        for (int i = a->count; i < newcap; i++)
+            memset(&items[i], 0, sizeof(SongInfo));
         a->capacity = newcap;
     }
     /* Deep copy via the NULL-safe helper — raw strdup(s->cover_url) would
@@ -64,6 +70,29 @@ static const char *path_basename(const char *path) {
     return base;
 }
 
+/* Probe one audio file (path already validated as regular + music ext):
+   decode it for duration and append to the array. */
+static void scan_file(const char *full, const char *name, SongArray *arr) {
+    SongInfo s = {0};
+    s.id     = strdup(full);
+    s.source = strdup("local");
+    s.title  = strdup(name);
+    s.artist = strdup("");
+    s.album  = strdup("");
+
+    Decoder *d = decoder_open(full);
+    if (d) {
+        DecoderInfo info;
+        decoder_get_info(d, &info);
+        if (info.total_frames > 0 && info.sample_rate > 0)
+            s.duration_sec = info.total_frames / info.sample_rate;
+        decoder_close(d);
+    }
+
+    song_array_push(arr, &s);
+    song_info_free(&s);  /* push deep-copied s; free its scratch strings */
+}
+
 static void scan_dir(const char *dir_path, SongArray *arr) {
     DIR *dir = opendir(dir_path);
     if (!dir) return;
@@ -73,34 +102,31 @@ static void scan_dir(const char *dir_path, SongArray *arr) {
         if (strcmp(entry->d_name, ".") == 0 ||
             strcmp(entry->d_name, "..") == 0)
             continue;
+        /* Skip hidden entries (.git, dotfiles, ...) — they are never
+           music and often contain thousands of files (e.g. downloaded
+           themes/checkouts). */
+        if (entry->d_name[0] == '.')
+            continue;
 
         char full[2048];
         snprintf(full, sizeof(full), "%s" PATH_SEP "%s", dir_path, entry->d_name);
 
-        struct stat st;
-        if (stat_utf8(full, &st) != 0) continue;
-
-        if (S_ISDIR(st.st_mode)) {
+        unsigned char dt = entry->d_type;
+        if (dt == DT_LNK)
+            continue;  /* never follow symlinks (no cycle risk, themes etc.) */
+        if (dt == DT_DIR) {
             scan_dir(full, arr);
-        } else if (S_ISREG(st.st_mode) && has_music_ext(entry->d_name)) {
-            SongInfo s = {0};
-            s.id     = strdup(full);
-            s.source = strdup("local");
-            s.title  = strdup(entry->d_name);
-            s.artist = strdup("");
-            s.album  = strdup("");
-
-            Decoder *d = decoder_open(full);
-            if (d) {
-                DecoderInfo info;
-                decoder_get_info(d, &info);
-                if (info.total_frames > 0 && info.sample_rate > 0)
-                    s.duration_sec = info.total_frames / info.sample_rate;
-                decoder_close(d);
+        } else if (dt == DT_REG && has_music_ext(entry->d_name)) {
+            scan_file(full, entry->d_name, arr);
+        } else if (dt == DT_UNKNOWN) {
+            /* filesystems without d_type: fall back to stat() */
+            struct stat st;
+            if (stat_utf8(full, &st) != 0) continue;
+            if (S_ISDIR(st.st_mode)) {
+                scan_dir(full, arr);
+            } else if (S_ISREG(st.st_mode) && has_music_ext(entry->d_name)) {
+                scan_file(full, entry->d_name, arr);
             }
-
-            song_array_push(arr, &s);
-            song_info_free(&s);  /* push deep-copied s; free its scratch strings */
         }
     }
     closedir(dir);
@@ -111,6 +137,9 @@ static void scan_dir(const char *dir_path, SongArray *arr) {
  * If no dirs are configured, the cache stays empty. */
 static SongArray g_all_songs = {0};
 static bool      g_scanned = false;
+/* Guard the cache: download completion (background thread) rescans the
+   dirs while the UI thread may be reading g_all_songs. */
+static pthread_mutex_t g_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* Match a single song against keyword (title / artist / album / filename) */
 static bool song_matches(const SongInfo *s, const char *keyword) {
@@ -127,7 +156,8 @@ static bool song_matches(const SongInfo *s, const char *keyword) {
 
 /* Scan configured dirs into the global cache. Idempotent. */
 static void ensure_cache(void) {
-    if (g_scanned) return;
+    pthread_mutex_lock(&g_cache_mutex);
+    if (g_scanned) { pthread_mutex_unlock(&g_cache_mutex); return; }
     Config *cfg = config_global();
     int ndirs = cfg ? config_get_array_size(cfg, "music_sources.local.dirs") : 0;
     if (ndirs <= 0) {
@@ -146,16 +176,19 @@ static void ensure_cache(void) {
     }
     LOG_INFO("Local source cache: %d songs scanned", g_all_songs.count);
     g_scanned = true;
+    pthread_mutex_unlock(&g_cache_mutex);
 }
 
 /* Filter the global cache by keyword, return matching songs. */
 static int search_filtered(const char *keyword, SongArray *out) {
     song_array_init(out);
 
+    pthread_mutex_lock(&g_cache_mutex);
     /* No keyword → return everything */
     if (!keyword || !keyword[0]) {
         for (int i = 0; i < g_all_songs.count; i++)
             song_array_push(out, &g_all_songs.items[i]);
+        pthread_mutex_unlock(&g_cache_mutex);
         return 0;
     }
 
@@ -164,6 +197,7 @@ static int search_filtered(const char *keyword, SongArray *out) {
         if (song_matches(&g_all_songs.items[i], keyword))
             song_array_push(out, &g_all_songs.items[i]);
     }
+    pthread_mutex_unlock(&g_cache_mutex);
     return 0;
 }
 
@@ -175,6 +209,7 @@ static int local_init(void) {
 }
 
 static void local_shutdown(void) {
+    pthread_mutex_lock(&g_cache_mutex);
     for (int i = 0; i < g_all_songs.count; i++)
         song_info_free(&g_all_songs.items[i]);
     free(g_all_songs.items);
@@ -182,6 +217,7 @@ static void local_shutdown(void) {
     g_all_songs.count    = 0;
     g_all_songs.capacity = 0;
     g_scanned = false;
+    pthread_mutex_unlock(&g_cache_mutex);
     LOG_INFO("Local music source shutdown");
 }
 
@@ -264,4 +300,57 @@ void local_source_register(void) {
 
 MusicSource* local_source_create(void) {
     return &g_local_source;
+}
+
+int local_register_download_dir(const char *dir) {
+    if (!dir || !dir[0]) return -1;
+    Config *cfg = config_global();
+    if (!cfg) return -1;
+
+    /* Guard the check-then-push against concurrent download threads
+       (two downloads finishing at the same time would both pass the
+       "already configured?" check and append the dir twice). */
+    pthread_mutex_lock(&g_cache_mutex);
+
+    char *exp = path_expand(dir);
+    const char *want = exp ? exp : dir;
+
+    /* Already configured? (compare against expanded entries) */
+    int ndirs = config_get_array_size(cfg, "music_sources.local.dirs");
+    for (int i = 0; i < ndirs; i++) {
+        char key[64];
+        snprintf(key, sizeof(key), "music_sources.local.dirs[%d]", i);
+        const char *raw = config_get_str(cfg, key, NULL);
+        if (!raw) continue;
+        char *e = path_expand(raw);
+        bool same = e && strcmp(e, want) == 0;
+        free(e);
+        if (same) {
+            free(exp);
+            pthread_mutex_unlock(&g_cache_mutex);
+            /* Already configured — still rescan: the cache only holds the
+               first scan, so a later download would otherwise never appear
+               in the local list until the app restarts. (local_shutdown and
+               ensure_cache take the mutex themselves; we must not hold it
+               across them.) */
+            local_shutdown();
+            ensure_cache();
+            return 0;
+        }
+    }
+
+    if (!config_array_push_str(cfg, "music_sources.local.dirs", want)) {
+        free(exp);
+        pthread_mutex_unlock(&g_cache_mutex);
+        return -1;
+    }
+    config_save(cfg);
+    free(exp);
+    pthread_mutex_unlock(&g_cache_mutex);
+
+    /* Force a rescan so new downloads appear in the local list at once.
+       (local_shutdown/ensure_cache take the mutex themselves.) */
+    local_shutdown();
+    ensure_cache();
+    return 0;
 }

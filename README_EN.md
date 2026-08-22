@@ -87,8 +87,7 @@ Full table: press `?` (reflects your current keybindings). Common:
 | `s` | Stop playback |
 | `/` | Search |
 | `?` | Help (press again or `Esc` to close) |
-| `Ctrl+X` | Actions popup (like / favorite / remove) |
-| `d` | Song detail |
+| `Ctrl+X` | Actions popup (like / favorite / download / song detail / remove) |
 | `q` | Quit |
 
 ## Configuration

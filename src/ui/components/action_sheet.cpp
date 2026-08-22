@@ -38,6 +38,8 @@ Element render_action_sheet(const AppState &s) {
                 ? " \u2665 \u53D6\u6D88\u559C\u6B22 "   /* ♥ 取消喜欢 */
                 : " \u2665 \u559C\u6B22\u6B64\u6B4C\u66F2 ", 1});  /* ♥ 喜欢此歌曲 */
             opts.push_back({" \u21D2 \u6536\u85CF\u5230\u6B4C\u5355... ", 4});  /* ⇒ 收藏到歌单... */
+            opts.push_back({" \u2B07 \u4E0B\u8F7D ", 6});   /* ⬇ 下载 */
+            opts.push_back({" \u2139 \u6B4C\u66F2\u8BE6\u60C5 ", 7});  /* ℹ 歌曲详情 */
             if (s.detail_playlist_mine) {
                 opts.push_back({" \u2716 \u4ECE\u5F53\u524D\u6B4C\u5355\u79FB\u9664 ", 5}); /* ✖ 从当前歌单移除 */
             }
@@ -79,6 +81,19 @@ Element render_action_sheet(const AppState &s) {
         body.push_back(text(" \u786E\u8BA4\u5220\u9664\u6B4C\u5355? ") | bold
                        | color(Color::RGB(th.error.r, th.error.g, th.error.b)));
         body.push_back(text("  Enter \u786E\u8BA4  Esc \u53D6\u6D88 ") | dim);
+    } else if (s.action_sheet_menu == 5) {
+        /* song detail (was the d-key popup, merged into the action sheet) */
+        if (s.song_detail_lines.empty()) {
+            body.push_back(text("  (\u52A0\u8F7D\u4E2D...)") | dim);  /* (加载中...) */
+        } else {
+            for (const auto &l : s.song_detail_lines) {
+                if (!l.empty() && l[0] == '\t')
+                    body.push_back(text(l.substr(1)) | color(Color::RGB(255,255,255)));
+                else
+                    body.push_back(text(l));
+            }
+        }
+        body.push_back(text("  Esc \u8FD4\u56DE ") | dim);  /* Esc 返回 */
     }
 
     auto box = vbox({
@@ -100,34 +115,6 @@ Element render_action_sheet(const AppState &s) {
     /* Bottom-right of the song-list panel: the popup's bottom edge
        lands on the panel border's bottom row (y = H-3) so its border
        corner meets the list's border corner seamlessly. */
-    int n = s.screen_height - 4;
-    if (n < 3) n = 3;
-    return vbox({filler(), hbox({filler(), box})})
-        | size(HEIGHT, LESS_THAN, n);
-}
-
-/* ── Song detail popup (key d) ───────────────────────── */
-Element render_song_detail(const AppState &s) {
-    if (!s.song_detail_open) return text("");
-    auto &th = ThemeManager::instance().current();
-    Elements body;
-    for (const auto &l : s.song_detail_lines) {
-        if (!l.empty() && l[0] == '\t')
-            body.push_back(text(l.substr(1)) | color(Color::RGB(255,255,255)));
-        else
-            body.push_back(text(l));
-    }
-    auto box = vbox({
-        text(" \u6B4C\u66F2\u8BE6\u60C5 ") | bold,   /* 歌曲详情 */
-        separator(),
-        vbox(std::move(body)),
-    }) | borderRounded
-      | (th.bg.has_color ? bgcolor(Color::RGB(th.bg.r, th.bg.g, th.bg.b))
-                         : bgcolor(Color::Default))
-      | color(Color::RGB(th.accent.r, th.accent.g, th.accent.b));
-    int max_w = s.top_row_width - 24;
-    if (max_w < 40) max_w = 40;
-    box = box | size(WIDTH, LESS_THAN, max_w - 1);
     int n = s.screen_height - 4;
     if (n < 3) n = 3;
     return vbox({filler(), hbox({filler(), box})})

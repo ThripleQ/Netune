@@ -30,6 +30,7 @@ struct NavState {
     int                        active_panel    = 0;
     std::vector<NeteaseMenuItem> netease_menu;
     int                        netease_selected = 0;
+    int                        group_index = -1;  /* local mode: group list position */
     int                        search_scope     = 0;
     bool                       search_active    = false;
     std::string                search_query;
@@ -125,8 +126,11 @@ struct AppState {
     /* current playlist context (for "remove from this playlist") */
     std::string current_playlist_id;
     bool        detail_playlist_mine = false;  /* open playlist is user-owned */
-    bool        song_detail_open = false;      /* Song detail popup (key d) */
-    std::vector<std::string> song_detail_lines;
+    std::vector<std::string> song_detail_lines; /* detail lines (action sheet menu 5) */
+
+    /* transient one-line notice (download results etc.) */
+    std::string app_notice;      /* empty = none */
+    long        app_notice_ts = 0; /* unix seconds when set (auto-clear) */
 
     /* spectrum */
     float spectrum[SPECTRUM_BANDS] = {0};
@@ -194,6 +198,7 @@ public:
     /* groups & playlist */
     void set_groups(const std::vector<SongGroup> &grps);
     void set_group_index(int idx);       /* switch group, updates right panel */
+    void set_group_hover(int idx);       /* move group-list highlight only */
     void set_active_panel(int panel);    /* 0=left, 1=right */
     void set_song_panel_width(int cols);
     void set_top_row_width(int cols);
@@ -210,6 +215,7 @@ public:
     void set_login_deadline(long unix_ts);
     void set_login_net_error(int on);
     void set_qr_gfx_ready(int ready);
+    void set_app_notice(const std::string &msg);
 
     /* playback queue */
     /* snapshot current playlist into the playback queue (call when a song
@@ -246,7 +252,7 @@ public:
     void set_action_sheet_pls(const std::vector<SongInfo> &pls);
     void set_current_playlist_id(const std::string &id);
     void set_detail_playlist_mine(bool v);
-    void set_song_detail(bool open, const std::vector<std::string> &lines);
+    void set_song_detail(const std::vector<std::string> &lines);
 
     /* loading */
     void set_loading(bool v);

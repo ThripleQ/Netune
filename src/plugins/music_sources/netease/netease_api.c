@@ -1,5 +1,6 @@
 #include "netease_api.h"
 #include "infra/log.h"
+#include "infra/config_paths.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +18,13 @@
 #endif
 #include <stdarg.h>
 #include <yyjson.h>
+
+/* ── Cross-platform path separator ─────────────────── */
+#ifdef _WIN32
+#define PATH_SEP "\\"
+#else
+#define PATH_SEP "/"
+#endif
 
 /* ── netease-cli binary resolution ───────────────────
    Priority: (1) netease-cli sitting next to the netune executable
@@ -265,7 +273,11 @@ static char *run(const char *fmt, ...) {
         cmd[clen - rlen] = '\0';
     return run_createprocess(cmd);
 #else
-    FILE *fp = popen(cmd, "r"); if (!fp) return NULL;
+    /* Wrap in `timeout` so a hung netease-cli (network requests have no
+       internal deadline) can never freeze the UI thread. */
+    char tcmd[4096 + 64];
+    snprintf(tcmd, sizeof(tcmd), "timeout 8 %s", cmd);
+    FILE *fp = popen(tcmd, "r"); if (!fp) return NULL;
     size_t cap = 8192, len = 0; char *b = malloc(cap); if (!b) { pclose(fp); return NULL; }
     while (!feof(fp)) {
         if (len+1024>=cap) { cap*=2; char*t=realloc(b,cap); if(!t){free(b);pclose(fp);return NULL;} b=t; }
@@ -930,14 +942,19 @@ int netease_menu_songs(int type, int limit, SongInfo **out, int *count) {
 
 /* ── Play URL ──────────────────────────────────────── */
 int netease_play_url(const char *id, char *url, size_t sz) {
-    const char *lvl = "standard";
+    return netease_song_url(id, "standard", url, sz);
+}
+
+int netease_song_url(const char *id, const char *level, char *url, size_t sz) {
+    if (!id || !url || sz == 0) return -1;
+    const char *lvl = (level && level[0]) ? level : "standard";
     char *esc = shell_escape(id);
-    char *j = run("%s song-url %s %s%s",CLI,esc,lvl,STDERR_REDIRECT);
+    char *j = run("%s song-url %s %s%s", CLI, esc, lvl, STDERR_REDIRECT);
     free(esc);
-    if(!j)return -1;
+    if (!j) return -1;
     yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
     free(j);
-    if (!doc) { if(sz>0)url[0]=0; return -1; }
+    if (!doc) { if (sz > 0) url[0] = 0; return -1; }
     yyjson_val *root = yyjson_doc_get_root(doc);
     yyjson_val *data = jget_arr(root, "data");
     int r = -1;
@@ -951,6 +968,89 @@ int netease_play_url(const char *id, char *url, size_t sz) {
     yyjson_doc_free(doc);
     if (r != 0 && sz > 0) url[0] = 0;
     return r;
+}
+
+/* ── Download ───────────────────────────────────────── */
+/* Quality ladder, highest first: used for fallback when the requested
+   level is unavailable (VIP-gated, region-locked, ...). */
+static const char *const kQualityLadder[] = {
+    "hires", "lossless", "exhigh", "higher", "standard"
+};
+
+char* netease_download_song(const char *id, const char *level,
+                            const char *title, char *used_level,
+                            size_t used_sz) {
+    if (!id) return NULL;
+
+    const char *want = (level && level[0]) ? level : "standard";
+    int start = 4;  /* index of "standard" */
+    for (int i = 0; i < 5; i++) {
+        if (strcmp(kQualityLadder[i], want) == 0) { start = i; break; }
+    }
+
+    char dl_url[4096];
+    const char *used = NULL;
+    for (int i = start; i < 5; i++) {
+        if (netease_song_url(id, kQualityLadder[i], dl_url, sizeof(dl_url)) == 0) {
+            used = kQualityLadder[i];
+            break;
+        }
+    }
+    if (!used) return NULL;
+    if (used_level && used_sz > 0)
+        snprintf(used_level, used_sz, "%s", used);
+
+    /* Download dir: netune_data_root()/downloads */
+    const char *root = netune_data_root();
+    char dir[1024];
+    snprintf(dir, sizeof(dir), "%s" PATH_SEP "downloads", root);
+
+    /* File extension: trust what the URL actually serves. The streaming
+       endpoint may return a lower-encoded file than the requested level
+       (e.g. "hires" delivered as 320k mp3), so guess from the URL path
+       before the query string, falling back to the level mapping. */
+    const char *ext = (strcmp(used, "lossless") == 0 ||
+                       strcmp(used, "hires") == 0) ? "flac" : "mp3";
+    const char *q = strchr(dl_url, '?');
+    size_t ulen = q ? (size_t)(q - dl_url) : strlen(dl_url);
+    const char *p = dl_url + ulen;
+    while (p > dl_url && p[-1] != '.') p--;
+    if (p > dl_url && ulen - (p - dl_url) >= 3) {
+        if (strncasecmp(p, "flac", 4) == 0)      ext = "flac";
+        else if (strncasecmp(p, "m4a", 3) == 0)  ext = "m4a";
+        else if (strncasecmp(p, "wav", 3) == 0)  ext = "wav";
+        else                                     ext = "mp3";
+    }
+    const char *base = (title && title[0]) ? title : id;
+    char sane[256];
+    size_t k = 0;
+    for (size_t i = 0; base[i] && k < sizeof(sane) - 8; i++) {
+        char c = base[i];
+        if (c == '/' || c == '\\' || c == ':' || c == '*' ||
+            c == '?' || c == '"' || c == '<' || c == '>' || c == '|')
+            c = '_';
+        sane[k++] = c;
+    }
+    sane[k] = 0;
+    char path[1024];
+    snprintf(path, sizeof(path), "%s" PATH_SEP "%s.%s", dir, sane, ext);
+
+    /* netune_ensure_dir() creates the PARENT directory of the given path,
+       so pass the file path itself to create netune_data_root()/downloads
+       (passing the dir would leave the leaf "downloads" uncreated and the
+       curl write below would fail). */
+    netune_ensure_dir(path);
+
+    remove_utf8(path);
+    char *esc_url = shell_escape_cmd(dl_url);
+    char *esc_path = shell_escape_cmd(path);
+    char cmd[4096];
+    snprintf(cmd, sizeof(cmd), "curl -sL --max-time 120 %s -o %s", esc_url, esc_path);
+    free(esc_url);
+    free(esc_path);
+    int rc = system(cmd);
+    if (rc != 0) { remove_utf8(path); return NULL; }
+    return strdup(path);
 }
 
 /* ── Lyrics ──────────────────────────────────────────── */
@@ -984,31 +1084,6 @@ int netease_lyric(const char *song_id, char **buf) {
     }
     yyjson_doc_free(doc);
     return rv;
-}
-
-char* netease_download(const char *id, const char *url) {
-    /* Use the platform temp directory: $TMPDIR / $TEMP / $TMP on Windows,
-       /tmp on POSIX. */
-    const char *tmpdir = getenv_utf8("TMPDIR");
-#ifndef _WIN32
-    if (!tmpdir || !tmpdir[0]) tmpdir = "/tmp";
-#else
-    if (!tmpdir || !tmpdir[0]) tmpdir = getenv_utf8("TEMP");
-    if (!tmpdir || !tmpdir[0]) tmpdir = getenv_utf8("TMP");
-    if (!tmpdir || !tmpdir[0]) tmpdir = ".";
-#endif
-    char path[512];
-    const char *sep = (tmpdir[strlen(tmpdir)-1] == '/' || tmpdir[strlen(tmpdir)-1] == '\\')
-                      ? "" : "/";
-    snprintf(path, sizeof(path), "%s%snetune_%s.mp3", tmpdir, sep, id);
-    remove_utf8(path);
-    char *esc_url = shell_escape_cmd(url);
-    char *esc_path = shell_escape_cmd(path);
-    char cmd[4096]; snprintf(cmd,sizeof(cmd),"curl -sL --max-time 60 %s -o %s",esc_url,esc_path);
-    free(esc_url); free(esc_path);
-    int rc = system(cmd);
-    if (rc != 0) { remove_utf8(path); return NULL; }
-    return strdup(path);
 }
 
 /* ── Song detail ────────────────────────────────────── */

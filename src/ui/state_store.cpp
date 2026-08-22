@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 
 extern "C" {
 #include "plugins/music_sources/netease/netease_api.h"
@@ -306,6 +307,11 @@ void StateStore::set_qr_gfx_ready(int ready) {
     state_.qr_gfx_ready = ready;
 }
 
+void StateStore::set_app_notice(const std::string &msg) {
+    state_.app_notice = msg;
+    state_.app_notice_ts = (long)time(NULL);
+}
+
 void StateStore::set_show_help(bool show) {
     state_.show_help = show;
 }
@@ -313,7 +319,11 @@ void StateStore::set_show_help(bool show) {
 void StateStore::set_action_sheet(bool open, int selected) {
     state_.action_sheet_open = open;
     state_.action_sheet_selected = selected;
-    if (open) state_.action_sheet_active = -1;  /* re-query on open */
+    /* NOTE: must NOT reset action_sheet_active here — j/k navigation inside
+       the sheet also calls set_action_sheet(true, sel) and would clobber the
+       liked/subscribed state queried when the sheet opened (causing the
+       "取消喜欢" → "喜欢该音乐" flicker). Reset is done explicitly in
+       ShowActions when opening the sheet. */
 }
 
 void StateStore::set_action_sheet_active(int active) {
@@ -355,8 +365,7 @@ void StateStore::set_detail_playlist_mine(bool v) {
     state_.detail_playlist_mine = v;
 }
 
-void StateStore::set_song_detail(bool open, const std::vector<std::string> &lines) {
-    state_.song_detail_open = open;
+void StateStore::set_song_detail(const std::vector<std::string> &lines) {
     state_.song_detail_lines = lines;
 }
 
@@ -436,10 +445,18 @@ void StateStore::set_groups(const std::vector<SongGroup> &grps) {
         state_.groups.push_back(std::move(copy));
     }
 
-    /* Only populate right panel if groups exist; otherwise
-       keep netease entry selected (group_index stays -1). */
-    if (!state_.groups.empty())
-        set_group_index(0);
+    /* Do NOT populate the right panel here. Whether the first group
+       gets shown is decided by the caller (refresh_local_groups only
+       restores the local view when we are already in Local mode, so
+       starting in Netease mode must not leak local songs into the
+       right panel). group_index stays -1 (netease entry). */
+    validate_selection();
+}
+
+void StateStore::set_group_hover(int idx) {
+    if (idx < -1) idx = -1;
+    if (idx >= (int)state_.groups.size()) idx = (int)state_.groups.size() - 1;
+    state_.group_index = idx;
     validate_selection();
 }
 
@@ -467,6 +484,7 @@ void StateStore::nav_push(void) {
     ns.active_panel     = state_.active_panel;
     ns.netease_menu     = state_.netease_menu;
     ns.netease_selected = state_.netease_selected;
+    ns.group_index      = state_.group_index;
     ns.search_active    = state_.search_active;
     ns.search_query     = state_.search_query;
     ns.search_scope     = state_.search_scope;
@@ -502,7 +520,15 @@ bool StateStore::nav_pop(void) {
     state_.active_panel     = 0;                 /* back to the menu layer */
     state_.netease_menu     = std::move(ns.netease_menu);
     state_.netease_selected = ns.netease_selected;
-    if (ns.restore_playlist) {
+    if (state_.music_mode == MusicMode::Local) {
+        /* Local mode: Esc leaves the group-songs layer and returns to
+           the group list. The right panel is KEPT (replaced only by the
+           next load), matching the netease-mode pop behaviour. */
+        state_.group_index   = ns.group_index;
+        state_.selected_index = 0;
+        for (auto &s : ns.playlist)
+            song_info_free(&s);
+    } else if (ns.restore_playlist) {
         state_.playlist = std::move(ns.playlist);
         state_.active_panel = 1;  /* land on the restored playlist list */
         /* keep the highlight on the playlist that was just entered */

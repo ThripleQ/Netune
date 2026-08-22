@@ -507,6 +507,87 @@ static void restore_search_view(const std::string &q) {
     }
 }
 
+/* ── Rebuild the local-music groups (one per configured dir) ── */
+static void refresh_local_groups(void) {
+    Config *cfg = config_global();
+    std::vector<std::string> scan_dirs;
+    int ndirs = cfg ? config_get_array_size(cfg, "music_sources.local.dirs") : 0;
+    if (ndirs > 0) {
+        for (int i = 0; i < ndirs; i++) {
+            char key[64];
+            snprintf(key, sizeof(key), "music_sources.local.dirs[%d]", i);
+            const char *d = config_get_str(cfg, key, NULL);
+            if (d) scan_dirs.push_back(d);
+        }
+    }
+    std::vector<SongGroup> groups;
+    if (!scan_dirs.empty()) {
+        /* The local source's search matches titles/filenames, not dirs, so
+           fetch everything (empty keyword = all songs) and group by the id
+           path prefix of each configured dir. */
+        SearchResult all;
+        memset(&all, 0, sizeof(all));
+        int rc = music_source_search("local", "", 0, 0, &all);
+        for (auto &dir : scan_dirs) {
+            SongGroup g;
+            const char *slash_fwd = strrchr(dir.c_str(), '/');
+            const char *slash_back = strrchr(dir.c_str(), '\\');
+            const char *last_sep = (slash_back && (!slash_fwd || slash_back > slash_fwd))
+                                   ? slash_back : slash_fwd;
+            g.name = last_sep ? last_sep + 1 : dir.c_str();
+            if (rc == 0 && all.songs) {
+                size_t dlen = dir.size();
+                for (int j = 0; j < all.count; j++) {
+                    const SongInfo *s = &all.songs[j];
+                    if (!s->id || strncmp(s->id, dir.c_str(), dlen) != 0)
+                        continue;
+                    /* require a separator after the dir prefix */
+                    if (s->id[dlen] != '/' && s->id[dlen] != '\\' &&
+                        s->id[dlen] != '\0')
+                        continue;
+                    SongInfo copy = {};
+                    song_info_copy(&copy, s);
+                    g.songs.push_back(copy);
+                }
+            }
+            if (!g.songs.empty())
+                groups.push_back(std::move(g));
+        }
+        if (all.songs) {
+            for (int j = 0; j < all.count; j++)
+                song_info_free(&all.songs[j]);
+            free(all.songs);
+        }
+    }
+    /* Remember where the user is BEFORE set_groups: it resets
+       group_index to -1 (the netease entry), and reading the state back
+       afterwards would always see -1. */
+    const auto &st0 = StateStore::instance().state();
+    int  old_gi     = st0.group_index;
+    bool was_local  = st0.music_mode == MusicMode::Local;
+
+    StateStore::instance().set_groups(groups);
+    if (!groups.empty()) {
+        LOG_INFO("Local groups: %zu groups scanned", groups.size());
+    } else {
+        LOG_WARN("No music files found");
+    }
+    /* Restore the user's position in the local view (if we are in it):
+       - -1 (netease entry) stays -1
+       - a group index stays on that group (re-fills the right panel with
+         the freshly scanned songs) unless the group count shrank. */
+    if (was_local) {
+        const auto &st2 = StateStore::instance().state();
+        int n = (int)st2.groups.size();
+        int target = -1;
+        if (old_gi >= 0 && old_gi < n)
+            target = old_gi;
+        else if (old_gi >= 0 && n > 0)
+            target = 0;
+        StateStore::instance().set_group_index(target);
+    }
+}
+
 /* ── Activate a netease menu item: load its content into the right panel ── */
 static void activate_netease_menu_item(int idx) {
     /* Leaving the search context: the new content must not inherit the
@@ -1317,7 +1398,6 @@ static const char *DEFAULT_KEYBINDINGS_YAML =
     "  toggle_lyrics: [\"l\"]\n"
     "  show_help:     [\"?\"]\n"
     "  show_actions:  [\"ctrl+x\"]\n"
-    "  show_song_detail: [\"d\"]\n"
     "  quit:          [\"q\"]\n";
 
 static const char *DEFAULT_THEME_DEFAULT_YAML =
@@ -1487,6 +1567,9 @@ int run_app(int argc, char **argv) {
     event_bus_subscribe(EV_PLAYBACK_FINISH,   ev_playback_finish, NULL);
     event_bus_subscribe(EV_PLAYBACK_SKIP,     ev_playback_skip, NULL);
     event_bus_subscribe(EV_MPRIS_COMMAND,     ev_mpris_command, NULL);
+    event_bus_subscribe(EV_LOCAL_REFRESH,     [](const BusEvent *, void *) {
+        refresh_local_groups();
+    }, NULL);
         event_bus_subscribe(EV_PLAYLIST_LOADED, ev_playlist_loaded, NULL);
     event_bus_subscribe(EV_MENU_LOADED, ev_menu_loaded, NULL);
     event_bus_subscribe(EV_PLAYLIST_LIST_LOADED, ev_playlist_list_loaded, NULL);
@@ -1576,56 +1659,7 @@ int run_app(int argc, char **argv) {
        now that netease_init has resolved the account name. */
     StateStore::instance().set_music_mode(MusicMode::Netease);
 
-    /* auto-scan */
-    {
-        std::vector<std::string> scan_dirs;
-        int ndirs = cfg ? config_get_array_size(cfg, "music_sources.local.dirs") : 0;
-        if (ndirs > 0) {
-            for (int i = 0; i < ndirs; i++) {
-                char key[64];
-                snprintf(key, sizeof(key), "music_sources.local.dirs[%d]", i);
-                const char *d = config_get_str(cfg, key, NULL);
-                if (d) scan_dirs.push_back(d);
-            }
-        }
-        /* No dirs configured — no fallback scan */
-        (void)0;
-        std::vector<SongGroup> groups;
-        for (auto &dir : scan_dirs) {
-            SearchResult result;
-            memset(&result, 0, sizeof(result));
-            if (music_source_search("local", dir.c_str(), 0, 0, &result) != 0 || result.count <= 0) {
-                if (result.songs) free(result.songs);
-                continue;
-            }
-            SongGroup g;
-            const char *slash_fwd = strrchr(dir.c_str(), '/');
-            const char *slash_back = strrchr(dir.c_str(), '\\');
-            const char *last_sep = (slash_back && (!slash_fwd || slash_back > slash_fwd))
-                                   ? slash_back : slash_fwd;
-            g.name = last_sep ? last_sep + 1 : dir.c_str();
-            for (int j = 0; j < result.count; j++) {
-                SongInfo copy;
-                song_info_copy(&copy, &result.songs[j]);
-                g.songs.push_back(copy);
-                song_info_free(&result.songs[j]);
-            }
-            free(result.songs);
-            groups.push_back(std::move(g));
-        }
-        if (!groups.empty()) {
-            StateStore::instance().set_groups(groups);
-            /* sync first group's paths to backend */
-            {
-                const auto &st = StateStore::instance().state();
-                std::vector<const char*> paths;
-                for (auto &s : st.groups[0].songs) paths.push_back(s.id);
-            }
-            LOG_INFO("Scanned %zu groups", groups.size());
-        } else {
-            LOG_WARN("No music files found");
-        }
-    }
+    refresh_local_groups();
 
     playback_coordinator_init();
 
@@ -1801,9 +1835,16 @@ int run_app(int argc, char **argv) {
             /* Ctrl+X action sheet overlays the normal UI */
             return dbox({main, render_action_sheet(s)});
         }
-        if (s.song_detail_open) {
-            /* song detail popup (key d) */
-            return dbox({main, render_song_detail(s)});
+
+        /* transient notice (download results): one dim line pinned to the
+           bottom of the screen, auto-cleared after 4 seconds */
+        if (!s.app_notice.empty() &&
+            (long)time(NULL) - s.app_notice_ts < 4) {
+            auto notice = vbox({filler(),
+                hbox({filler(),
+                      text(" " + s.app_notice + " ") | dim | bold,
+                      filler()})}) | size(HEIGHT, LESS_THAN, 2);
+            return dbox({main, notice});
         }
 
         return main;
@@ -1826,18 +1867,6 @@ int run_app(int argc, char **argv) {
                     return true;  /* swallow the resize signal */
                 }
             }
-        }
-
-        /* ── Song detail popup: Esc/Enter close ── */
-        if (state.state().song_detail_open) {
-            std::string k2;
-            if (event.is_character()) k2 = event.character();
-            else k2 = event_to_key_name(event);
-            if (k2 == "escape" || k2 == "enter" || k2 == "\r" || k2 == "d") {
-                StateStore::instance().set_song_detail(false, {});
-                return true;
-            }
-            return true;  /* swallow all keys while open */
         }
 
         /* ── Action sheet (Ctrl+X) modal state machine ── */
@@ -1921,6 +1950,10 @@ int run_app(int argc, char **argv) {
 
                 /* menu 0 (main) and menu 1 (playlist picker) share
                    j/k navigation + Enter */
+                if (as.action_sheet_menu == 5) {
+                    /* song detail: read-only, no navigation */
+                    return true;
+                }
                 if (k == "j" || k == "down") {
                     int n = (as.action_sheet_menu == 1)
                         ? (int)as.action_sheet_pls.size()
@@ -1938,7 +1971,7 @@ int run_app(int argc, char **argv) {
                     return true;
                 }
                 if (k == "escape") {
-                    if (as.action_sheet_menu == 1) {
+                    if (as.action_sheet_menu == 1 || as.action_sheet_menu == 5) {
                         state.set_action_sheet_menu(0);
                         state.set_action_sheet(true, 0);
                     } else {
@@ -1967,7 +2000,8 @@ int run_app(int argc, char **argv) {
                     }
                     /* menu 0 — selection index matches render order
                        (playlist: 0 subscribe, 1 rename, 2 delete;
-                        song:     0 like,    1 add-to-playlist, 2 remove) */
+                        song:     0 like, 1 add-to-playlist, 2 download,
+                                  3 detail, 4 remove-own) */
                     bool is_pl = item.is_playlist;
                     /* active<0 = state query still in flight: treat as
                        inactive (idempotent on the API side) */
@@ -2020,7 +2054,76 @@ int run_app(int argc, char **argv) {
                                     StateStore::instance().set_action_sheet_pls({});
                                 }
                             }).detach();
-                        } else if (idx == 2 && in_own) {
+                        } else if (idx == 2) {
+                            /* download: no quality picker — just start.
+                               Use the highest quality the source gives
+                               us (ladder starts at hires and falls back
+                               through lossless/exhigh/higher/standard). */
+                            std::string title = item.title ? item.title : id;
+                            state.set_action_sheet(false, 0);
+                            std::thread([id, title]() {
+                                char used_lvl[32] = {0};
+                                char *path = netease_download_song(id.c_str(), "hires",
+                                                                   title.c_str(), used_lvl,
+                                                                   sizeof(used_lvl));
+                                if (path) {
+                                    LOG_INFO("DOWNLOAD ok: %s (%s)", path,
+                                             used_lvl[0] ? used_lvl : "hires");
+                                    /* register the download dir into the local
+                                       source so the file shows up in 本地 */
+                                    const char *root = netune_data_root();
+                                    char dl_dir[1024];
+                                    snprintf(dl_dir, sizeof(dl_dir), "%s" PATH_SEP "downloads", root);
+                                    local_register_download_dir(dl_dir);
+                                    /* refresh the local-music groups on the
+                                       main thread so the new file shows up
+                                       in 本地 right away */
+                                    event_bus_publish(EV_LOCAL_REFRESH, NULL, 0);
+                                    std::string msg = "\u5DF2\u4E0B\u8F7D: " + title;  /* 已下载: */
+                                    if (used_lvl[0])
+                                        msg += " (" + std::string(used_lvl) + ")";
+                                    StateStore::instance().set_app_notice(msg);
+                                    free(path);
+                                } else {
+                                    LOG_WARN("DOWNLOAD failed: %s", id.c_str());
+                                    StateStore::instance().set_app_notice("\u4E0B\u8F7D\u5931\u8D25: " + title);  /* 下载失败: */
+                                }
+                            }).detach();
+                        } else if (idx == 3) {
+                            /* song detail (merged from the old d-key popup) */
+                            StateStore::instance().set_song_detail({"  \u52A0\u8F7D\u4E2D..."});  /* 加载中... */
+                            state.set_action_sheet_menu(5);
+                            state.set_action_sheet(true, 0);
+                            std::thread([id]() {
+                                SongDetail d;
+                                if (netease_song_detail(id.c_str(), &d) != 0) {
+                                    StateStore::instance().set_song_detail(
+                                        {"  \u83B7\u53D6\u5931\u8D25" });  /* 获取失败 */
+                                    return;
+                                }
+                                std::vector<std::string> lines;
+                                char buf[128];
+                                std::string t = d.title ? d.title : "?";
+                                std::string a = d.artist ? d.artist : "?";
+                                std::string al = d.album ? d.album : "?";
+                                lines.push_back("  \u6B4C\u66F2:  " + t);     /* 歌曲 */
+                                lines.push_back("  \u6B4C\u624B:  " + a);     /* 歌手 */
+                                lines.push_back("  \u4E13\u8F91:  " + al);    /* 专辑 */
+                                int m = d.duration_sec / 60, s2 = d.duration_sec % 60;
+                                snprintf(buf, sizeof(buf), "%d:%02d", m, s2);
+                                lines.push_back("  \u65F6\u957F:  " + std::string(buf));  /* 时长 */
+                                const char *fees[] = {"\u514D\u8D39", "\u4F1A\u5458", "\u4ED8\u8D39", "", "", "", "", "", "\u4F1A\u5458"};
+                                const char *fee = (d.fee >= 0 && d.fee < 9) ? fees[d.fee] : "";
+                                lines.push_back("  \u8D39\u7528:  " + std::string(fee ? fee : "?"));  /* 费用 */
+                                if (d.publish) lines.push_back("  \u53D1\u884C:  " + std::string(d.publish));  /* 发行 */
+                                if (d.pop >= 0) {
+                                    snprintf(buf, sizeof(buf), "%d/100", d.pop);
+                                    lines.push_back("  \u70ED\u5EA6:  " + std::string(buf));  /* 热度 */
+                                }
+                                song_detail_free(&d);
+                                StateStore::instance().set_song_detail(lines);
+                            }).detach();
+                        } else if (idx == 4 && in_own) {
                             /* remove from current playlist */
                             std::string cid = as.current_playlist_id;
                             state.set_action_sheet(false, 0);
@@ -2498,11 +2601,13 @@ int run_app(int argc, char **argv) {
         case Action::MoveDown:
             if (cur.active_panel == 0) {
                 if (cur.music_mode == MusicMode::Local) {
-                    /* local groups */
+                    /* local groups: -1 (netease entry) sits at the TOP.
+                       Down wraps from the last group back to the entry.
+                       Hover only — the right panel fills on Enter. */
                     int n = (int)cur.groups.size();
                     if (n <= 0) return true;
-                    int idx = (cur.group_index + 1 >= n) ? 0 : cur.group_index + 1;
-                    StateStore::instance().set_group_index(idx);
+                    int idx = (cur.group_index + 1 >= n) ? -1 : cur.group_index + 1;
+                    StateStore::instance().set_group_hover(idx);
                 } else {
                     /* netease menu: local entry (-1) sits at the BOTTOM
                        of the list; Down loops through it. */
@@ -2548,11 +2653,16 @@ int run_app(int argc, char **argv) {
             }
             if (cur.active_panel == 0) {
                 if (cur.music_mode == MusicMode::Local) {
-                    /* local groups */
+                    /* local groups: -1 (netease entry) sits at the TOP.
+                       Up from the first group returns to the entry;
+                       Up from the entry wraps to the last group.
+                       Hover only — the right panel fills on Enter. */
                     int n = (int)cur.groups.size();
                     if (n <= 0) return true;
-                    int idx = (cur.group_index - 1 < 0) ? n - 1 : cur.group_index - 1;
-                    StateStore::instance().set_group_index(idx);
+                    int idx = (cur.group_index <= 0)
+                                  ? (cur.group_index == -1 ? n - 1 : -1)
+                                  : cur.group_index - 1;
+                    StateStore::instance().set_group_hover(idx);
                 } else {
                     /* netease menu: local entry (-1) sits at the BOTTOM.
                        Up from the first menu item wraps to local. */
@@ -2590,10 +2700,23 @@ int run_app(int argc, char **argv) {
                     StateStore::instance().set_active_panel(0);
                     StateStore::instance().set_group_index(-1);
                 } else if (cur.music_mode == MusicMode::Netease && cur.netease_selected < 0) {
-                    /* Switch back to Local mode */
+                    /* Switch back to Local mode. Stay on the group LIST
+                       (group_index = -1 = the "网易云音乐" entry) instead
+                       of auto-selecting the first group: the right panel
+                       only shows songs after the user picks a path. */
                     StateStore::instance().set_music_mode(MusicMode::Local);
                     StateStore::instance().set_active_panel(0);
-                    StateStore::instance().set_group_index(0);
+                    StateStore::instance().set_group_index(-1);
+                } else if (cur.music_mode == MusicMode::Local) {
+                    /* Enter a local group: push the local-home state onto
+                       the nav stack, then show the group's songs on the
+                       right (Esc returns to the group list). */
+                    if (cur.group_index >= 0 &&
+                        cur.group_index < (int)cur.groups.size()) {
+                        StateStore::instance().nav_push();
+                        StateStore::instance().set_group_index(cur.group_index);
+                        StateStore::instance().set_active_panel(1);
+                    }
                 } else if (cur.music_mode == MusicMode::Netease && cur.netease_selected >= 0) {
                     /* Load netease menu item content into right panel */
                     activate_netease_menu_item(cur.netease_selected);
@@ -2720,13 +2843,14 @@ int run_app(int argc, char **argv) {
             /* open the action sheet for the selected right-panel item */
             if (!cur.playlist.empty()) {
                 StateStore::instance().set_action_sheet(true, 0);
+                StateStore::instance().set_action_sheet_active(-1);  /* re-query like/subscribe state */
                 StateStore::instance().set_action_sheet_menu(0);
                 const auto &item = cur.playlist[cur.selected_index];
                 bool is_pl = item.is_playlist;
                 bool in_own = is_pl ? (item.mine == 1)
                                     : cur.detail_playlist_mine;
                 StateStore::instance().set_action_sheet_opt_count(
-                    is_pl ? (in_own ? 3 : 1) : (in_own ? 3 : 2));
+                    is_pl ? (in_own ? 3 : 1) : (in_own ? 5 : 4));
                 std::string id = item.id ? item.id : "";
                 if (!id.empty()) {
                     std::thread([id, is_pl]() {
@@ -2759,46 +2883,6 @@ int run_app(int argc, char **argv) {
                 }
             }
             return true;
-
-        case Action::ShowSongDetail: {
-            /* popup with song metadata for the selected right-panel item */
-            if (cur.active_panel != 1 || cur.playlist.empty()) return true;
-            const auto &item = cur.playlist[cur.selected_index];
-            if (item.is_playlist) return true;  /* songs only */
-            std::string id = item.id ? item.id : "";
-            if (id.empty()) return true;
-            StateStore::instance().set_song_detail(true, {"  \u52A0\u8F7D\u4E2D..."});  /* 加载中... */
-            std::thread([id]() {
-                SongDetail d;
-                if (netease_song_detail(id.c_str(), &d) != 0) {
-                    StateStore::instance().set_song_detail(
-                        true, {"  \u83B7\u53D6\u5931\u8D25" });  /* 获取失败 */
-                    return;
-                }
-                std::vector<std::string> lines;
-                char buf[128];
-                std::string t = d.title ? d.title : "?";
-                std::string a = d.artist ? d.artist : "?";
-                std::string al = d.album ? d.album : "?";
-                lines.push_back("  \u6B4C\u66F2:  " + t);     /* 歌曲 */
-                lines.push_back("  \u6B4C\u624B:  " + a);     /* 歌手 */
-                lines.push_back("  \u4E13\u8F91:  " + al);    /* 专辑 */
-                int m = d.duration_sec / 60, s2 = d.duration_sec % 60;
-                snprintf(buf, sizeof(buf), "%d:%02d", m, s2);
-                lines.push_back("  \u65F6\u957F:  " + std::string(buf));  /* 时长 */
-                const char *fees[] = {"\u514D\u8D39", "\u4F1A\u5458", "\u4ED8\u8D39", "", "", "", "", "", "\u4F1A\u5458"};
-                const char *fee = (d.fee >= 0 && d.fee < 9) ? fees[d.fee] : "";
-                lines.push_back("  \u8D39\u7528:  " + std::string(fee ? fee : "?"));  /* 费用 */
-                if (d.publish) lines.push_back("  \u53D1\u884C:  " + std::string(d.publish));  /* 发行 */
-                if (d.pop >= 0) {
-                    snprintf(buf, sizeof(buf), "%d/100", d.pop);
-                    lines.push_back("  \u70ED\u5EA6:  " + std::string(buf));  /* 热度 */
-                }
-                song_detail_free(&d);
-                StateStore::instance().set_song_detail(true, lines);
-            }).detach();
-            return true;
-        }
 
         case Action::CycleLoop: {
             int next = ((int)cur.loop_mode + 1) % 4;

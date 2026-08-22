@@ -169,6 +169,34 @@ func main() {
 		b, _ := json.Marshal(result)
 		fmt.Println(string(b))
 
+	case "song-download-url":
+		// 官方下载接口（weapi/song/enhance/download/url/v1），与播放接口分离。
+		// 参数用 id 单数 + level；返回 data 为单对象，转成数组以复用 C 侧解析。
+		if len(os.Args) < 3 {
+			die("usage: netease-cli song-download-url <id> [level]")
+		}
+		id := os.Args[2]
+		level := service.Standard
+		if len(os.Args) > 3 {
+			level = service.SongQualityLevel(os.Args[3])
+		}
+		dlCode, dlBody, dlErr := util.CallWeapi(
+			"https://music.163.com/weapi/song/enhance/download/url/v1",
+			map[string]interface{}{"id": id, "level": string(level)})
+		if dlErr != nil {
+			die(fmt.Sprintf("download url failed: %v", dlErr))
+		}
+		var result map[string]interface{}
+		if json.Unmarshal(dlBody, &result) != nil {
+			die("bad download url response")
+		}
+		if d, ok := result["data"].(map[string]interface{}); ok {
+			result["data"] = []interface{}{d}
+		}
+		result["code"] = dlCode
+		b, _ := json.Marshal(result)
+		fmt.Println(string(b))
+
 	case "song-detail":
 		if len(os.Args) < 3 {
 			die("usage: netease-cli song-detail <ids>")
