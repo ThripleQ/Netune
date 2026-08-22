@@ -1,5 +1,7 @@
 #include <locale.h>
+#include <string.h>
 #include "app.h"
+#include "netune_config.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -23,6 +25,13 @@ int main(int argc, char **argv) {
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
 #endif
+
+    /* Subcommand: built-in configuration UI (former standalone
+       `netune-config` executable, now merged into this binary).
+       Dispatched AFTER the UTF-8 setup above so the config TUI also
+       renders Chinese correctly on Windows. */
+    if (argc > 1 && strcmp(argv[1], "--config") == 0)
+        return run_config();
 
     return run_app(argc, argv);
 }

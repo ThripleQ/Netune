@@ -37,6 +37,7 @@
 
 extern "C" {
 #include "infra/log.h"
+#include "infra/config_paths.h"
 #include "infra/config.h"
 #include "infra/thread_pool.h"
 #include "core/event_bus.h"
@@ -1261,93 +1262,10 @@ static void ev_playlist_changed(const BusEvent *ev, void *data) {
 /* ───────────────────────────────────────────────────── */
 
 /* ── XDG path helpers ────────────────────────────── */
-static const char *xdg_dir(const char *env, const char *sub) {
-    const char *d = getenv_utf8(env);
-    static char buf[1024];
-#ifndef _WIN32
-    if (d && d[0]) {
-        snprintf(buf, sizeof(buf), "%s/netune/%s", d, sub ? sub : "");
-    } else {
-        const char *home = getenv_utf8("HOME");
-        if (!home) home = "/tmp";
-        const char *prefix = strstr(env, "CONFIG") ? ".config" : ".cache";
-        snprintf(buf, sizeof(buf), "%s/%s/netune/%s", home, prefix, sub ? sub : "");
-    }
-#else
-    /* Windows: map XDG_*_HOME to APPDATA / LOCALAPPDATA */
-    const char *win_env = NULL;
-    if (strstr(env, "CACHE"))
-        win_env = "LOCALAPPDATA";
-    else if (strstr(env, "CONFIG"))
-        win_env = "APPDATA";
-    if (win_env) d = getenv_utf8(win_env);
-    if (d && d[0]) {
-        snprintf(buf, sizeof(buf), "%s\\netune\\%s", d, sub ? sub : "");
-    } else {
-        const char *home = getenv_utf8("USERPROFILE");
-        if (!home) home = "C:\\";
-        const char *prefix = strstr(env, "CONFIG") ? ".config" : ".cache";
-        snprintf(buf, sizeof(buf), "%s\\%s\\netune\\%s", home, prefix, sub ? sub : "");
-    }
-#endif
-    return buf;
-}
-
-static void ensure_dir(const char *filepath) {
-    /* mkdir -p the parent directory of filepath */
-    char tmp[1024];
-    snprintf(tmp, sizeof(tmp), "%s", filepath);
-    /* find last separator (handles both / and \) */
-    char *last_slash = strrchr(tmp, '/');
-    char *last_bslash = strrchr(tmp, '\\');
-    char *last = (last_bslash && last_bslash > last_slash) ? last_bslash : last_slash;
-    if (!last) return;
-    if (last == tmp) return;  /* root dir, nothing to do */
-    char sep_chr = *last;
-    *last = 0;  /* strip file name (or trailing separator) */
-    for (char *p = tmp + 1; *p; p++) {
-        if (*p == '/' || *p == '\\') {
-            char saved = *p;
-            *p = 0;
-            mkdir_utf8(tmp);
-            *p = saved;
-        }
-    }
-    if (tmp[0]) {
-        mkdir_utf8(tmp);
-    }
-    (void)sep_chr;
-}
-
-/* ── XDG data root helper ─────────────────────────── */
-/* Returns the canonical data root where ALL runtime-editable
-   resources live: XDG_CONFIG_HOME/netune/data/
-   Cache and log are intentionally NOT under here — they stay
-   under XDG_CACHE_HOME. */
-static const char *xdg_data_root(void) {
-    static char buf[1024];
-#ifndef _WIN32
-    const char *d = getenv_utf8("XDG_CONFIG_HOME");
-    if (d && d[0]) {
-        snprintf(buf, sizeof(buf), "%s/netune/data", d);
-    } else {
-        const char *home = getenv_utf8("HOME");
-        if (!home) home = "/tmp";
-        snprintf(buf, sizeof(buf), "%s/.config/netune/data", home);
-    }
-#else
-    /* Windows: use APPDATA (same mapping as XDG_CONFIG_HOME) */
-    const char *d = getenv_utf8("APPDATA");
-    if (d && d[0]) {
-        snprintf(buf, sizeof(buf), "%s\\netune\\data", d);
-    } else {
-        const char *home = getenv_utf8("USERPROFILE");
-        if (!home) home = "C:\\";
-        snprintf(buf, sizeof(buf), "%s\\.config\\netune\\data", home);
-    }
-#endif
-    return buf;
-}
+/* ── XDG / data-root path helpers ────────────────────
+   Moved to infra/config_paths.c so netune and netune-config share
+   ONE implementation (netune_config.cpp used to carry a drifted
+   copy that lacked the Windows APPDATA branch). */
 
 /* ── Default data tree content ─────────────────────── */
 /* These embedded blobs let the app rebuild a complete default
@@ -1467,10 +1385,10 @@ static const char *DEFAULT_THEME_NETEASE_LIGHT_YAML =
    contents. Existing files are NEVER overwritten.
    No external scanning or fallback lookup is performed. */
 static void ensure_default_data_tree(void) {
-    const char *root = xdg_data_root();
+    const char *root = netune_data_root();
 
     /* Ensure the root directory exists */
-    ensure_dir(root);
+    netune_ensure_dir(root);
 
     /* Helper: create a default file (with parent dirs) if it
        does not already exist. Never touches existing non-empty files.
@@ -1486,7 +1404,7 @@ static void ensure_default_data_tree(void) {
             if (sz > 0) return;  /* non-empty: already there */
             LOG_WARN("Rebuilding empty data file: %s", path);
         }
-        ensure_dir(path);
+        netune_ensure_dir(path);
         f = fopen_utf8(path, "w");
         if (f) {
             fputs(content, f);
@@ -1513,13 +1431,13 @@ static void ensure_default_data_tree(void) {
 
 int run_app(int argc, char **argv) {
     if (argc > 1 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
-        printf("Netune v2.0.0 — Terminal music player\nUsage: %s [config.json]\n", argv[0]);
+        printf("Netune v2.0.0 — Terminal music player\nUsage: %s [--config] [config.json]\n", argv[0]);
         return 0;
     }
 
     /* ── Log ────────────────────────────────────────── */
-    const char *log_path = xdg_dir("XDG_CACHE_HOME", "netune.log");
-    ensure_dir(log_path);
+    const char *log_path = netune_xdg_dir("XDG_CACHE_HOME", "netune.log");
+    netune_ensure_dir(log_path);
     log_init(log_path);
     LOG_INFO("Netune v2.0.0 starting");
 
@@ -1534,7 +1452,7 @@ int run_app(int argc, char **argv) {
 
     /* ── Config (under data/) ── */
     char cfg_buf[2048];
-    snprintf(cfg_buf, sizeof(cfg_buf), "%s" PATH_SEP "config.json", xdg_data_root());
+    snprintf(cfg_buf, sizeof(cfg_buf), "%s" PATH_SEP "config.json", netune_data_root());
     Config *cfg = config_load(cfg_buf);
     if (!cfg) LOG_WARN("No config loaded, using defaults");
     config_set_global(cfg);
@@ -1549,8 +1467,8 @@ int run_app(int argc, char **argv) {
     }
 
     /* ── Cache (XDG_CACHE_HOME) ─────────────────────── */
-    const char *cache_dir = xdg_dir("XDG_CACHE_HOME", NULL);
-    ensure_dir(cache_dir);
+    const char *cache_dir = netune_xdg_dir("XDG_CACHE_HOME", NULL);
+    netune_ensure_dir(cache_dir);
     mkdir_utf8(cache_dir);
     cache_init(cache_dir);
     search_manager_init();
@@ -1615,7 +1533,7 @@ int run_app(int argc, char **argv) {
     } else {
         const char *name = (kb_name && strcmp(kb_name, "default") != 0) ? kb_name : "default";
         snprintf(kb_buf, sizeof(kb_buf), "%s" PATH_SEP "keybindings" PATH_SEP "%s.yaml",
-                 xdg_data_root(), name);
+                 netune_data_root(), name);
         kb_buf[sizeof(kb_buf) - 1] = '\0';
         kb_path = kb_buf;
     }
@@ -1646,7 +1564,7 @@ int run_app(int argc, char **argv) {
     } else {
         const char *name = (l_name && strcmp(l_name, "default") != 0) ? l_name : "default";
         snprintf(l_buf, sizeof(l_buf), "%s" PATH_SEP "layouts" PATH_SEP "%s.yaml",
-                 xdg_data_root(), name);
+                 netune_data_root(), name);
         l_buf[sizeof(l_buf) - 1] = '\0';
         l_path = l_buf;
     }

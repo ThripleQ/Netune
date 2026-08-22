@@ -20,24 +20,27 @@
 #include <string>
 #include <vector>
 #include <algorithm>
-#include <dirent.h>
-#include <unistd.h>
+#include <dirent.h>          /* compat shim on Windows (netune target adds src/compat) */
 #include <sys/stat.h>
 
+#include "compat/utf8.h"     /* fopen_utf8/stat_utf8/...: ANSI-codepage-safe file I/O on MSVC */
+
 #include "infra/config.h"
+#include "infra/config_paths.h"
+#include "netune_config.h"
 #include "ui/keybindings.h"
 #include "ui/theme.h"
 #include <yaml.h>
 
 using namespace ftxui;
 
-/* ── Path helpers (mirrors app.cpp xdg_data_root) ──── */
+/* ── Path helpers ─────────────────────────────────────
+   Thin adapter over the shared infra/config_paths module (the same
+   implementation app.cpp uses).  The old local copy had drifted from
+   app.cpp — it was missing the Windows APPDATA branch, so on Windows
+   this tool would look for config.json under /tmp/.config/... */
 static std::string data_root(void) {
-    const char *d = getenv("XDG_CONFIG_HOME");
-    if (d && d[0]) return std::string(d) + "/netune/data";
-    const char *home = getenv("HOME");
-    if (!home) home = "/tmp";
-    return std::string(home) + "/.config/netune/data";
+    return std::string(netune_data_root());
 }
 
 enum class Cat { Theme, Keybind, Layout, Main, Playback };
@@ -157,7 +160,7 @@ static const char *kPalette[] = {
 static const int kPaletteN = (int)(sizeof(kPalette)/sizeof(kPalette[0]));
 
 static bool write_theme_yaml(const std::string &path, const std::string &name, const Theme &t) {
-    FILE *fp = fopen(path.c_str(), "wb");
+    FILE *fp = fopen_utf8(path.c_str(), "wb");
     if (!fp) return false;
     yaml_emitter_t em;
     yaml_document_t doc;
@@ -236,9 +239,9 @@ static std::string basename_of(const std::string &p) {
 }
 
 static bool copy_file(const std::string &src, const std::string &dst) {
-    FILE *in = fopen(src.c_str(), "rb");
+    FILE *in = fopen_utf8(src.c_str(), "rb");
     if (!in) return false;
-    FILE *out = fopen(dst.c_str(), "wb");
+    FILE *out = fopen_utf8(dst.c_str(), "wb");
     if (!out) { fclose(in); return false; }
     char buf[8192];
     size_t n;
@@ -250,7 +253,7 @@ static bool copy_file(const std::string &src, const std::string &dst) {
 }
 
 static bool yaml_validate(const std::string &path, const std::string &key) {
-    FILE *fp = fopen(path.c_str(), "rb");
+    FILE *fp = fopen_utf8(path.c_str(), "rb");
     if (!fp) return false;
     yaml_parser_t parser;
     yaml_event_t event;
@@ -286,7 +289,7 @@ static void refresh_files(CfgState &st) {
         /* config.json only */
         std::string p = data_root() + "/config.json";
         struct stat sb;
-        if (stat(p.c_str(), &sb) == 0) {
+        if (stat_utf8(p.c_str(), &sb) == 0) {
             CfgFile f;
             f.name = "config.json";
             f.size = (long)sb.st_size;
@@ -306,7 +309,7 @@ static void refresh_files(CfgState &st) {
             f.name = n;
             std::string p = dir_of(st.cat) + "/" + n;
             struct stat sb;
-            if (stat(p.c_str(), &sb) == 0) f.size = (long)sb.st_size;
+            if (stat_utf8(p.c_str(), &sb) == 0) f.size = (long)sb.st_size;
             st.files.push_back(f);
         }
     }
@@ -370,7 +373,7 @@ static std::string event_to_key_name(const Event &event) {
 /* ── YAML writers (libyaml) ─────────────────────────── */
 static bool write_keybindings_yaml(const std::string &path,
                                    const std::vector<std::pair<std::string, std::vector<std::string>>> &entries) {
-    FILE *fp = fopen(path.c_str(), "wb");
+    FILE *fp = fopen_utf8(path.c_str(), "wb");
     if (!fp) return false;
     yaml_emitter_t em;
     yaml_document_t doc;
@@ -447,7 +450,7 @@ static const char *kLayoutTemplate =
     "      height: 2\n";
 
 static bool write_text_file(const std::string &path, const std::string &content) {
-    FILE *fp = fopen(path.c_str(), "wb");
+    FILE *fp = fopen_utf8(path.c_str(), "wb");
     if (!fp) return false;
     fwrite(content.data(), 1, content.size(), fp);
     fclose(fp);
@@ -498,7 +501,9 @@ static std::string key_list_str(const std::vector<std::string> &keys) {
     return out.empty() ? "(未绑定)" : out;
 }
 
-int main() {
+/* Entry point — invoked from main.cpp when launched as `netune --config`.
+ * (Was `int main()` of the old standalone netune-config executable.) */
+int run_config(void) {
     auto screen = ScreenInteractive::Fullscreen();
     CfgState st;
 
@@ -868,7 +873,7 @@ int main() {
                 } else {
                     std::string target = dir_of(st.cat) + "/" + st.files[st.sel].name;
                     if (st.confirm_kind == 0) {
-                        if (remove(target.c_str()) == 0) {
+                        if (remove_utf8(target.c_str()) == 0) {
                             st.notice = "已删除 " + st.files[st.sel].name;
                             refresh_files(st);
                         } else {
@@ -930,7 +935,7 @@ int main() {
                     if (name.find('.') == std::string::npos) name += ".yaml";
                     std::string dst = dir + "/" + name;
                     if (src == dst) return true;
-                    if (rename(src.c_str(), dst.c_str()) == 0) {
+                    if (rename_utf8(src.c_str(), dst.c_str()) == 0) {
                         st.notice = "已重命名为 " + name;
                         refresh_files(st);
                     } else {

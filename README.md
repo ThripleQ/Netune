@@ -66,7 +66,7 @@ netune
 - 歌词模式（`l`）
 - ALSA、PulseAudio、SDL2 自动检测
 - 导航栈：`Esc` 返回上一层
-- `netune-config`：配置文件管理器（主题编辑 / 按键绑定 / 本地音乐目录）
+- 内置配置管理器 `netune --config`（主题编辑 / 按键绑定 / 本地音乐目录）
 
 ## 快捷键
 
@@ -100,10 +100,10 @@ netune
 - `keybindings/default.yaml` — 按键绑定
 - `layouts/*.yaml` — 布局
 
-日常配置用 `netune-config`（构建产物，与 `netune` 同目录）：
+日常配置用内置子命令（无需单独程序）：
 
 ```bash
-./build/netune-config
+./build/netune --config
 ```
 
 五个页面：主题（`x` 进颜色槽编辑，`Enter` 选用）、按键（编辑/选用）、本地音乐（`a` 添加目录）、播放（音量/循环/步长）。也可以直接改 `config.json`：

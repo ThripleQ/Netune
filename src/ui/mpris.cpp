@@ -1,6 +1,12 @@
 #include "ui/mpris.h"
 
-#ifndef _WIN32
+/* NETUNE_MPRIS is defined by CMake only when D-Bus dev files were found
+ * (and we are not on Windows).  Without it this TU provides no-op stubs
+ * so app.cpp — which calls mpris_init/sync/shutdown on every non-Windows
+ * platform — still links.  Previously a Linux box without libdbus-1-dev
+ * failed at link time with undefined references. */
+
+#ifdef NETUNE_MPRIS
 
 #include <dbus/dbus.h>
 #include <pthread.h>
@@ -843,4 +849,10 @@ void mpris_sync(const void *state_ptr) {
     }
 }
 
-#endif /* !_WIN32 */
+#else /* !NETUNE_MPRIS: no D-Bus — no-op stubs */
+
+int  mpris_init(void)                    { return 0; }
+void mpris_shutdown(void)                {}
+void mpris_sync(const void *state_ptr)   { (void)state_ptr; }
+
+#endif /* NETUNE_MPRIS */
