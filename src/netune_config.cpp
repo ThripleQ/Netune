@@ -73,7 +73,6 @@ static const ActionInfo kActions[] = {
     {Action::Stop,         "stop",           "停止"},
     {Action::ShowHelp,     "show_help",      "帮助"},
     {Action::ShowActions,  "show_actions",   "操作小窗"},
-    {Action::ShowSongDetail, "show_song_detail", "歌曲详情"},
     {Action::Quit,         "quit",           "退出"},
 };
 

@@ -41,8 +41,7 @@ static const HelpEntry kMisc[] = {
     {Action::CycleLoop,    "循环模式"},
     {Action::ToggleLyrics, "歌词"},
     {Action::ShowHelp,     "打开 / 关闭本帮助"},
-    {Action::ShowActions,  "操作小窗 (喜欢/收藏歌单)"},
-    {Action::ShowSongDetail, "歌曲详情"},
+    {Action::ShowActions,  "操作小窗 (喜欢/收藏/下载/详情)"},
     {Action::Quit,         "退出"},
 };
 

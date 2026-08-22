@@ -33,7 +33,6 @@ static void fill_defaults(std::unordered_map<std::string, Action> &map) {
     map["m"]      = Action::ToggleMute;
     map["?"]      = Action::ShowHelp;
     map["ctrl+x"] = Action::ShowActions;
-    map["d"]      = Action::ShowSongDetail;
     map["ctrl+/"] = Action::OpenSearch;
     map["q"]      = Action::Quit;
 }
@@ -101,7 +100,6 @@ bool KeybindingManager::load(const std::string &yaml_path) {
         if (name == "open_search")   return Action::OpenSearch;
         if (name == "show_help")     return Action::ShowHelp;
         if (name == "show_actions")  return Action::ShowActions;
-        if (name == "show_song_detail") return Action::ShowSongDetail;
         if (name == "quit")          return Action::Quit;
         return Action::None;
     };

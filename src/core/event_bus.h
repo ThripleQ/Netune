@@ -57,6 +57,10 @@ typedef enum {
     /* MPRIS external control commands (payload: int MprisCommand) */
     EV_MPRIS_COMMAND,
 
+    /* local music source: rescan dirs + refresh UI groups
+       (payload: none) */
+    EV_LOCAL_REFRESH,
+
     EV_COUNT  /* sentinel */
 } EventType;
 

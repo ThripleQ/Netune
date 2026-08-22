@@ -68,6 +68,20 @@ int  netease_playlist_delete(const char *pl_id);                    /* 0 = ok */
 /* Get streaming URL.                                      */
 int  netease_play_url(const char *song_id, char *url, size_t url_sz);
 
+/* Get a play/download URL at an explicit quality level
+   (standard/higher/exhigh/lossless/hires). 0 = ok, url filled. */
+int  netease_song_url(const char *song_id, const char *level,
+                      char *url, size_t url_sz);
+
+/* Download a song (resolved at `level`, falling back down the quality
+   ladder when unavailable) into the app download dir
+   (netune_data_root()/downloads). Returns a malloc'd full path to the
+   saved file, or NULL on failure. Caller frees. `used_level` (optional)
+   receives the quality actually used. */
+char* netease_download_song(const char *song_id, const char *level,
+                            const char *title, char *used_level,
+                            size_t used_sz);
+
 /* ── Lyrics ────────────────────────────────────────── */
 /* Fetch lyrics from Netease. buf is allocated/filled with parsed LRC text.
    Returns 0 on success, -1 on error. Caller must free *buf. */

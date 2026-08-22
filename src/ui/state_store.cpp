@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 
 extern "C" {
 #include "plugins/music_sources/netease/netease_api.h"
@@ -306,6 +307,11 @@ void StateStore::set_qr_gfx_ready(int ready) {
     state_.qr_gfx_ready = ready;
 }
 
+void StateStore::set_app_notice(const std::string &msg) {
+    state_.app_notice = msg;
+    state_.app_notice_ts = (long)time(NULL);
+}
+
 void StateStore::set_show_help(bool show) {
     state_.show_help = show;
 }
@@ -313,7 +319,11 @@ void StateStore::set_show_help(bool show) {
 void StateStore::set_action_sheet(bool open, int selected) {
     state_.action_sheet_open = open;
     state_.action_sheet_selected = selected;
-    if (open) state_.action_sheet_active = -1;  /* re-query on open */
+    /* NOTE: must NOT reset action_sheet_active here — j/k navigation inside
+       the sheet also calls set_action_sheet(true, sel) and would clobber the
+       liked/subscribed state queried when the sheet opened (causing the
+       "取消喜欢" → "喜欢该音乐" flicker). Reset is done explicitly in
+       ShowActions when opening the sheet. */
 }
 
 void StateStore::set_action_sheet_active(int active) {
@@ -347,6 +357,10 @@ void StateStore::set_action_sheet_pls(const std::vector<SongInfo> &pls) {
     }
 }
 
+void StateStore::set_action_sheet_quality_ok(const std::vector<int> &ok) {
+    state_.action_sheet_quality_ok = ok;
+}
+
 void StateStore::set_current_playlist_id(const std::string &id) {
     state_.current_playlist_id = id;
 }
@@ -355,8 +369,7 @@ void StateStore::set_detail_playlist_mine(bool v) {
     state_.detail_playlist_mine = v;
 }
 
-void StateStore::set_song_detail(bool open, const std::vector<std::string> &lines) {
-    state_.song_detail_open = open;
+void StateStore::set_song_detail(const std::vector<std::string> &lines) {
     state_.song_detail_lines = lines;
 }
 
@@ -436,10 +449,11 @@ void StateStore::set_groups(const std::vector<SongGroup> &grps) {
         state_.groups.push_back(std::move(copy));
     }
 
-    /* Only populate right panel if groups exist; otherwise
-       keep netease entry selected (group_index stays -1). */
-    if (!state_.groups.empty())
-        set_group_index(0);
+    /* Do NOT populate the right panel here. Whether the first group
+       gets shown is decided by the caller (refresh_local_groups only
+       restores the local view when we are already in Local mode, so
+       starting in Netease mode must not leak local songs into the
+       right panel). group_index stays -1 (netease entry). */
     validate_selection();
 }
 
