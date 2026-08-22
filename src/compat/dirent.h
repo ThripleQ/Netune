@@ -14,6 +14,23 @@
 
 #include <stdlib.h>
 #include <string.h>
+
+/* ── windows.h hygiene ────────────────────────────────
+ * The shim only needs FindFirstFileW/FindNextFileW/FindClose (kernel32).
+ * NOGDI drops wingdi.h, whose `RGB(r,g,b)` MACRO otherwise collides with
+ * FTXUI's ftxui::Color::RGB(...) in any TU that includes both this shim
+ * and FTXUI (e.g. netune_config.cpp) — the macro rewrites
+ * `Color::RGB(1,2,3)` into `Color::((COLORREF)...)`, a hard compile error
+ * on both MSVC and MinGW. NOMINMAX keeps std::min/std::max usable. */
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOGDI
+#define NOGDI
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 
 #define NAME_MAX 260

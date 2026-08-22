@@ -396,17 +396,12 @@ void StateStore::set_search_results(const std::vector<SongInfo> &results, int to
     }
 }
 
-void StateStore::set_top_search_active(bool active, int side) {
+void StateStore::set_top_search_active(bool active) {
     state_.top_search_active = active;
-    state_.top_search_side   = side;
 }
 
 void StateStore::set_top_search_api(bool api) {
     state_.top_search_api = api;
-}
-
-void StateStore::set_top_left_query(const std::string &query) {
-    state_.top_left_query = query;
 }
 
 void StateStore::set_top_right_query(const std::string &query) {

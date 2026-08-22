@@ -256,6 +256,7 @@ set(CORE_SOURCES
 set(INFRA_SOURCES
   src/infra/log.c
   src/infra/config.c
+  src/infra/config_paths.c
   src/infra/path.c
   src/infra/ring_buffer.c
   src/infra/thread_pool.c
@@ -322,16 +323,29 @@ set(UI_SOURCES
   src/ui/components/lyric_panel.cpp
 )
 
-if(DBUS_FOUND AND NOT WIN32)
+# MPRIS is always compiled on non-Windows so the player keeps its D-Bus
+# integration where available and falls back to no-op stubs (see
+# src/ui/mpris.cpp) when libdbus is missing. NETUNE_ENABLE_MPRIS is the
+# single switch that gates the real implementation: macro definition +
+# DBus linking below must stay in sync with it.
+if(NOT WIN32)
   list(APPEND UI_SOURCES src/ui/mpris.cpp)
-  message(STATUS "D-Bus found: building MPRIS support")
+  if(DBUS_FOUND)
+    set(NETUNE_ENABLE_MPRIS TRUE)
+    message(STATUS "D-Bus found: building MPRIS support")
+  else()
+    set(NETUNE_ENABLE_MPRIS FALSE)
+    message(STATUS "D-Bus not found: MPRIS compiled as no-op stubs")
+  endif()
 else()
-  message(STATUS "D-Bus not found: skipping MPRIS")
+  set(NETUNE_ENABLE_MPRIS FALSE)
+  message(STATUS "Windows: MPRIS not applicable")
 endif()
 
 set(ALL_SOURCES
   src/app.cpp
   src/main.cpp
+  src/netune_config.cpp
   ${CORE_SOURCES}
   ${INFRA_SOURCES}
   ${PLUGIN_DECODER_SOURCES}
@@ -342,30 +356,14 @@ set(ALL_SOURCES
 )
 
 # ── Executable ───────────────────────────────────────
+# The configuration UI (src/netune_config.cpp, run_config()) is built
+# into the main binary and launched via `netune --config`.  The former
+# standalone `netune-config` target was removed: netune already links
+# everything it needs (ftxui / yyjson / PkgConfig::YAML / Threads) and
+# defines _GNU_SOURCE on POSIX — and, unlike the old target, it puts
+# src/compat on the include path, which the config sources need on
+# Windows for <dirent.h>/<unistd.h>.
 add_executable(netune ${ALL_SOURCES})
-
-add_executable(netune-config
-  src/netune_config.cpp
-  src/infra/config.c
-  src/infra/path.c
-  src/infra/log.c
-  src/ui/keybindings.cpp
-  src/ui/theme.cpp
-)
-
-target_include_directories(netune-config PRIVATE src)
-if(NOT WIN32)
-  target_compile_definitions(netune-config PRIVATE _GNU_SOURCE)
-endif()
-
-target_link_libraries(netune-config PRIVATE
-  ftxui::screen
-  ftxui::dom
-  ftxui::component
-  yyjson::yyjson
-  PkgConfig::YAML
-  Threads::Threads
-)
 
 target_include_directories(netune PRIVATE src)
 if(NOT WIN32)
@@ -400,8 +398,9 @@ endif()
 if(SDL2_FOUND)
   target_link_libraries(netune PRIVATE ${NETUNE_SDL2_TARGET})
 endif()
-if(DBUS_FOUND AND NOT WIN32)
+if(NETUNE_ENABLE_MPRIS)
   target_link_libraries(netune PRIVATE PkgConfig::DBUS)
+  target_compile_definitions(netune PRIVATE NETUNE_MPRIS)
 endif()
 
 if(NOT WIN32)

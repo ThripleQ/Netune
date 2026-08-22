@@ -449,10 +449,12 @@ Element render_spectrum_bar(const AppState &s) {
         columns.push_back(vbox(std::move(col_rows)));
     }
 
-    return hbox({
+    Element bar = hbox({
         filler(),
         hbox(std::move(columns)),
         filler(),
-    }) | size(HEIGHT, EQUAL, rows)
-      | bgcolor(Color::RGB(theme.bg.r, theme.bg.g, theme.bg.b));
+    }) | size(HEIGHT, EQUAL, rows);
+    if (theme.bg.has_color)
+        return bar | bgcolor(Color::RGB(theme.bg.r, theme.bg.g, theme.bg.b));
+    return bar;  /* bg: none → terminal native background shows through */
 }

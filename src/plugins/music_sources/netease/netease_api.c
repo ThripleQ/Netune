@@ -1079,7 +1079,11 @@ int netease_song_detail(const char *song_id, SongDetail *out) {
     if (pt > 0) {
         time_t t = (time_t)(pt / 1000);
         struct tm tmv;
+#ifdef _WIN32
+        localtime_s(&tmv, &t);
+#else
         localtime_r(&t, &tmv);
+#endif
         char buf[32];
         strftime(buf, sizeof(buf), "%Y-%m-%d", &tmv);
         out->publish = strdup(buf);

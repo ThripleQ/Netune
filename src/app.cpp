@@ -37,6 +37,7 @@
 
 extern "C" {
 #include "infra/log.h"
+#include "infra/config_paths.h"
 #include "infra/config.h"
 #include "infra/thread_pool.h"
 #include "core/event_bus.h"
@@ -469,14 +470,13 @@ static bool netease_search_apply_cache(const std::string &q) {
 static void close_top_search(void) {
     StateStore &st = StateStore::instance();
     if (!st.state().top_search_api) {
-        st.set_top_left_query("");
         st.set_top_right_query("");
     }
     if (g_top_search_pushed) {
         st.nav_pop();
         g_top_search_pushed = false;
     }
-    st.set_top_search_active(false, 0);
+    st.set_top_search_active(false);
 }
 
 /* Clear ALL search state — used when the user leaves the search context
@@ -484,9 +484,8 @@ static void close_top_search(void) {
    filtered by the old query and the search nav push must unwind. */
 static void clear_search_state(void) {
     StateStore &st = StateStore::instance();
-    st.set_top_left_query("");
     st.set_top_right_query("");
-    st.set_top_search_active(false, 0);
+    st.set_top_search_active(false);
     st.set_top_search_api(false);
     if (g_top_search_pushed) {
         st.nav_pop();
@@ -535,7 +534,7 @@ static void activate_netease_menu_item(int idx) {
            filtering the previous menu's songs, then focus the box */
         StateStore::instance().set_playlist({}, 0);
         StateStore::instance().set_top_right_query("");
-        StateStore::instance().set_top_search_active(true, 1);
+        StateStore::instance().set_top_search_active(true);
         StateStore::instance().set_top_search_api(true);
     } else if (type == 300) {
         /* account page: submenu of the logged-in user.
@@ -1261,93 +1260,10 @@ static void ev_playlist_changed(const BusEvent *ev, void *data) {
 /* ───────────────────────────────────────────────────── */
 
 /* ── XDG path helpers ────────────────────────────── */
-static const char *xdg_dir(const char *env, const char *sub) {
-    const char *d = getenv_utf8(env);
-    static char buf[1024];
-#ifndef _WIN32
-    if (d && d[0]) {
-        snprintf(buf, sizeof(buf), "%s/netune/%s", d, sub ? sub : "");
-    } else {
-        const char *home = getenv_utf8("HOME");
-        if (!home) home = "/tmp";
-        const char *prefix = strstr(env, "CONFIG") ? ".config" : ".cache";
-        snprintf(buf, sizeof(buf), "%s/%s/netune/%s", home, prefix, sub ? sub : "");
-    }
-#else
-    /* Windows: map XDG_*_HOME to APPDATA / LOCALAPPDATA */
-    const char *win_env = NULL;
-    if (strstr(env, "CACHE"))
-        win_env = "LOCALAPPDATA";
-    else if (strstr(env, "CONFIG"))
-        win_env = "APPDATA";
-    if (win_env) d = getenv_utf8(win_env);
-    if (d && d[0]) {
-        snprintf(buf, sizeof(buf), "%s\\netune\\%s", d, sub ? sub : "");
-    } else {
-        const char *home = getenv_utf8("USERPROFILE");
-        if (!home) home = "C:\\";
-        const char *prefix = strstr(env, "CONFIG") ? ".config" : ".cache";
-        snprintf(buf, sizeof(buf), "%s\\%s\\netune\\%s", home, prefix, sub ? sub : "");
-    }
-#endif
-    return buf;
-}
-
-static void ensure_dir(const char *filepath) {
-    /* mkdir -p the parent directory of filepath */
-    char tmp[1024];
-    snprintf(tmp, sizeof(tmp), "%s", filepath);
-    /* find last separator (handles both / and \) */
-    char *last_slash = strrchr(tmp, '/');
-    char *last_bslash = strrchr(tmp, '\\');
-    char *last = (last_bslash && last_bslash > last_slash) ? last_bslash : last_slash;
-    if (!last) return;
-    if (last == tmp) return;  /* root dir, nothing to do */
-    char sep_chr = *last;
-    *last = 0;  /* strip file name (or trailing separator) */
-    for (char *p = tmp + 1; *p; p++) {
-        if (*p == '/' || *p == '\\') {
-            char saved = *p;
-            *p = 0;
-            mkdir_utf8(tmp);
-            *p = saved;
-        }
-    }
-    if (tmp[0]) {
-        mkdir_utf8(tmp);
-    }
-    (void)sep_chr;
-}
-
-/* ── XDG data root helper ─────────────────────────── */
-/* Returns the canonical data root where ALL runtime-editable
-   resources live: XDG_CONFIG_HOME/netune/data/
-   Cache and log are intentionally NOT under here — they stay
-   under XDG_CACHE_HOME. */
-static const char *xdg_data_root(void) {
-    static char buf[1024];
-#ifndef _WIN32
-    const char *d = getenv_utf8("XDG_CONFIG_HOME");
-    if (d && d[0]) {
-        snprintf(buf, sizeof(buf), "%s/netune/data", d);
-    } else {
-        const char *home = getenv_utf8("HOME");
-        if (!home) home = "/tmp";
-        snprintf(buf, sizeof(buf), "%s/.config/netune/data", home);
-    }
-#else
-    /* Windows: use APPDATA (same mapping as XDG_CONFIG_HOME) */
-    const char *d = getenv_utf8("APPDATA");
-    if (d && d[0]) {
-        snprintf(buf, sizeof(buf), "%s\\netune\\data", d);
-    } else {
-        const char *home = getenv_utf8("USERPROFILE");
-        if (!home) home = "C:\\";
-        snprintf(buf, sizeof(buf), "%s\\.config\\netune\\data", home);
-    }
-#endif
-    return buf;
-}
+/* ── XDG / data-root path helpers ────────────────────
+   Moved to infra/config_paths.c so netune and netune-config share
+   ONE implementation (netune_config.cpp used to carry a drifted
+   copy that lacked the Windows APPDATA branch). */
 
 /* ── Default data tree content ─────────────────────── */
 /* These embedded blobs let the app rebuild a complete default
@@ -1467,10 +1383,10 @@ static const char *DEFAULT_THEME_NETEASE_LIGHT_YAML =
    contents. Existing files are NEVER overwritten.
    No external scanning or fallback lookup is performed. */
 static void ensure_default_data_tree(void) {
-    const char *root = xdg_data_root();
+    const char *root = netune_data_root();
 
     /* Ensure the root directory exists */
-    ensure_dir(root);
+    netune_ensure_dir(root);
 
     /* Helper: create a default file (with parent dirs) if it
        does not already exist. Never touches existing non-empty files.
@@ -1486,7 +1402,7 @@ static void ensure_default_data_tree(void) {
             if (sz > 0) return;  /* non-empty: already there */
             LOG_WARN("Rebuilding empty data file: %s", path);
         }
-        ensure_dir(path);
+        netune_ensure_dir(path);
         f = fopen_utf8(path, "w");
         if (f) {
             fputs(content, f);
@@ -1513,13 +1429,13 @@ static void ensure_default_data_tree(void) {
 
 int run_app(int argc, char **argv) {
     if (argc > 1 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
-        printf("Netune v2.0.0 — Terminal music player\nUsage: %s [config.json]\n", argv[0]);
+        printf("Netune v2.0.0 — Terminal music player\nUsage: %s [--config] [config.json]\n", argv[0]);
         return 0;
     }
 
     /* ── Log ────────────────────────────────────────── */
-    const char *log_path = xdg_dir("XDG_CACHE_HOME", "netune.log");
-    ensure_dir(log_path);
+    const char *log_path = netune_xdg_dir("XDG_CACHE_HOME", "netune.log");
+    netune_ensure_dir(log_path);
     log_init(log_path);
     LOG_INFO("Netune v2.0.0 starting");
 
@@ -1534,7 +1450,7 @@ int run_app(int argc, char **argv) {
 
     /* ── Config (under data/) ── */
     char cfg_buf[2048];
-    snprintf(cfg_buf, sizeof(cfg_buf), "%s" PATH_SEP "config.json", xdg_data_root());
+    snprintf(cfg_buf, sizeof(cfg_buf), "%s" PATH_SEP "config.json", netune_data_root());
     Config *cfg = config_load(cfg_buf);
     if (!cfg) LOG_WARN("No config loaded, using defaults");
     config_set_global(cfg);
@@ -1549,8 +1465,8 @@ int run_app(int argc, char **argv) {
     }
 
     /* ── Cache (XDG_CACHE_HOME) ─────────────────────── */
-    const char *cache_dir = xdg_dir("XDG_CACHE_HOME", NULL);
-    ensure_dir(cache_dir);
+    const char *cache_dir = netune_xdg_dir("XDG_CACHE_HOME", NULL);
+    netune_ensure_dir(cache_dir);
     mkdir_utf8(cache_dir);
     cache_init(cache_dir);
     search_manager_init();
@@ -1615,7 +1531,7 @@ int run_app(int argc, char **argv) {
     } else {
         const char *name = (kb_name && strcmp(kb_name, "default") != 0) ? kb_name : "default";
         snprintf(kb_buf, sizeof(kb_buf), "%s" PATH_SEP "keybindings" PATH_SEP "%s.yaml",
-                 xdg_data_root(), name);
+                 netune_data_root(), name);
         kb_buf[sizeof(kb_buf) - 1] = '\0';
         kb_path = kb_buf;
     }
@@ -1646,7 +1562,7 @@ int run_app(int argc, char **argv) {
     } else {
         const char *name = (l_name && strcmp(l_name, "default") != 0) ? l_name : "default";
         snprintf(l_buf, sizeof(l_buf), "%s" PATH_SEP "layouts" PATH_SEP "%s.yaml",
-                 xdg_data_root(), name);
+                 netune_data_root(), name);
         l_buf[sizeof(l_buf) - 1] = '\0';
         l_path = l_buf;
     }
@@ -2183,7 +2099,7 @@ int run_app(int argc, char **argv) {
                 int row = (m.y - 2) + st.song_list_offset;
                 StateStore::instance().set_active_panel(1);
                 if (st.top_search_active)
-                    StateStore::instance().set_top_search_active(false, 0);
+                    StateStore::instance().set_top_search_active(false);
                 if (row >= 0 && row < (int)st.playlist.size()) {
                     if (row == st.selected_index)
                         component->OnEvent(ftxui::Event::Return);  /* re-click = activate */
@@ -2194,7 +2110,7 @@ int run_app(int argc, char **argv) {
                 /* left menu: rows are [nav][sep]menu... in netease mode,
                    [nav]groups... in local mode (hidden while searching) */
                 int row = m.y - 2;
-                bool searching = !st.top_left_query.empty();
+                bool searching = st.top_search_active;
                 StateStore::instance().set_active_panel(0);
                 if (st.music_mode == MusicMode::Local) {
                     if (searching) return true;  /* filtered view: ignore */
@@ -2211,18 +2127,20 @@ int run_app(int argc, char **argv) {
                     }
                 } else {
                     if (searching) return true;  /* filtered view: ignore */
-                    if (row == 0) {
+                    /* layout (netease, query empty): menu[0..n-1],
+                       local entry as the last row at the bottom */
+                    int n = (int)st.netease_menu.size();
+                    if (row < n) {
+                        if (row == st.netease_selected)
+                            component->OnEvent(ftxui::Event::Return);
+                        else
+                            StateStore::instance().set_netease_selected(row);
+                    } else if (row == n) {
+                        /* bottom local entry */
                         if (st.netease_selected == -1)
                             component->OnEvent(ftxui::Event::Return);
                         else
                             StateStore::instance().set_netease_selected(-1);
-                    } else if (row == 1) {
-                        /* separator row: ignore */
-                    } else if (row - 2 < (int)st.netease_menu.size()) {
-                        if (row - 2 == st.netease_selected)
-                            component->OnEvent(ftxui::Event::Return);
-                        else
-                            StateStore::instance().set_netease_selected(row - 2);
                     }
                 }
             }
@@ -2283,8 +2201,6 @@ int run_app(int argc, char **argv) {
 
         /* ── Top search row input (both modes) ───────── */
         if (cur.top_search_active && !cur.lyric_mode) {
-            int side = cur.top_search_side;
-
             if (ev_key == "escape") {
                 /* Esc leaves search and restores the pre-search view */
                 close_top_search();
@@ -2295,146 +2211,57 @@ int run_app(int argc, char **argv) {
                 close_top_search();
                 return true;
             }
-            if (ev_key == "tab") {
-                /* move editing focus to the other box */
-                StateStore::instance().set_top_search_active(true, side ? 0 : 1);
-                return true;
-            }
             if (ev_key == "up" || ev_key == "down") {
                 /* Cursor model: the search box and the list are one
                    continuous cursor. Down leaves the box and lands on
                    the FIRST visible item (first match when filtering) —
                    a deterministic target, never a hidden selection. */
-                StateStore::instance().set_top_search_active(false, 0);
+                StateStore::instance().set_top_search_active(false);
                 const auto &st2 = StateStore::instance().state();
-                if (side == 1) {
-                    if (!cur.top_search_api && !cur.top_right_query.empty() &&
-                        !st2.playlist.empty()) {
-                        int m = next_match(st2.playlist, -1, 1,
-                                           cur.top_right_query);
-                        StateStore::instance().set_selected_index(m >= 0 ? m : 0);
-                    } else {
-                        StateStore::instance().set_selected_index(0);
-                    }
-                } else if (cur.music_mode == MusicMode::Local) {
-                    /* first matching group when the left box filters */
-                    if (!cur.top_left_query.empty() && !st2.groups.empty()) {
-                        int m = -1;
-                        for (size_t i = 0; i < st2.groups.size(); i++) {
-                            if (str_icontains(st2.groups[i].name, cur.top_left_query)) {
-                                m = (int)i; break;
-                            }
-                        }
-                        StateStore::instance().set_group_index(m >= 0 ? m : 0);
-                    } else {
-                        StateStore::instance().set_group_index(0);
-                    }
+                if (!cur.top_search_api && !cur.top_right_query.empty() &&
+                    !st2.playlist.empty()) {
+                    int m = next_match(st2.playlist, -1, 1,
+                                       cur.top_right_query);
+                    StateStore::instance().set_selected_index(m >= 0 ? m : 0);
                 } else {
-                    /* first matching netease menu item when filtered */
-                    if (!cur.top_left_query.empty() && !st2.netease_menu.empty()) {
-                        int m = -1;
-                        for (size_t i = 0; i < st2.netease_menu.size(); i++) {
-                            if (str_icontains(st2.netease_menu[i].name, cur.top_left_query)) {
-                                m = (int)i; break;
-                            }
-                        }
-                        StateStore::instance().set_netease_selected(m >= 0 ? m : 0);
-                    } else {
-                        StateStore::instance().set_netease_selected(0);
-                    }
+                    StateStore::instance().set_selected_index(0);
                 }
                 return true;
             }
             if (ev_key == "enter" || ev_key == "\r") {
-                if (side == 0) {
-                    /* committing the left filter must first unwind any
-                       pending right-box search push so the nav stack
-                       stays balanced */
-                    clear_search_state();
-                    if (cur.music_mode == MusicMode::Local) {
-                        /* activate the matching local group (netease entry is
-                           excluded from local search — strict separation) */
-                        const std::string &q = cur.top_left_query;
-                        int target = -2;
-                        if (q.empty()) {
-                            target = cur.group_index;
-                        } else {
-                            for (size_t i = 0; i < cur.groups.size(); i++) {
-                                if (str_icontains(cur.groups[i].name, q)) {
-                                    target = (int)i;
-                                    break;
-                                }
-                            }
-                        }
-                        if (target < -1) return true;  /* no match — just close */
-                        if (target < 0) {
-                            /* netease entry: switch to netease mode */
-                            StateStore::instance().set_music_mode(MusicMode::Netease);
-                            StateStore::instance().set_active_panel(0);
-                            StateStore::instance().set_group_index(-1);
-                        } else {
-                            StateStore::instance().set_group_index(target);
-                            StateStore::instance().set_active_panel(1);
-                        }
-                    } else {
-                        /* activate the first menu item matching the filter */
-                        const std::string &q = cur.top_left_query;
-                        int target = -1;
-                        if (q.empty()) {
-                            target = cur.netease_selected;
-                        } else {
-                            for (size_t i = 0; i < cur.netease_menu.size(); i++) {
-                                if (str_icontains(cur.netease_menu[i].name, q)) {
-                                    target = (int)i;
-                                    break;
-                                }
-                            }
-                        }
-                        if (target >= 0) {
-                            StateStore::instance().set_netease_selected(target);
-                            activate_netease_menu_item(target);
-                        }
+                /* right box:
+                   - normal (non-netease) mode: Enter does nothing —
+                     the box stays selected & editable
+                   - netease mode: Enter submits the API search and
+                     leaves the box so the results are interactive */
+                if (cur.top_search_api &&
+                    !cur.top_right_query.empty()) {
+                    if (!netease_search_apply_cache(cur.top_right_query)) {
+                        do_netease_search(cur.top_right_query.c_str(),
+                                          !g_top_search_pushed);
+                        g_top_search_pushed = true;
                     }
-                } else {
-                    /* right box:
-                       - normal (non-netease) mode: Enter does nothing —
-                         the box stays selected & editable
-                       - netease mode: Enter submits the API search and
-                         leaves the box so the results are interactive */
-                    if (cur.top_search_api &&
-                        !cur.top_right_query.empty()) {
-                        if (!netease_search_apply_cache(cur.top_right_query)) {
-                            do_netease_search(cur.top_right_query.c_str(),
-                                              !g_top_search_pushed);
-                            g_top_search_pushed = true;
-                        }
-                        StateStore::instance().set_top_search_active(false, 0);
-                        StateStore::instance().set_active_panel(1);
-                    }
+                    StateStore::instance().set_top_search_active(false);
+                    StateStore::instance().set_active_panel(1);
                 }
                 return true;
             }
             if (ev_key == "backspace") {
                 /* remove last char (UTF-8 safe) */
-                std::string q = (side == 0) ? cur.top_left_query
-                                             : cur.top_right_query;
+                std::string q = cur.top_right_query;
                 if (!q.empty()) {
                     int n = (int)q.size() - 1;
                     while (n > 0 && ((unsigned char)q[n] & 0xC0) == 0x80) n--;
                     q.resize((size_t)n);
                 }
-                if (side == 0) {
-                    StateStore::instance().set_top_left_query(q);
-                } else {
-                    StateStore::instance().set_top_right_query(q);
-                    if (!cur.top_search_api) {
-                        restore_search_view(q);
-                        const auto &st2 = StateStore::instance().state();
-                        if (!q.empty() && !st2.playlist.empty()) {
-                            int m = next_match(st2.playlist, -1, 1, q);
-                            if (m >= 0)
-                                StateStore::instance().set_selected_index(m);
-                        }
+                StateStore::instance().set_top_right_query(q);
+                if (!cur.top_search_api) {
+                    restore_search_view(q);
+                    const auto &st2 = StateStore::instance().state();
+                    if (!q.empty() && !st2.playlist.empty()) {
+                        int m = next_match(st2.playlist, -1, 1, q);
+                        if (m >= 0)
+                            StateStore::instance().set_selected_index(m);
                     }
                 }
                 return true;
@@ -2450,25 +2277,20 @@ int run_app(int argc, char **argv) {
                     return true;
                 std::string ch = ev_key;
                 if (ev_key == "space") ch = " ";
-                std::string q = ((side == 0) ? cur.top_left_query
-                                             : cur.top_right_query) + ch;
-                if (side == 0) {
-                    StateStore::instance().set_top_left_query(q);
-                } else {
-                    StateStore::instance().set_top_right_query(q);
-                    /* API-search box keeps the list untouched while typing —
-                       Enter submits a fresh API search (no "search within
-                       results" fallback); filter boxes react live */
-                    if (!cur.top_search_api) {
-                        restore_search_view(q);
-                        /* snap the selection to the first matching row so
-                           Enter/space never acts on an invisible item */
-                        const auto &st2 = StateStore::instance().state();
-                        if (!q.empty() && !st2.playlist.empty()) {
-                            int m = next_match(st2.playlist, -1, 1, q);
-                            if (m >= 0)
-                                StateStore::instance().set_selected_index(m);
-                        }
+                std::string q = cur.top_right_query + ch;
+                StateStore::instance().set_top_right_query(q);
+                /* API-search box keeps the list untouched while typing —
+                   Enter submits a fresh API search (no "search within
+                   results" fallback); filter boxes react live */
+                if (!cur.top_search_api) {
+                    restore_search_view(q);
+                    /* snap the selection to the first matching row so
+                       Enter/space never acts on an invisible item */
+                    const auto &st2 = StateStore::instance().state();
+                    if (!q.empty() && !st2.playlist.empty()) {
+                        int m = next_match(st2.playlist, -1, 1, q);
+                        if (m >= 0)
+                            StateStore::instance().set_selected_index(m);
                     }
                 }
             }
@@ -2648,10 +2470,8 @@ int run_app(int argc, char **argv) {
             /* Esc on a search-result/filtered list first goes back to
                the search box (query kept) when a query is present; the
                second Esc (box) restores the original list. */
-            if (!cur.top_left_query.empty() ||
-                !cur.top_right_query.empty()) {
-                StateStore::instance().set_top_search_active(true,
-                    !cur.top_right_query.empty() ? 1 : 0);
+            if (!cur.top_right_query.empty()) {
+                StateStore::instance().set_top_search_active(true);
                 return true;
             }
             if (!cur.nav_stack.empty()) {
@@ -2678,39 +2498,21 @@ int run_app(int argc, char **argv) {
         case Action::MoveDown:
             if (cur.active_panel == 0) {
                 if (cur.music_mode == MusicMode::Local) {
-                    /* local groups: skip non-matching when filtered */
+                    /* local groups */
                     int n = (int)cur.groups.size();
                     if (n <= 0) return true;
-                    int idx = cur.group_index;
-                    const std::string &q = cur.top_left_query;
-                    int target = -1;
-                    for (int k = 0; k < n; k++) {
-                        idx = (idx + 1 >= n) ? 0 : idx + 1;
-                        if (q.empty() || str_icontains(cur.groups[idx].name, q)) {
-                            target = idx;
-                            break;
-                        }
-                    }
-                    if (target < 0) return true;
-                    StateStore::instance().set_group_index(target);
-                    if (target >= 0 && target < n) {
-                        std::vector<const char*> paths;
-                        for (auto &s : cur.groups[target].songs) paths.push_back(s.id);
-                    }
+                    int idx = (cur.group_index + 1 >= n) ? 0 : cur.group_index + 1;
+                    StateStore::instance().set_group_index(idx);
                 } else {
-                    /* netease menu: skip non-matching items when the
-                       left box filters */
-                    int next = cur.netease_selected;
+                    /* netease menu: local entry (-1) sits at the BOTTOM
+                       of the list; Down loops through it. */
                     int n = (int)cur.netease_menu.size();
-                    const std::string &q = cur.top_left_query;
-                    for (int k = 0; k < n; k++) {
-                        next = (next + 1 >= n) ? 0 : next + 1;
-                        if (q.empty() ||
-                            str_icontains(cur.netease_menu[next].name, q)) {
-                            StateStore::instance().set_netease_selected(next);
-                            break;
-                        }
-                    }
+                    if (n <= 0) return true;
+                    int sel = cur.netease_selected;          /* -1 = local */
+                    int cur_i = (sel < 0) ? n : sel;         /* local -> index n */
+                    int next_i = (cur_i + 1 > n) ? 0 : cur_i + 1;
+                    StateStore::instance().set_netease_selected(
+                        (next_i == n) ? -1 : next_i);
                 }
             } else {
                 if (cur.playlist.empty()) return true;
@@ -2740,58 +2542,27 @@ int run_app(int argc, char **argv) {
                                              -1, cur.top_right_query) < 0;
                 }
                 if (first_match && !cur.top_right_query.empty()) {
-                    StateStore::instance().set_top_search_active(true, 1);
+                    StateStore::instance().set_top_search_active(true);
                     return true;
                 }
             }
             if (cur.active_panel == 0) {
                 if (cur.music_mode == MusicMode::Local) {
-                    /* local groups: skip non-matching when filtered */
+                    /* local groups */
                     int n = (int)cur.groups.size();
                     if (n <= 0) return true;
-                    int idx = cur.group_index;
-                    const std::string &q = cur.top_left_query;
-                    int target = -1;
-                    for (int k = 0; k < n; k++) {
-                        idx = (idx - 1 < 0) ? n - 1 : idx - 1;
-                        if (q.empty() || str_icontains(cur.groups[idx].name, q)) {
-                            target = idx;
-                            break;
-                        }
-                    }
-                    if (target < 0) return true;
-                    if (target == cur.group_index && !q.empty()) {
-                        /* wrapped: at the top matching group — re-enter box */
-                        StateStore::instance().set_top_search_active(true, 0);
-                        return true;
-                    }
-                    StateStore::instance().set_group_index(target);
-                    if (target >= 0 && target < n) {
-                        std::vector<const char*> paths;
-                        for (auto &s : cur.groups[target].songs) paths.push_back(s.id);
-                    }
+                    int idx = (cur.group_index - 1 < 0) ? n - 1 : cur.group_index - 1;
+                    StateStore::instance().set_group_index(idx);
                 } else {
-                    /* netease menu: skip non-matching items; Up from the
-                       top matching item re-enters the left search box */
-                    int prev = cur.netease_selected;
+                    /* netease menu: local entry (-1) sits at the BOTTOM.
+                       Up from the first menu item wraps to local. */
                     int n = (int)cur.netease_menu.size();
-                    const std::string &q = cur.top_left_query;
-                    int target = -1;
-                    for (int k = 0; k < n; k++) {
-                        prev = (prev - 1 < 0) ? n - 1 : prev - 1;
-                        if (q.empty() ||
-                            str_icontains(cur.netease_menu[prev].name, q)) {
-                            target = prev;
-                            break;
-                        }
-                    }
-                    if (target < 0) return true;
-                    if (target == cur.netease_selected && !q.empty()) {
-                        /* wrapped around: we are at the top matching item */
-                        StateStore::instance().set_top_search_active(true, 0);
-                        return true;
-                    }
-                    StateStore::instance().set_netease_selected(target);
+                    if (n <= 0) return true;
+                    int sel = cur.netease_selected;          /* -1 = local */
+                    int cur_i = (sel < 0) ? n : sel;         /* local -> index n */
+                    int prev_i = (cur_i - 1 < 0) ? n : cur_i - 1;
+                    StateStore::instance().set_netease_selected(
+                        (prev_i == n) ? -1 : prev_i);
                 }
             } else {
                 if (!cur.top_search_api && !cur.top_right_query.empty()) {
@@ -2935,8 +2706,7 @@ int run_app(int argc, char **argv) {
             if (cur.top_search_active) {
                 close_top_search();
             } else {
-                StateStore::instance().set_top_search_active(true,
-                                                              cur.active_panel);
+                StateStore::instance().set_top_search_active(true);
                 StateStore::instance().set_top_search_api(false);
             }
             return true;

@@ -25,13 +25,24 @@
  *   _access(p, m)   -> access_utf8(p, m)
  *   stat(p, &st)    -> stat_utf8(p, &st)
  *   remove(p)        -> remove_utf8(p)
+ *   rename(a, b)     -> rename_utf8(a, b)
  *
  * F_OK, R_OK, W_OK are defined if not already available.
  */
 
 #ifdef _MSC_VER
 
+/* Same windows.h hygiene as compat/dirent.h: NOGDI avoids wingdi's RGB
+ * macro clobbering FTXUI's Color::RGB in C++ TUs that include this header. */
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOGDI
+#define NOGDI
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #include <io.h>
 #include <direct.h>
@@ -143,10 +154,21 @@ static inline int remove_utf8(const char *path)
     return _wremove(wpath);
 }
 
+/* ── rename_utf8 ────────────────────────────────────── */
+static inline int rename_utf8(const char *oldpath, const char *newpath)
+{
+    if (!oldpath || !newpath) return -1;
+    wchar_t wold[32768], wnew[32768];
+    if (utf8_to_wide(oldpath, wold, 32768) == 0) return -1;
+    if (utf8_to_wide(newpath, wnew, 32768) == 0) return -1;
+    return _wrename(wold, wnew);
+}
+
 #elif defined(__MINGW32__)
 
 /* MinGW-w64: CRT uses UTF-8 directly, no conversion needed.
    Provide transparent aliases for API compatibility. */
+#include <direct.h>   /* _mkdir */
 #ifndef F_OK
 #define F_OK 0
 #endif
@@ -162,10 +184,13 @@ static inline int remove_utf8(const char *path)
 
 #define getenv_utf8  getenv
 #define fopen_utf8   fopen
-#define mkdir_utf8(p) mkdir(p, 0755)
+/* MinGW-w64's mkdir() is the deprecated single-arg MSVC shim;
+   _mkdir() is the correct single-arg CRT entry point. */
+#define mkdir_utf8(p) _mkdir(p)
 #define access_utf8  access
 #define stat_utf8    stat
 #define remove_utf8  remove
+#define rename_utf8  rename
 
 #else /* POSIX */
 
@@ -193,5 +218,6 @@ static inline int remove_utf8(const char *path)
 #define access_utf8  access
 #define stat_utf8    stat
 #define remove_utf8  remove
+#define rename_utf8  rename
 
 #endif
