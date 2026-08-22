@@ -201,7 +201,8 @@ Element render_login_screen(const AppState &s) {
     }
 
     auto page = vbox(std::move(col));
-    /* yframe + flex: fills available height, adds scrollbar if needed */
-    auto &theme = ThemeManager::instance().current();
-    return theme_overlay_bg(page | yframe | flex);
+    /* yframe + flex: fills available height, adds scrollbar if needed.
+       Background matches the normal app background (theme_bg), not the
+       overlay/popup color — the login view replaces the whole screen. */
+    return theme_bg(page | yframe | flex);
 }

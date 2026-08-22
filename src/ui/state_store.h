@@ -161,11 +161,9 @@ struct AppState {
     int search_total = 0;
 
     /* top search row (netease mode only, rendered in top_bar slot) */
-    bool        top_search_active = false;  /* editing a top search box */
-    int         top_search_side   = 0;      /* 0 = left box, 1 = right box */
+    bool        top_search_active = false;  /* editing the top search box */
     bool        top_search_api    = false;  /* box is in "Netease API search" mode (from the 搜索网易云 menu entry) vs. plain filter */
-    std::string top_left_query;             /* left box: filters netease menu items */
-    std::string top_right_query;            /* right box: filters playlist / netease API */
+    std::string top_right_query;            /* filters playlist / netease API */
 
     /* navigation stack for Esc-back */
     std::vector<NavState> nav_stack;
@@ -262,9 +260,8 @@ public:
     void set_search_results(const std::vector<SongInfo> &results, int total);
 
     /* top search row (netease mode) */
-    void set_top_search_active(bool active, int side);
+    void set_top_search_active(bool active);
     void set_top_search_api(bool api);
-    void set_top_left_query(const std::string &query);
     void set_top_right_query(const std::string &query);
 
     /* nav stack push/pop for Esc-back */

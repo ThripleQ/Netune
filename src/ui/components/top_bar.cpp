@@ -8,9 +8,9 @@
 using namespace ftxui;
 
 /* ── Top search row (netease mode) ────────────────────
-   A single line in the top_bar slot: two boxes delineated
-   by │ side bars, separated by ││ at the panel boundary.
-   No top/bottom borders — the panels below keep their own. */
+   A single full-width search box in the top_bar slot, delineated
+   by │ side bars. No top/bottom borders — the panels below keep
+   their own. */
 
 /* truncate text to fit `width` display columns (UTF-8 safe) */
 static std::string truncate_to(const std::string &text, int width) {
@@ -31,11 +31,11 @@ static std::string truncate_to(const std::string &text, int width) {
     return out;
 }
 
-/* One search box: a single "│…│" line. */
-static Element search_box(const AppState &s, int side,
+/* The single full-width search box: a "│…│" line. */
+static Element search_box(const AppState &s,
                           const std::string &query, const char *hint,
                           int width) {
-    bool active = s.top_search_active && s.top_search_side == side;
+    bool active = s.top_search_active;
     if (width < 4) width = 4;
 
     std::string content;
@@ -67,12 +67,7 @@ Element render_top_bar(const AppState &s) {
     if (!searchable)
         return theme_bg(theme_fg(text(std::string((size_t)total, ' '))));
 
-    const char *right_hint = (s.music_mode == MusicMode::Netease)
-                                 ? "[/] 搜索歌曲 / 网易云"
-                                 : "[/] 搜索歌曲";
-    int right_w = total - 20;  /* left box is 20 cols, same as left panel */
     return hbox({
-        search_box(s, 0, s.top_left_query, "[/] 搜索菜单", 20),
-        search_box(s, 1, s.top_right_query, right_hint, right_w),
+        search_box(s, s.top_right_query, "Search", total),
     });
 }
