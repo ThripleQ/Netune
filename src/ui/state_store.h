@@ -30,6 +30,7 @@ struct NavState {
     int                        active_panel    = 0;
     std::vector<NeteaseMenuItem> netease_menu;
     int                        netease_selected = 0;
+    int                        group_index = -1;  /* local mode: group list position */
     int                        search_scope     = 0;
     bool                       search_active    = false;
     std::string                search_query;
@@ -118,8 +119,6 @@ struct AppState {
     /* state machine: 0=main menu, 1=playlist picker, 2=text input, 3=confirm */
     int  action_sheet_menu = 0;
     int  action_sheet_opt_count = 3;  /* number of options in menu 0 */
-    /* download quality availability (menu 4): 1=ok, 0=unavailable, -1=probing */
-    std::vector<int> action_sheet_quality_ok;
     std::string action_sheet_input;   /* text input buffer */
     std::string action_sheet_ctx;     /* operation context (song id / playlist id) */
     std::vector<SongInfo> action_sheet_pls;  /* my playlists for the picker */
@@ -199,6 +198,7 @@ public:
     /* groups & playlist */
     void set_groups(const std::vector<SongGroup> &grps);
     void set_group_index(int idx);       /* switch group, updates right panel */
+    void set_group_hover(int idx);       /* move group-list highlight only */
     void set_active_panel(int panel);    /* 0=left, 1=right */
     void set_song_panel_width(int cols);
     void set_top_row_width(int cols);
@@ -250,7 +250,6 @@ public:
     void set_action_sheet_input(const std::string &text);
     void set_action_sheet_ctx(const std::string &ctx);
     void set_action_sheet_pls(const std::vector<SongInfo> &pls);
-    void set_action_sheet_quality_ok(const std::vector<int> &ok);
     void set_current_playlist_id(const std::string &id);
     void set_detail_playlist_mine(bool v);
     void set_song_detail(const std::vector<std::string> &lines);

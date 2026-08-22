@@ -51,30 +51,6 @@ Element render_action_sheet(const AppState &s) {
             else
                 body.push_back(hbox({text("   "), row}));
         }
-    } else if (s.action_sheet_menu == 4) {
-        /* download quality picker */
-        static const char *kQualities[] = {
-            "\u6807\u51C6\u97F3\u8D28 (standard)",        /* 标准音质 */
-            "\u9AD8\u54C1 (higher)",                       /* 高品 */
-            "\u65E0\u635F (exhigh)",                       /* 无损 */
-            "\u65E0\u635F\u97F3\u8D28 (lossless)",          /* 无损音质 */
-            "\u6BCD\u5E26 (hires)",                        /* 母带 */
-        };
-        body.push_back(text(" \u9009\u62E9\u4E0B\u8F7D\u97F3\u8D28: ") | bold);  /* 选择下载音质: */
-        for (size_t i = 0; i < 5; i++) {
-            bool unavailable = (int)i < (int)s.action_sheet_quality_ok.size() &&
-                               s.action_sheet_quality_ok[i] == 0;
-            auto row = text(std::string("  ") + kQualities[i] + (unavailable ? "  (\u4E0D\u53EF\u7528)" : ""));  /* (不可用) */
-            if ((int)i == s.action_sheet_selected) {
-                Element row_el = unavailable ? (row | dim | strikethrough)
-                                             : (row | bold);
-                body.push_back(hbox({theme_selection(text(" \u203A ")), row_el}) | focus);
-            } else {
-                row = unavailable ? (row | dim | strikethrough) : row;
-                body.push_back(hbox({text("   "), row}));
-            }
-        }
-        body.push_back(text("  Esc \u53D6\u6D88 ") | dim);
     } else if (s.action_sheet_menu == 1) {
         /* playlist picker */
         body.push_back(text(" \u9009\u62E9\u6B4C\u5355: ") | bold);  /* 选择歌单: */

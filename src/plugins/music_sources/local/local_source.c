@@ -325,7 +325,18 @@ int local_register_download_dir(const char *dir) {
         char *e = path_expand(raw);
         bool same = e && strcmp(e, want) == 0;
         free(e);
-        if (same) { free(exp); pthread_mutex_unlock(&g_cache_mutex); return 0; }
+        if (same) {
+            free(exp);
+            pthread_mutex_unlock(&g_cache_mutex);
+            /* Already configured — still rescan: the cache only holds the
+               first scan, so a later download would otherwise never appear
+               in the local list until the app restarts. (local_shutdown and
+               ensure_cache take the mutex themselves; we must not hold it
+               across them.) */
+            local_shutdown();
+            ensure_cache();
+            return 0;
+        }
     }
 
     if (!config_array_push_str(cfg, "music_sources.local.dirs", want)) {

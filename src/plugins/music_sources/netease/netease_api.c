@@ -1005,9 +1005,22 @@ char* netease_download_song(const char *id, const char *level,
     char dir[1024];
     snprintf(dir, sizeof(dir), "%s" PATH_SEP "downloads", root);
 
-    /* File name: sanitized title + extension matching the quality level. */
+    /* File extension: trust what the URL actually serves. The streaming
+       endpoint may return a lower-encoded file than the requested level
+       (e.g. "hires" delivered as 320k mp3), so guess from the URL path
+       before the query string, falling back to the level mapping. */
     const char *ext = (strcmp(used, "lossless") == 0 ||
                        strcmp(used, "hires") == 0) ? "flac" : "mp3";
+    const char *q = strchr(dl_url, '?');
+    size_t ulen = q ? (size_t)(q - dl_url) : strlen(dl_url);
+    const char *p = dl_url + ulen;
+    while (p > dl_url && p[-1] != '.') p--;
+    if (p > dl_url && ulen - (p - dl_url) >= 3) {
+        if (strncasecmp(p, "flac", 4) == 0)      ext = "flac";
+        else if (strncasecmp(p, "m4a", 3) == 0)  ext = "m4a";
+        else if (strncasecmp(p, "wav", 3) == 0)  ext = "wav";
+        else                                     ext = "mp3";
+    }
     const char *base = (title && title[0]) ? title : id;
     char sane[256];
     size_t k = 0;

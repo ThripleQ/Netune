@@ -13,6 +13,18 @@ Element render_group_list(const AppState &s) {
     Elements els;
 
     if (s.music_mode == MusicMode::Local) {
+        if (s.active_panel == 1) {
+            /* inside a group: songs on the right, show a back hint
+               (Esc returns to the group list). */
+            int gi = s.group_index;
+            if (gi >= 0 && gi < (int)s.groups.size()) {
+                els.push_back(theme_fg(text("  << \u8FD4\u56DE \u672C\u5730 ") | bold));  /* << 返回 本地 */
+                els.push_back(theme_selection(
+                    hflow(paragraph("> " + s.groups[gi].name)) | bold | focus));
+            } else {
+                els.push_back(theme_fg(text("  (\u7A7A)")) | dim);  /* (空) */
+            }
+        } else {
         /* local groups. The netease entry is a navigation item —
            hidden while the top search box is being edited. */
         bool any = false;
@@ -41,6 +53,7 @@ Element render_group_list(const AppState &s) {
         }
         if (!any)
             els.push_back(theme_fg(text("  (空)")) | dim);
+        }
     } else {
         /* netease mode: menu items. The back-to-local entry is
            navigation — hidden while searching, rendered at the

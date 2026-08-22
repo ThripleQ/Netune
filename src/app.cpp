@@ -1948,8 +1948,8 @@ int run_app(int argc, char **argv) {
                     return true;
                 }
 
-                /* menu 0 (main), menu 1 (playlist picker) and menu 4
-                   (download quality) share j/k navigation + Enter */
+                /* menu 0 (main) and menu 1 (playlist picker) share
+                   j/k navigation + Enter */
                 if (as.action_sheet_menu == 5) {
                     /* song detail: read-only, no navigation */
                     return true;
@@ -1957,7 +1957,6 @@ int run_app(int argc, char **argv) {
                 if (k == "j" || k == "down") {
                     int n = (as.action_sheet_menu == 1)
                         ? (int)as.action_sheet_pls.size()
-                        : (as.action_sheet_menu == 4) ? 5
                         : as.action_sheet_opt_count;
                     if (n <= 0) n = 1;
                     state.set_action_sheet(true, (as.action_sheet_selected + 1) % n);
@@ -1966,15 +1965,13 @@ int run_app(int argc, char **argv) {
                 if (k == "k" || k == "up") {
                     int n = (as.action_sheet_menu == 1)
                         ? (int)as.action_sheet_pls.size()
-                        : (as.action_sheet_menu == 4) ? 5
                         : as.action_sheet_opt_count;
                     if (n <= 0) n = 1;
                     state.set_action_sheet(true, (as.action_sheet_selected + n - 1) % n);
                     return true;
                 }
                 if (k == "escape") {
-                    if (as.action_sheet_menu == 1 || as.action_sheet_menu == 4 ||
-                        as.action_sheet_menu == 5) {
+                    if (as.action_sheet_menu == 1 || as.action_sheet_menu == 5) {
                         state.set_action_sheet_menu(0);
                         state.set_action_sheet(true, 0);
                     } else {
@@ -1985,52 +1982,6 @@ int run_app(int argc, char **argv) {
                 if (k == "enter" || k == "\r") {
                     const auto &item = as.playlist[as.selected_index];
                     std::string id = item.id ? item.id : "";
-                    if (as.action_sheet_menu == 4) {
-                        /* download quality picker: start the download */
-                        static const char *kLevels[] = {
-                            "standard", "higher", "exhigh", "lossless", "hires"
-                        };
-                        int qi = as.action_sheet_selected;
-                        if (id.empty() || qi < 0 || qi > 4) return true;
-                        /* refuse to start a download for a quality that was
-                           probed as unavailable */
-                        if (qi < (int)as.action_sheet_quality_ok.size() &&
-                            as.action_sheet_quality_ok[qi] == 0) {
-                            StateStore::instance().set_app_notice("该音质不可用");
-                            return true;
-                        }
-                        std::string lvl = kLevels[qi];
-                        std::string title = item.title ? item.title : id;
-                        state.set_action_sheet(false, 0);
-                        std::thread([id, title, lvl]() {
-                            char used_lvl[32] = {0};
-                            char *path = netease_download_song(id.c_str(), lvl.c_str(),
-                                                               title.c_str(), used_lvl,
-                                                               sizeof(used_lvl));
-                            if (path) {
-                                LOG_INFO("DOWNLOAD ok: %s (%s)", path, used_lvl[0] ? used_lvl : lvl.c_str());
-                                /* register the download dir into the local
-                                   source so the file shows up in 本地 */
-                                const char *root = netune_data_root();
-                                char dl_dir[1024];
-                                snprintf(dl_dir, sizeof(dl_dir), "%s" PATH_SEP "downloads", root);
-                                local_register_download_dir(dl_dir);
-                                /* refresh the local-music groups on the
-                                   main thread so the new file shows up
-                                   in 本地 right away */
-                                event_bus_publish(EV_LOCAL_REFRESH, NULL, 0);
-                                std::string msg = "已下载: " + title;
-                                if (used_lvl[0] && strcmp(used_lvl, lvl.c_str()) != 0)
-                                    msg += " (" + std::string(used_lvl) + ")";
-                                StateStore::instance().set_app_notice(msg);
-                                free(path);
-                            } else {
-                                LOG_WARN("DOWNLOAD failed: %s (%s)", id.c_str(), lvl.c_str());
-                                StateStore::instance().set_app_notice("下载失败: " + title);
-                            }
-                        }).detach();
-                        return true;
-                    }
                     if (as.action_sheet_menu == 1) {
                         /* playlist picker: add song to selected playlist */
                         if (as.action_sheet_selected >= 0 &&
@@ -2104,26 +2055,39 @@ int run_app(int argc, char **argv) {
                                 }
                             }).detach();
                         } else if (idx == 2) {
-                            /* download: open the quality picker */
-                            state.set_action_sheet_menu(4);
-                            state.set_action_sheet(true, 0);
-                            /* probe which qualities are available for this
-                               song (needs login for lossless/hires etc.) */
-                            StateStore::instance().set_action_sheet_quality_ok(
-                                {-1, -1, -1, -1, -1});
-                            std::thread([id]() {
-                                static const char *kLevels[] = {
-                                    "standard", "higher", "exhigh", "lossless", "hires"
-                                };
-                                std::vector<int> ok;
-                                char url[1024];
-                                for (int i = 0; i < 5; i++) {
-                                    if (netease_song_url(id.c_str(), kLevels[i], url, sizeof(url)) == 0)
-                                        ok.push_back(1);
-                                    else
-                                        ok.push_back(0);
+                            /* download: no quality picker — just start.
+                               Use the highest quality the source gives
+                               us (ladder starts at hires and falls back
+                               through lossless/exhigh/higher/standard). */
+                            std::string title = item.title ? item.title : id;
+                            state.set_action_sheet(false, 0);
+                            std::thread([id, title]() {
+                                char used_lvl[32] = {0};
+                                char *path = netease_download_song(id.c_str(), "hires",
+                                                                   title.c_str(), used_lvl,
+                                                                   sizeof(used_lvl));
+                                if (path) {
+                                    LOG_INFO("DOWNLOAD ok: %s (%s)", path,
+                                             used_lvl[0] ? used_lvl : "hires");
+                                    /* register the download dir into the local
+                                       source so the file shows up in 本地 */
+                                    const char *root = netune_data_root();
+                                    char dl_dir[1024];
+                                    snprintf(dl_dir, sizeof(dl_dir), "%s" PATH_SEP "downloads", root);
+                                    local_register_download_dir(dl_dir);
+                                    /* refresh the local-music groups on the
+                                       main thread so the new file shows up
+                                       in 本地 right away */
+                                    event_bus_publish(EV_LOCAL_REFRESH, NULL, 0);
+                                    std::string msg = "\u5DF2\u4E0B\u8F7D: " + title;  /* 已下载: */
+                                    if (used_lvl[0])
+                                        msg += " (" + std::string(used_lvl) + ")";
+                                    StateStore::instance().set_app_notice(msg);
+                                    free(path);
+                                } else {
+                                    LOG_WARN("DOWNLOAD failed: %s", id.c_str());
+                                    StateStore::instance().set_app_notice("\u4E0B\u8F7D\u5931\u8D25: " + title);  /* 下载失败: */
                                 }
-                                StateStore::instance().set_action_sheet_quality_ok(ok);
                             }).detach();
                         } else if (idx == 3) {
                             /* song detail (merged from the old d-key popup) */
@@ -2638,11 +2602,12 @@ int run_app(int argc, char **argv) {
             if (cur.active_panel == 0) {
                 if (cur.music_mode == MusicMode::Local) {
                     /* local groups: -1 (netease entry) sits at the TOP.
-                       Down wraps from the last group back to the entry. */
+                       Down wraps from the last group back to the entry.
+                       Hover only — the right panel fills on Enter. */
                     int n = (int)cur.groups.size();
                     if (n <= 0) return true;
                     int idx = (cur.group_index + 1 >= n) ? -1 : cur.group_index + 1;
-                    StateStore::instance().set_group_index(idx);
+                    StateStore::instance().set_group_hover(idx);
                 } else {
                     /* netease menu: local entry (-1) sits at the BOTTOM
                        of the list; Down loops through it. */
@@ -2690,13 +2655,14 @@ int run_app(int argc, char **argv) {
                 if (cur.music_mode == MusicMode::Local) {
                     /* local groups: -1 (netease entry) sits at the TOP.
                        Up from the first group returns to the entry;
-                       Up from the entry wraps to the last group. */
+                       Up from the entry wraps to the last group.
+                       Hover only — the right panel fills on Enter. */
                     int n = (int)cur.groups.size();
                     if (n <= 0) return true;
                     int idx = (cur.group_index <= 0)
                                   ? (cur.group_index == -1 ? n - 1 : -1)
                                   : cur.group_index - 1;
-                    StateStore::instance().set_group_index(idx);
+                    StateStore::instance().set_group_hover(idx);
                 } else {
                     /* netease menu: local entry (-1) sits at the BOTTOM.
                        Up from the first menu item wraps to local. */
@@ -2742,9 +2708,15 @@ int run_app(int argc, char **argv) {
                     StateStore::instance().set_active_panel(0);
                     StateStore::instance().set_group_index(-1);
                 } else if (cur.music_mode == MusicMode::Local) {
-                    /* A local group is selected: (re)fill the right panel
-                       with that group's songs. */
-                    StateStore::instance().set_group_index(cur.group_index);
+                    /* Enter a local group: push the local-home state onto
+                       the nav stack, then show the group's songs on the
+                       right (Esc returns to the group list). */
+                    if (cur.group_index >= 0 &&
+                        cur.group_index < (int)cur.groups.size()) {
+                        StateStore::instance().nav_push();
+                        StateStore::instance().set_group_index(cur.group_index);
+                        StateStore::instance().set_active_panel(1);
+                    }
                 } else if (cur.music_mode == MusicMode::Netease && cur.netease_selected >= 0) {
                     /* Load netease menu item content into right panel */
                     activate_netease_menu_item(cur.netease_selected);

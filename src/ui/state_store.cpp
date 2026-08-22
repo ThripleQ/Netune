@@ -357,10 +357,6 @@ void StateStore::set_action_sheet_pls(const std::vector<SongInfo> &pls) {
     }
 }
 
-void StateStore::set_action_sheet_quality_ok(const std::vector<int> &ok) {
-    state_.action_sheet_quality_ok = ok;
-}
-
 void StateStore::set_current_playlist_id(const std::string &id) {
     state_.current_playlist_id = id;
 }
@@ -457,6 +453,13 @@ void StateStore::set_groups(const std::vector<SongGroup> &grps) {
     validate_selection();
 }
 
+void StateStore::set_group_hover(int idx) {
+    if (idx < -1) idx = -1;
+    if (idx >= (int)state_.groups.size()) idx = (int)state_.groups.size() - 1;
+    state_.group_index = idx;
+    validate_selection();
+}
+
 void StateStore::set_group_index(int idx) {
     state_.group_index = idx;
     if (idx < 0) {
@@ -481,6 +484,7 @@ void StateStore::nav_push(void) {
     ns.active_panel     = state_.active_panel;
     ns.netease_menu     = state_.netease_menu;
     ns.netease_selected = state_.netease_selected;
+    ns.group_index      = state_.group_index;
     ns.search_active    = state_.search_active;
     ns.search_query     = state_.search_query;
     ns.search_scope     = state_.search_scope;
@@ -516,7 +520,15 @@ bool StateStore::nav_pop(void) {
     state_.active_panel     = 0;                 /* back to the menu layer */
     state_.netease_menu     = std::move(ns.netease_menu);
     state_.netease_selected = ns.netease_selected;
-    if (ns.restore_playlist) {
+    if (state_.music_mode == MusicMode::Local) {
+        /* Local mode: Esc leaves the group-songs layer and returns to
+           the group list. The right panel is KEPT (replaced only by the
+           next load), matching the netease-mode pop behaviour. */
+        state_.group_index   = ns.group_index;
+        state_.selected_index = 0;
+        for (auto &s : ns.playlist)
+            song_info_free(&s);
+    } else if (ns.restore_playlist) {
         state_.playlist = std::move(ns.playlist);
         state_.active_panel = 1;  /* land on the restored playlist list */
         /* keep the highlight on the playlist that was just entered */
