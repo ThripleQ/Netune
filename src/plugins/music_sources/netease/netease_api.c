@@ -6,6 +6,7 @@
 #include <string.h>
 #include <time.h>
 #include "compat/utf8.h"
+#include "compat/strings.h"   /* strncasecmp on MSVC -> _strnicmp */
 #ifndef _WIN32
 #include <unistd.h>
 #define STDERR_REDIRECT " 2>/dev/null"
