@@ -357,6 +357,28 @@ void StateStore::set_action_sheet_pls(const std::vector<SongInfo> &pls) {
     }
 }
 
+void StateStore::set_action_sheet_quality(const std::string &song_id,
+                                          const std::vector<int> &ok) {
+    /* probe results arriving for a song we're no longer looking at are
+       stale — the UI checks action_sheet_quality_id before trusting them. */
+    if (!song_id.empty() && state_.action_sheet_quality_id.empty())
+        state_.action_sheet_quality_id = song_id;
+    if (state_.action_sheet_quality_id != song_id) return;
+    state_.action_sheet_quality_ok = ok;
+}
+
+void StateStore::set_action_sheet_quality_br(const std::string &song_id,
+                                             const std::vector<int> &br) {
+    if (!song_id.empty() && state_.action_sheet_quality_id.empty())
+        state_.action_sheet_quality_id = song_id;
+    if (state_.action_sheet_quality_id != song_id) return;
+    state_.action_sheet_quality_br = br;
+}
+
+void StateStore::set_action_sheet_quality_probing(bool p) {
+    state_.action_sheet_quality_probing = p;
+}
+
 void StateStore::set_current_playlist_id(const std::string &id) {
     state_.current_playlist_id = id;
 }

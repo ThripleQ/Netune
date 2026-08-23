@@ -116,12 +116,26 @@ struct AppState {
     int  action_sheet_selected = 0;
     /* -1 = status querying, 0 = not liked/subscribed, 1 = liked/subscribed */
     int  action_sheet_active = -1;
-    /* state machine: 0=main menu, 1=playlist picker, 2=text input, 3=confirm */
+    /* state machine: 0=main menu, 1=playlist picker, 2=text input, 3=confirm,
+       4=download quality picker, 5=song detail */
     int  action_sheet_menu = 0;
     int  action_sheet_opt_count = 3;  /* number of options in menu 0 */
     std::string action_sheet_input;   /* text input buffer */
     std::string action_sheet_ctx;     /* operation context (song id / playlist id) */
     std::vector<SongInfo> action_sheet_pls;  /* my playlists for the picker */
+
+    /* download quality picker (menu 4): 5 levels, high→low.
+       1 = downloadable, 0 = denied (download API unusable → warning bg),
+       -1 = still probing, -2 = no source (hidden). action_sheet_quality_id
+       pins the probe results to the song the picker was opened for.
+       action_sheet_quality_br holds each tier's bitrate (0 = no source).
+       action_sheet_quality_probing is true while the source probe runs;
+       the picker shows a spinner instead of the level list until it lands. */
+    std::string action_sheet_quality_id;
+    std::vector<int> action_sheet_quality_ok;
+    std::vector<int> action_sheet_quality_br;
+    int  action_sheet_quality_count = 5;
+    bool action_sheet_quality_probing = false;
 
     /* current playlist context (for "remove from this playlist") */
     std::string current_playlist_id;
@@ -250,6 +264,11 @@ public:
     void set_action_sheet_input(const std::string &text);
     void set_action_sheet_ctx(const std::string &ctx);
     void set_action_sheet_pls(const std::vector<SongInfo> &pls);
+    void set_action_sheet_quality(const std::string &song_id,
+                                  const std::vector<int> &ok);
+    void set_action_sheet_quality_br(const std::string &song_id,
+                                     const std::vector<int> &br);
+    void set_action_sheet_quality_probing(bool p);
     void set_current_playlist_id(const std::string &id);
     void set_detail_playlist_mine(bool v);
     void set_song_detail(const std::vector<std::string> &lines);

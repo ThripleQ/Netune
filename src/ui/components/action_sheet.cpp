@@ -3,6 +3,7 @@
 #include "ui/theme.h"
 #include <string>
 #include <vector>
+#include <chrono>
 using namespace ftxui;
 
 /* ── Option rows for the main action menu (menu 0) ── */
@@ -15,6 +16,8 @@ Element render_action_sheet(const AppState &s) {
                        s.playlist[s.selected_index];
     bool is_playlist = item.is_playlist;
     std::string title = item.title ? item.title : "(nothing selected)";
+    if (s.action_sheet_menu == 4)
+        title = "\u4E0B\u8F7D\u97F3\u8D28: " + title;  /* 下载音质: <song> */
     auto &th = ThemeManager::instance().current();
 
     Elements body;
@@ -81,6 +84,61 @@ Element render_action_sheet(const AppState &s) {
         body.push_back(text(" \u786E\u8BA4\u5220\u9664\u6B4C\u5355? ") | bold
                        | color(Color::RGB(th.error.r, th.error.g, th.error.b)));
         body.push_back(text("  Enter \u786E\u8BA4  Esc \u53D6\u6D88 ") | dim);
+    } else if (s.action_sheet_menu == 4) {
+        /* download quality picker: high→low. Rows follow the track's
+           per-tier source table: -2 = no source (hidden), -1 = probing,
+           1 = exists (shown with bitrate), 0 = exists but denied. While
+           the source probe runs the list is replaced by a spinner. */
+        if (s.action_sheet_quality_probing) {
+            /* time-based spinner frames (independent of a stale start) */
+            auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            const char *frames[] = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"};
+            const char *f = frames[(now_ms / 16) % 10];
+            body.push_back(hbox({text(" " + std::string(f) + " "),
+                                 text("Loading...") | dim}));
+            body.push_back(text("  \u6B63\u5728\u68C0\u6D4B\u97F3\u8D28\u6E90...") | dim);  /* 正在检测音质源... */
+        } else {
+        static const char *const kNames[] = {
+            "Hi-Res", "\u65E0\u635F",      /* 无损 */
+            "\u6781\u9AD8", "\u8F83\u9AD8",  /* 极高 / 较高 */
+            "\u6807\u51C6"                   /* 标准 */
+        };
+        int count = s.action_sheet_quality_count > 0
+                    ? s.action_sheet_quality_count : 5;
+        for (int i = 0; i < count; i++) {
+            int st = (int)s.action_sheet_quality_ok.size() > i
+                     ? s.action_sheet_quality_ok[i] : -1;
+            if (st == -2) continue;  /* no source — don't show the row */
+            std::string label = " " + std::string(kNames[i]);
+            if (st == -1) {
+                label += " (\u68C0\u6D4B\u4E2D...)";  /* (检测中...) */
+            } else {
+                int br = (int)s.action_sheet_quality_br.size() > i
+                         ? s.action_sheet_quality_br[i] : 0;
+                if (br > 0) {
+                    /* format bitrate: <1000 → k, >=1000 → e.g. 1.77M */
+                    char bbuf[32];
+                    if (br >= 1000000) snprintf(bbuf, sizeof bbuf, " %.2fM",
+                                                br / 1000000.0);
+                    else               snprintf(bbuf, sizeof bbuf, " %dk", br / 1000);
+                    label += std::string(bbuf);
+                }
+                if (st == 0)
+                    label += " (\u4E0D\u53EF\u4E0B\u8F7D)";  /* (不可下载) */
+            }
+            auto row = text(label);
+            if ((int)i == s.action_sheet_selected)
+                row = hbox({theme_selection(text(" \u203A ")), row | bold}) | focus;
+            else
+                row = hbox({text("   "), row});
+            if (st == 0) {
+                /* mark denied tiers with a warning background */
+                row = row | bgcolor(Color::RGB(th.warning.r, th.warning.g, th.warning.b));
+            }
+            body.push_back(row);
+        }
+        }
     } else if (s.action_sheet_menu == 5) {
         /* song detail (was the d-key popup, merged into the action sheet) */
         if (s.song_detail_lines.empty()) {

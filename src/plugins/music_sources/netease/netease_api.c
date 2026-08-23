@@ -949,14 +949,130 @@ int netease_menu_songs(int type, int limit, SongInfo **out, int *count) {
 /* ── Play URL ──────────────────────────────────────── */
 int netease_play_url(const char *id, char *url, size_t sz) {
     return netease_song_url(id, "standard", url, sz);
-}
-
-int netease_song_url(const char *id, const char *level, char *url, size_t sz) {
+}int netease_song_url(const char *id, const char *level, char *url, size_t sz) {
     if (!id || !url || sz == 0) return -1;
     const char *lvl = (level && level[0]) ? level : "standard";
     char *esc = shell_escape(id);
     char *j = run("%s song-url %s %s%s", CLI, esc, lvl, STDERR_REDIRECT);
     free(esc);
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) { if (sz > 0) url[0] = 0; return -1; }
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *data = jget_arr(root, "data");
+    int r = -1;
+    if (data) {
+        yyjson_val *first = yyjson_arr_get_first(data);
+        if (first && yyjson_is_obj(first)) {
+            /* item code gates the download: 200 = ok, -120 = no download
+               permission (VIP-gated), -110 = track unavailable, -103 = no
+               permission. url is null for all of these, but check the code
+               explicitly so a denied tier is never treated as success. */
+            long long icode = jget_int(first, "code");
+            const char *u = jget_str(first, "url");
+            if (icode == 200 && u && u[0]) { snprintf(url, sz, "%s", u); r = 0; }
+        }
+    }
+    yyjson_doc_free(doc);
+    if (r != 0 && sz > 0) url[0] = 0;
+    return r;
+}
+
+/* ── Download ───────────────────────────────────────── */
+/* Quality ladder, highest first: used for fallback when the requested
+   level is unavailable (VIP-gated, region-locked, ...). */
+static const char *const kQualityLadder[] = {
+    "hires", "lossless", "exhigh", "higher", "standard"
+};
+
+/* check-quality <id> <level> — single-level entitlement probe against the
+   play endpoint (player/url/v1). *granted=1 only when the server would
+   hand out that exact level (reason "ok"); anything else (free_trial,
+   denied, no_url, no_data) means the level isn't downloadable. */
+int netease_check_quality(const char *id, const char *level, int *granted) {
+    if (!id || !level || !granted) return -1;
+    char *esc = shell_escape(id);
+    char *esc_lv = shell_escape(level);
+    char *j = run("%s check-quality %s %s%s", CLI, esc, esc_lv, STDERR_REDIRECT);
+    free(esc); free(esc_lv);
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    int rv = -1;
+    if (root && yyjson_is_obj(root)) {
+        *granted = jget_bool(root, "granted") ? 1 : 0;
+        rv = 0;
+    }
+    yyjson_doc_free(doc);
+    return rv;
+}
+
+/* song-music-quality <id> — authoritative per-tier source probe. Returns a
+   bitmask of which quality tiers the track actually has a file for, in
+   kQualityLadder order (hires=bit0, lossless=bit1, exhigh=bit2,
+   higher=bit3, standard=bit4). A song with no lossless/hires source simply
+   has those bits clear — this is what tells the download picker that a
+   "lossless" download would silently come back as 320k mp3. 0 = ok. */
+#define NQ_HIRES    (1u << 0)
+#define NQ_LOSSLESS (1u << 1)
+#define NQ_EXHIGH   (1u << 2)
+#define NQ_HIGHER   (1u << 3)
+#define NQ_STANDARD (1u << 4)
+int netease_song_music_quality(const char *id, unsigned *mask_out,
+                               int *br_out /* [5], ladder order, 0 = no source */) {
+    if (!id || !mask_out) return -1;
+    if (br_out)
+        for (int i = 0; i < 5; i++) br_out[i] = 0;
+    char *esc = shell_escape(id);
+    char *j = run("%s song-music-quality %s%s", CLI, esc, STDERR_REDIRECT);
+    free(esc);
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    int rv = -1;
+    unsigned mask = 0;
+    if (root && yyjson_is_obj(root)) {
+        yyjson_val *data = jget_obj(root, "data");
+        if (data && yyjson_is_obj(data)) {
+            static const struct { const char *k; unsigned bit; } tier[] = {
+                { "hr", NQ_HIRES }, { "sq", NQ_LOSSLESS }, { "h", NQ_EXHIGH },
+                { "m", NQ_HIGHER }, { "l", NQ_STANDARD }
+            };
+            for (size_t i = 0; i < sizeof(tier)/sizeof(tier[0]); i++) {
+                yyjson_val *v = yyjson_obj_get(data, tier[i].k);
+                if (v && yyjson_is_obj(v)) {
+                    mask |= tier[i].bit;
+                    if (br_out) {
+                        yyjson_val *b = yyjson_obj_get(v, "br");
+                        if (b && yyjson_is_num(b))
+                            br_out[i] = (int)yyjson_get_int(b);
+                    }
+                }
+            }
+            *mask_out = mask;
+            rv = 0;
+        }
+    }
+    yyjson_doc_free(doc);
+    return rv;
+}
+
+/* song-download-url <id> <level> — the OFFICIAL download endpoint
+   (weapi/song/enhance/download/url/v1). Unlike the play URL this channel
+   can serve up to Hi-Res even for free tracks, but VIP-gated levels come
+   back denied there. Returns the URL (0 = ok) or -1. */
+int netease_download_url(const char *id, const char *level, char *url, size_t sz) {
+    if (!id || !url || sz == 0) return -1;
+    const char *lvl = (level && level[0]) ? level : "standard";
+    char *esc = shell_escape(id);
+    char *esc_lv = shell_escape(lvl);
+    char *j = run("%s song-download-url %s %s%s", CLI, esc, esc_lv, STDERR_REDIRECT);
+    free(esc); free(esc_lv);
     if (!j) return -1;
     yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
     free(j);
@@ -976,17 +1092,17 @@ int netease_song_url(const char *id, const char *level, char *url, size_t sz) {
     return r;
 }
 
-/* ── Download ───────────────────────────────────────── */
-/* Quality ladder, highest first: used for fallback when the requested
-   level is unavailable (VIP-gated, region-locked, ...). */
-static const char *const kQualityLadder[] = {
-    "hires", "lossless", "exhigh", "higher", "standard"
-};
-
 char* netease_download_song(const char *id, const char *level,
                             const char *title, char *used_level,
                             size_t used_sz) {
     if (!id) return NULL;
+
+    /* Official download endpoint applies to the high tiers; the lower
+       tiers (standard/higher/exhigh) are served by the same stream the
+       player uses, so grab those from the play URL. */
+    static const char *const kDownloadApiLevels[] = {
+        "hires", "lossless", NULL
+    };
 
     const char *want = (level && level[0]) ? level : "standard";
     int start = 4;  /* index of "standard" */
@@ -997,10 +1113,15 @@ char* netease_download_song(const char *id, const char *level,
     char dl_url[4096];
     const char *used = NULL;
     for (int i = start; i < 5; i++) {
-        if (netease_song_url(id, kQualityLadder[i], dl_url, sizeof(dl_url)) == 0) {
-            used = kQualityLadder[i];
-            break;
+        const char *lvl = kQualityLadder[i];
+        int via_dl = 0;
+        for (int k = 0; kDownloadApiLevels[k]; k++) {
+            if (strcmp(kDownloadApiLevels[k], lvl) == 0) { via_dl = 1; break; }
         }
+        int ok = via_dl
+            ? (netease_download_url(id, lvl, dl_url, sizeof(dl_url)) == 0)
+            : (netease_song_url(id, lvl, dl_url, sizeof(dl_url)) == 0);
+        if (ok) { used = lvl; break; }
     }
     if (!used) return NULL;
     if (used_level && used_sz > 0)

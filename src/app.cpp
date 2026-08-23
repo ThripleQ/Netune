@@ -1688,7 +1688,7 @@ int run_app(int argc, char **argv) {
                The action sheet (Ctrl+X) also gets fast frames so its
                status query / state flips feel responsive. */
 #ifdef _WIN32
-            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open)
+            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open || st.action_sheet_quality_probing)
                       ? 33 : 200;
 #else
             /* marquee-scrolling selected row needs smooth frames even
@@ -1697,7 +1697,7 @@ int run_app(int argc, char **argv) {
             bool marquee_row = (st.active_panel == 1 &&
                                 !st.playlist.empty() &&
                                 !st.top_search_active);
-            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open || marquee_row)
+            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open || st.action_sheet_quality_probing || marquee_row)
                       ? 16 : 200;
 #endif
             std::this_thread::sleep_for(std::chrono::milliseconds(ms));
@@ -1957,21 +1957,47 @@ int run_app(int argc, char **argv) {
                 if (k == "j" || k == "down") {
                     int n = (as.action_sheet_menu == 1)
                         ? (int)as.action_sheet_pls.size()
+                        : (as.action_sheet_menu == 4) ? as.action_sheet_quality_count
                         : as.action_sheet_opt_count;
                     if (n <= 0) n = 1;
-                    state.set_action_sheet(true, (as.action_sheet_selected + 1) % n);
+                    int sel = as.action_sheet_selected;
+                    if (as.action_sheet_menu == 4) {
+                        /* skip hidden (no-source) tiers */
+                        for (int step = 0; step < n; step++) {
+                            sel = (sel + 1) % n;
+                            if (as.action_sheet_quality_ok.size() > (size_t)sel &&
+                                as.action_sheet_quality_ok[sel] != -2)
+                                break;
+                        }
+                        state.set_action_sheet(true, sel);
+                    } else {
+                        state.set_action_sheet(true, (sel + 1) % n);
+                    }
                     return true;
                 }
                 if (k == "k" || k == "up") {
                     int n = (as.action_sheet_menu == 1)
                         ? (int)as.action_sheet_pls.size()
+                        : (as.action_sheet_menu == 4) ? as.action_sheet_quality_count
                         : as.action_sheet_opt_count;
                     if (n <= 0) n = 1;
-                    state.set_action_sheet(true, (as.action_sheet_selected + n - 1) % n);
+                    int sel = as.action_sheet_selected;
+                    if (as.action_sheet_menu == 4) {
+                        for (int step = 0; step < n; step++) {
+                            sel = (sel + n - 1) % n;
+                            if (as.action_sheet_quality_ok.size() > (size_t)sel &&
+                                as.action_sheet_quality_ok[sel] != -2)
+                                break;
+                        }
+                        state.set_action_sheet(true, sel);
+                    } else {
+                        state.set_action_sheet(true, (sel + n - 1) % n);
+                    }
                     return true;
                 }
                 if (k == "escape") {
-                    if (as.action_sheet_menu == 1 || as.action_sheet_menu == 5) {
+                    if (as.action_sheet_menu == 1 || as.action_sheet_menu == 4 ||
+                        as.action_sheet_menu == 5) {
                         state.set_action_sheet_menu(0);
                         state.set_action_sheet(true, 0);
                     } else {
@@ -1980,6 +2006,74 @@ int run_app(int argc, char **argv) {
                     return true;
                 }
                 if (k == "enter" || k == "\r") {
+                    if (as.action_sheet_menu == 4) {
+                        /* download quality picker: Enter starts the download
+                           for the selected level. Denied levels (probed as
+                           unusable via the download api) are refused with a
+                           notice. */
+                        static const char *const kLevels[] = {
+                            "hires", "lossless", "exhigh", "higher", "standard"
+                        };
+                        int qi = as.action_sheet_selected;
+                        if (qi < 0 || qi > 4) return true;
+                        /* a hidden (no-source) tier can't be entered: move to
+                           the first visible one */
+                        if ((int)as.action_sheet_quality_ok.size() > qi &&
+                            as.action_sheet_quality_ok[qi] == -2) {
+                            for (int i = 0; i < 5; i++) {
+                                if ((int)as.action_sheet_quality_ok.size() <= i ||
+                                    as.action_sheet_quality_ok[i] != -2) {
+                                    qi = i;
+                                    break;
+                                }
+                            }
+                            state.set_action_sheet(true, qi);
+                        }
+                        const auto &qitem = as.playlist[as.selected_index];
+                        std::string qid = qitem.id ? qitem.id : "";
+                        if (qid.empty()) return true;
+                        if (as.action_sheet_quality_id != qid) return true; /* stale picker */
+                        /* deny only a probed-unusable level (-1 = still
+                           probing → allow, the ladder falls back anyway) */
+                        if ((int)as.action_sheet_quality_ok.size() > qi &&
+                            as.action_sheet_quality_ok[qi] == 0) {
+                            StateStore::instance().set_app_notice(
+                                "\u8BE5\u97F3\u8D28\u4E0D\u53EF\u4E0B\u8F7D");  /* 该音质不可下载 */
+                            return true;
+                        }
+                        std::string lvl = kLevels[qi];
+                        std::string title = qitem.title ? qitem.title : qid;
+                        state.set_action_sheet(false, 0);
+                        std::thread([qid, title, lvl]() {
+                            char used_lvl[32] = {0};
+                            char *path = netease_download_song(qid.c_str(), lvl.c_str(),
+                                                               title.c_str(), used_lvl,
+                                                               sizeof(used_lvl));
+                            if (path) {
+                                LOG_INFO("DOWNLOAD ok: %s (%s)", path,
+                                         used_lvl[0] ? used_lvl : lvl.c_str());
+                                /* register the download dir into the local
+                                   source so the file shows up in 本地 */
+                                const char *root = netune_data_root();
+                                char dl_dir[1024];
+                                snprintf(dl_dir, sizeof(dl_dir), "%s" PATH_SEP "downloads", root);
+                                local_register_download_dir(dl_dir);
+                                /* refresh the local-music groups on the main
+                                   thread so the new file shows up right away */
+                                event_bus_publish(EV_LOCAL_REFRESH, NULL, 0);
+                                std::string msg = "\u5DF2\u4E0B\u8F7D: " + title;  /* 已下载: */
+                                if (used_lvl[0])
+                                    msg += " (" + std::string(used_lvl) + ")";
+                                StateStore::instance().set_app_notice(msg);
+                                free(path);
+                            } else {
+                                LOG_WARN("DOWNLOAD failed: %s", qid.c_str());
+                                StateStore::instance().set_app_notice(
+                                    "\u4E0B\u8F7D\u5931\u8D25: " + title);  /* 下载失败: */
+                            }
+                        }).detach();
+                        return true;
+                    }
                     const auto &item = as.playlist[as.selected_index];
                     std::string id = item.id ? item.id : "";
                     if (as.action_sheet_menu == 1) {
@@ -2055,39 +2149,50 @@ int run_app(int argc, char **argv) {
                                 }
                             }).detach();
                         } else if (idx == 2) {
-                            /* download: no quality picker — just start.
-                               Use the highest quality the source gives
-                               us (ladder starts at hires and falls back
-                               through lossless/exhigh/higher/standard). */
-                            std::string title = item.title ? item.title : id;
-                            state.set_action_sheet(false, 0);
-                            std::thread([id, title]() {
-                                char used_lvl[32] = {0};
-                                char *path = netease_download_song(id.c_str(), "hires",
-                                                                   title.c_str(), used_lvl,
-                                                                   sizeof(used_lvl));
-                                if (path) {
-                                    LOG_INFO("DOWNLOAD ok: %s (%s)", path,
-                                             used_lvl[0] ? used_lvl : "hires");
-                                    /* register the download dir into the local
-                                       source so the file shows up in 本地 */
-                                    const char *root = netune_data_root();
-                                    char dl_dir[1024];
-                                    snprintf(dl_dir, sizeof(dl_dir), "%s" PATH_SEP "downloads", root);
-                                    local_register_download_dir(dl_dir);
-                                    /* refresh the local-music groups on the
-                                       main thread so the new file shows up
-                                       in 本地 right away */
-                                    event_bus_publish(EV_LOCAL_REFRESH, NULL, 0);
-                                    std::string msg = "\u5DF2\u4E0B\u8F7D: " + title;  /* 已下载: */
-                                    if (used_lvl[0])
-                                        msg += " (" + std::string(used_lvl) + ")";
-                                    StateStore::instance().set_app_notice(msg);
-                                    free(path);
+                            /* download → quality picker (menu 4). Levels are
+                               listed high→low. A tier with no source in the
+                               track's per-tier source table
+                               (song-music-quality) is hidden (-2); tiers that
+                               exist are shown with their bitrate. */
+                            std::vector<int> ok = { -1, -1, 1, 1, 1 };
+                            StateStore::instance().set_action_sheet_quality(id, ok);
+                            state.set_action_sheet_menu(4);
+                            state.set_action_sheet(true, 0);
+                            /* kick off the authoritative source probe. The
+                               picker shows a spinner until it lands (then the
+                               level list appears with bitrates). */
+                            StateStore::instance().set_action_sheet_quality_probing(true);
+                            std::thread([id]() {
+                                unsigned mask = 0;
+                                int br[5] = {0,0,0,0,0};
+                                std::vector<int> res = { -1, -1, 1, 1, 1 };
+                                if (netease_song_music_quality(id.c_str(), &mask, br) == 0) {
+                                    static const unsigned bits[] = {
+                                        NQ_HIRES, NQ_LOSSLESS, NQ_EXHIGH,
+                                        NQ_HIGHER, NQ_STANDARD
+                                    };
+                                    for (int i = 0; i < 5; i++)
+                                        res[i] = (mask & bits[i]) ? 1 : -2;
+                                    std::vector<int> brv(br, br + 5);
+                                    StateStore::instance().set_action_sheet_quality_br(id, brv);
                                 } else {
-                                    LOG_WARN("DOWNLOAD failed: %s", id.c_str());
-                                    StateStore::instance().set_app_notice("\u4E0B\u8F7D\u5931\u8D25: " + title);  /* 下载失败: */
+                                    res = { -2, -2, 1, 1, 1 };
                                 }
+                                StateStore::instance().set_action_sheet_quality(id, res);
+                                /* a tier that turned out hidden (no source)
+                                   must not keep the selection: park on the
+                                   first visible one so the `>` marker is
+                                   immediately on a real entry. */
+                                const auto &st = StateStore::instance().state();
+                                int sel = st.action_sheet_selected;
+                                if ((size_t)sel < res.size() && res[sel] == -2) {
+                                    int target = 0;
+                                    for (; target < 5; target++)
+                                        if ((size_t)target >= res.size() ||
+                                            res[target] != -2) break;
+                                    StateStore::instance().set_action_sheet(true, target);
+                                }
+                                StateStore::instance().set_action_sheet_quality_probing(false);
                             }).detach();
                         } else if (idx == 3) {
                             /* song detail (merged from the old d-key popup) */

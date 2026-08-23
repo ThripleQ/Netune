@@ -82,6 +82,31 @@ char* netease_download_song(const char *song_id, const char *level,
                             const char *title, char *used_level,
                             size_t used_sz);
 
+/* Single-level entitlement probe (check-quality): *granted=1 only when the
+   play endpoint would serve `level` (standard/higher/exhigh/lossless/hires)
+   for this song. 0 = ok, *granted set; -1 = probe failed. */
+int  netease_check_quality(const char *song_id, const char *level,
+                           int *granted);
+
+/* Authoritative per-tier source probe (song-music-quality): *mask_out
+   receives a bitmask (NQ_HIRES|NQ_LOSSLESS|NQ_EXHIGH|NQ_HIGHER|NQ_STANDARD)
+   of which levels the track actually has a file for. br_out (optional, 5
+   ints, ladder order) receives each tier's bitrate, 0 = no source.
+   0 = ok, -1 = failed. */
+#define NQ_HIRES    (1u << 0)
+#define NQ_LOSSLESS (1u << 1)
+#define NQ_EXHIGH   (1u << 2)
+#define NQ_HIGHER   (1u << 3)
+#define NQ_STANDARD (1u << 4)
+int  netease_song_music_quality(const char *song_id, unsigned *mask_out,
+                                int *br_out);
+
+/* Official download endpoint (song-download-url). Unlike the play URL this
+   channel can serve up to Hi-Res even for free tracks, but VIP-gated levels
+   come back denied. Returns the URL (0 = ok) or -1. */
+int  netease_download_url(const char *song_id, const char *level,
+                          char *url, size_t url_sz);
+
 /* ── Lyrics ────────────────────────────────────────── */
 /* Fetch lyrics from Netease. buf is allocated/filled with parsed LRC text.
    Returns 0 on success, -1 on error. Caller must free *buf. */
