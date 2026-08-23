@@ -134,7 +134,7 @@ struct AppState {
     std::string action_sheet_quality_id;
     std::vector<int> action_sheet_quality_ok;
     std::vector<int> action_sheet_quality_br;
-    int  action_sheet_quality_count = 5;
+    int  action_sheet_quality_count = 8;
     bool action_sheet_quality_probing = false;
 
     /* current playlist context (for "remove from this playlist") */

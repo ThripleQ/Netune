@@ -125,6 +125,10 @@ void ThemeManager::derive_colors() {
     if (!theme_.vip.has_color)
         theme_.vip = theme_.warning;
 
+    /* svip: violet-ish (defaults to vip) */
+    if (!theme_.svip.has_color)
+        theme_.svip = theme_color_from_hex("#bb9af7");
+
     /* playlist: cyan-ish (defaults to accent) */
     if (!theme_.playlist.has_color)
         theme_.playlist = theme_.accent;
@@ -193,7 +197,7 @@ bool ThemeManager::load(const std::string &yaml_path) {
         std::string hex_bg, hex_fg, hex_accent;
         std::string hex_accent_bg, hex_muted, hex_border;
         std::string hex_success, hex_warning, hex_error, hex_overlay_bg, hex_spectrum;
-        std::string hex_vip, hex_playlist, hex_logo;
+        std::string hex_vip, hex_svip, hex_playlist, hex_logo;
         std::string hex_progress_track;
         std::string current_field;
 
@@ -221,6 +225,7 @@ bool ThemeManager::load(const std::string &yaml_path) {
                         else if (current_field == "progress_track") hex_progress_track = val;
                         else if (current_field == "spectrum")    hex_spectrum    = val;
                         else if (current_field == "vip")         hex_vip         = val;
+                        else if (current_field == "svip")        hex_svip        = val;
                         else if (current_field == "playlist")    hex_playlist    = val;
                         else if (current_field == "logo")         hex_logo        = val;
                         current_field.clear();
@@ -254,6 +259,7 @@ bool ThemeManager::load(const std::string &yaml_path) {
         if (!hex_progress_track.empty()) theme_.progress_track = theme_color_from_hex(hex_progress_track);
         if (!hex_spectrum.empty())    theme_.spectrum    = theme_color_from_hex(hex_spectrum);
         if (!hex_vip.empty())         theme_.vip         = theme_color_from_hex(hex_vip);
+        if (!hex_svip.empty())        theme_.svip        = theme_color_from_hex(hex_svip);
         if (!hex_playlist.empty())    theme_.playlist    = theme_color_from_hex(hex_playlist);
         if (!hex_logo.empty())        theme_.logo        = theme_color_from_hex(hex_logo);
 

@@ -146,6 +146,7 @@ static const ColorSlot kSlots[] = {
     {"progress_track", "进度条轨道", &Theme::progress_track},
     {"spectrum",       "频谱",      &Theme::spectrum},
     {"vip",            "VIP 标记",  &Theme::vip},
+    {"svip",           "SVIP 标记", &Theme::svip},
     {"playlist",       "歌单标记",  &Theme::playlist},
     {"logo",           "网易云Logo", &Theme::logo},
 };
@@ -427,6 +428,7 @@ static const char *kThemeTemplate =
     "  warning: \"#e0af68\"\n"
     "  error: \"#f7768e\"\n"
     "  vip: \"#e0af68\"\n"
+    "  svip: \"#bb9af7\"\n"
     "  playlist: \"#7dcfff\"\n"
     "  logo: \"#7dcfff\"\n"
     "  overlay_bg: \"#16161e\"\n";

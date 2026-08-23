@@ -100,12 +100,17 @@ Element render_action_sheet(const AppState &s) {
             body.push_back(text("  \u6B63\u5728\u68C0\u6D4B\u97F3\u8D28\u6E90...") | dim);  /* 正在检测音质源... */
         } else {
         static const char *const kNames[] = {
-            "Hi-Res", "\u65E0\u635F",      /* 无损 */
-            "\u6781\u9AD8", "\u8F83\u9AD8",  /* 极高 / 较高 */
-            "\u6807\u51C6"                   /* 标准 */
+            "\u8D85\u6E05\u6BCD\u5E26",      /* 超清母带 jymaster */
+            "\u6C89\u6D78\u73AF\u7ED5",      /* 沉浸环绕 sky */
+            "\u9AD8\u6E05\u81FB\u97F3",      /* 高清臻音 jyeffect */
+            "Hi-Res",                         /* hires */
+            "\u65E0\u635F",                   /* 无损 lossless */
+            "\u6781\u9AD8",                   /* 极高 exhigh */
+            "\u8F83\u9AD8",                   /* 较高 higher */
+            "\u6807\u51C6"                    /* 标准 standard */
         };
         int count = s.action_sheet_quality_count > 0
-                    ? s.action_sheet_quality_count : 5;
+                    ? s.action_sheet_quality_count : 8;
         for (int i = 0; i < count; i++) {
             int st = (int)s.action_sheet_quality_ok.size() > i
                      ? s.action_sheet_quality_ok[i] : -1;
@@ -125,7 +130,9 @@ Element render_action_sheet(const AppState &s) {
                     label += std::string(bbuf);
                 }
                 if (st == 0)
-                    label += " (\u4E0D\u53EF\u4E0B\u8F7D)";  /* (不可下载) */
+                    label += " \u25CFVIP";       /* ●VIP */
+                else if (st == 2)
+                    label += " \u25CFSVIP";      /* ●SVIP */
             }
             auto row = text(label);
             if ((int)i == s.action_sheet_selected)
@@ -133,8 +140,11 @@ Element render_action_sheet(const AppState &s) {
             else
                 row = hbox({text("   "), row});
             if (st == 0) {
-                /* mark denied tiers with a warning background */
-                row = row | bgcolor(Color::RGB(th.warning.r, th.warning.g, th.warning.b));
+                /* VIP-gated tier: colour with the theme's VIP colour */
+                row = row | color(Color::RGB(th.vip.r, th.vip.g, th.vip.b));
+            } else if (st == 2) {
+                /* SVIP-gated tier: colour with the theme's SVIP colour */
+                row = row | color(Color::RGB(th.svip.r, th.svip.g, th.svip.b));
             }
             body.push_back(row);
         }

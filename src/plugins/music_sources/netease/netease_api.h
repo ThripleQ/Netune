@@ -89,15 +89,19 @@ int  netease_check_quality(const char *song_id, const char *level,
                            int *granted);
 
 /* Authoritative per-tier source probe (song-music-quality): *mask_out
-   receives a bitmask (NQ_HIRES|NQ_LOSSLESS|NQ_EXHIGH|NQ_HIGHER|NQ_STANDARD)
-   of which levels the track actually has a file for. br_out (optional, 5
-   ints, ladder order) receives each tier's bitrate, 0 = no source.
-   0 = ok, -1 = failed. */
-#define NQ_HIRES    (1u << 0)
-#define NQ_LOSSLESS (1u << 1)
-#define NQ_EXHIGH   (1u << 2)
-#define NQ_HIGHER   (1u << 3)
-#define NQ_STANDARD (1u << 4)
+   receives a bitmask (NQ_JYMASTER|NQ_SKY|NQ_JYEFFECT|NQ_HIRES|NQ_LOSSLESS|
+   NQ_EXHIGH|NQ_HIGHER|NQ_STANDARD) of which levels the track actually has
+   a file for, high→low. br_out (optional, NQ_LEVELS ints, same order)
+   receives each tier's bitrate, 0 = no source. 0 = ok, -1 = failed. */
+#define NQ_JYMASTER  (1u << 0)
+#define NQ_SKY       (1u << 1)
+#define NQ_JYEFFECT  (1u << 2)
+#define NQ_HIRES     (1u << 3)
+#define NQ_LOSSLESS  (1u << 4)
+#define NQ_EXHIGH    (1u << 5)
+#define NQ_HIGHER    (1u << 6)
+#define NQ_STANDARD  (1u << 7)
+#define NQ_LEVELS    8
 int  netease_song_music_quality(const char *song_id, unsigned *mask_out,
                                 int *br_out);
 
@@ -106,6 +110,10 @@ int  netease_song_music_quality(const char *song_id, unsigned *mask_out,
    come back denied. Returns the URL (0 = ok) or -1. */
 int  netease_download_url(const char *song_id, const char *level,
                           char *url, size_t url_sz);
+
+/* Account VIP entitlement for download gating (vip-info). Mirrors the
+   client: 0 = none, 1 = black-vinyl VIP, 2 = SVIP, -1 = error. */
+int  netease_vip_level(void);
 
 /* ── Lyrics ────────────────────────────────────────── */
 /* Fetch lyrics from Netease. buf is allocated/filled with parsed LRC text.

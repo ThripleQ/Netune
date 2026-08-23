@@ -1413,6 +1413,7 @@ static const char *DEFAULT_THEME_DEFAULT_YAML =
     "  warning: \"#e0af68\"\n"
     "  error: \"#f7768e\"\n"
     "  vip: \"#e0af68\"\n"
+    "  svip: \"#bb9af7\"\n"
     "  playlist: \"#7dcfff\"\n"
     "  logo: \"#7dcfff\"\n"
     "  overlay_bg: \"#16161e\"\n";
@@ -1424,6 +1425,7 @@ static const char *DEFAULT_THEME_CATPPUCCIN_YAML =
     "  fg: \"#cdd6f4\"\n"
     "  accent: \"#89b4fa\"\n"
     "  vip: \"#f9e2af\"\n"
+    "  svip: \"#b4befe\"\n"
     "  playlist: \"#94e2d5\"\n"
     "  logo: \"#94e2d5\"\n";
 
@@ -1434,6 +1436,7 @@ static const char *DEFAULT_THEME_DRACULA_YAML =
     "  fg: \"#f8f8f2\"\n"
     "  accent: \"#bd93f9\"\n"
     "  vip: \"#f1fa8c\"\n"
+    "  svip: \"#bd93f9\"\n"
     "  playlist: \"#8be9fd\"\n"
     "  logo: \"#8be9fd\"\n";
 
@@ -1444,6 +1447,7 @@ static const char *DEFAULT_THEME_NETEASE_DARK_YAML =
     "  fg: \"#c8c8dc\"\n"
     "  accent: \"#e3322d\"\n"
     "  vip: \"#e8c547\"\n"
+    "  svip: \"#b78af7\"\n"
     "  playlist: \"#4aa3df\"\n"
     "  logo: \"#4aa3df\"\n";
 
@@ -1454,6 +1458,7 @@ static const char *DEFAULT_THEME_NETEASE_LIGHT_YAML =
     "  fg: \"#333333\"\n"
     "  accent: \"#d43c33\"\n"
     "  vip: \"#c9a227\"\n"
+    "  svip: \"#8a5cf6\"\n"
     "  playlist: \"#2d7bb5\"\n"
     "  logo: \"#2d7bb5\"\n";
 
@@ -2012,15 +2017,17 @@ int run_app(int argc, char **argv) {
                            unusable via the download api) are refused with a
                            notice. */
                         static const char *const kLevels[] = {
-                            "hires", "lossless", "exhigh", "higher", "standard"
+                            "jymaster", "sky", "jyeffect", "hires", "lossless",
+                            "exhigh", "higher", "standard"
                         };
                         int qi = as.action_sheet_selected;
-                        if (qi < 0 || qi > 4) return true;
+                        if (qi < 0 || qi >= (int)(sizeof(kLevels)/sizeof(kLevels[0])))
+                            return true;
                         /* a hidden (no-source) tier can't be entered: move to
                            the first visible one */
                         if ((int)as.action_sheet_quality_ok.size() > qi &&
                             as.action_sheet_quality_ok[qi] == -2) {
-                            for (int i = 0; i < 5; i++) {
+                            for (int i = 0; i < (int)(sizeof(kLevels)/sizeof(kLevels[0])); i++) {
                                 if ((int)as.action_sheet_quality_ok.size() <= i ||
                                     as.action_sheet_quality_ok[i] != -2) {
                                     qi = i;
@@ -2033,13 +2040,20 @@ int run_app(int argc, char **argv) {
                         std::string qid = qitem.id ? qitem.id : "";
                         if (qid.empty()) return true;
                         if (as.action_sheet_quality_id != qid) return true; /* stale picker */
-                        /* deny only a probed-unusable level (-1 = still
-                           probing → allow, the ladder falls back anyway) */
-                        if ((int)as.action_sheet_quality_ok.size() > qi &&
-                            as.action_sheet_quality_ok[qi] == 0) {
-                            StateStore::instance().set_app_notice(
-                                "\u8BE5\u97F3\u8D28\u4E0D\u53EF\u4E0B\u8F7D");  /* 该音质不可下载 */
-                            return true;
+                        /* deny tiers gated by VIP (0) / SVIP (2); -1 = still
+                           probing → allow, the ladder falls back anyway */
+                        if ((int)as.action_sheet_quality_ok.size() > qi) {
+                            int qs = as.action_sheet_quality_ok[qi];
+                            if (qs == 0) {
+                                StateStore::instance().set_app_notice(
+                                    "\u9700\u9ED1\u80F6VIP\u53EF\u4E0B\u8F7D");  /* 需黑胶VIP可下载 */
+                                return true;
+                            }
+                            if (qs == 2) {
+                                StateStore::instance().set_app_notice(
+                                    "\u9700SVIP\u53EF\u4E0B\u8F7D");  /* 需SVIP可下载 */
+                                return true;
+                            }
                         }
                         std::string lvl = kLevels[qi];
                         std::string title = qitem.title ? qitem.title : qid;
@@ -2150,33 +2164,55 @@ int run_app(int argc, char **argv) {
                             }).detach();
                         } else if (idx == 2) {
                             /* download → quality picker (menu 4). Levels are
-                               listed high→low. A tier with no source in the
-                               track's per-tier source table
-                               (song-music-quality) is hidden (-2); tiers that
-                               exist are shown with their bitrate. */
-                            std::vector<int> ok = { -1, -1, 1, 1, 1 };
+                               listed high→low (jymaster…standard). A tier
+                               with no source in the track's per-tier source
+                               table (song-music-quality) is hidden (-2);
+                               tiers that exist are shown with their bitrate. */
+                            std::vector<int> ok(NQ_LEVELS, -1);
                             StateStore::instance().set_action_sheet_quality(id, ok);
                             state.set_action_sheet_menu(4);
                             state.set_action_sheet(true, 0);
                             /* kick off the authoritative source probe. The
                                picker shows a spinner until it lands (then the
-                               level list appears with bitrates). */
+                               level list appears with bitrates). Eligibility
+                               mirrors the client: free tiers always available;
+                               sq/je need black-vinyl VIP (VIP colour); sk/jm
+                               need SVIP (SVIP colour); VIP-paid tracks are
+                               only downloadable when owned. */
                             StateStore::instance().set_action_sheet_quality_probing(true);
-                            std::thread([id]() {
+                            const int fee = item.fee;
+                            std::thread([id, fee]() {
                                 unsigned mask = 0;
-                                int br[5] = {0,0,0,0,0};
-                                std::vector<int> res = { -1, -1, 1, 1, 1 };
+                                int br[NQ_LEVELS] = {0};
+                                std::vector<int> res(NQ_LEVELS, -1);
                                 if (netease_song_music_quality(id.c_str(), &mask, br) == 0) {
-                                    static const unsigned bits[] = {
-                                        NQ_HIRES, NQ_LOSSLESS, NQ_EXHIGH,
-                                        NQ_HIGHER, NQ_STANDARD
+                                    static const unsigned bits[NQ_LEVELS] = {
+                                        NQ_JYMASTER, NQ_SKY, NQ_JYEFFECT, NQ_HIRES,
+                                        NQ_LOSSLESS, NQ_EXHIGH, NQ_HIGHER, NQ_STANDARD
                                     };
-                                    for (int i = 0; i < 5; i++)
-                                        res[i] = (mask & bits[i]) ? 1 : -2;
-                                    std::vector<int> brv(br, br + 5);
+                                    int vip = netease_vip_level();  /* 0 none,1 black,2 svip */
+                                    if (vip < 0) vip = 0;
+                                    for (int i = 0; i < NQ_LEVELS; i++) {
+                                        if (!(mask & bits[i])) { res[i] = -2; continue; }
+                                        int require = 0; /* free tier */
+                                        if (i == 2 || i == 4) require = 1;  /* jyeffect, lossless → VIP */
+                                        else if (i == 0 || i == 1) require = 2; /* jymaster, sky → SVIP */
+                                        /* hires (i==3) folded into jyeffect tier; treat as VIP */
+                                        if (i == 3) require = 1;
+                                        if (fee != 0) {
+                                            /* VIP/paid track: only ownable → mark gated */
+                                            res[i] = require == 2 ? 2 : 0;
+                                            continue;
+                                        }
+                                        if (vip >= require) res[i] = 1;
+                                        else if (require == 2) res[i] = 2;  /* SVIP colour */
+                                        else if (require == 1) res[i] = 0;  /* VIP colour */
+                                        else res[i] = 1;
+                                    }
+                                    std::vector<int> brv(br, br + NQ_LEVELS);
                                     StateStore::instance().set_action_sheet_quality_br(id, brv);
                                 } else {
-                                    res = { -2, -2, 1, 1, 1 };
+                                    res = { -2, -2, -2, -2, -2, 1, 1, 1 };
                                 }
                                 StateStore::instance().set_action_sheet_quality(id, res);
                                 /* a tier that turned out hidden (no source)
@@ -2187,7 +2223,7 @@ int run_app(int argc, char **argv) {
                                 int sel = st.action_sheet_selected;
                                 if ((size_t)sel < res.size() && res[sel] == -2) {
                                     int target = 0;
-                                    for (; target < 5; target++)
+                                    for (; target < NQ_LEVELS; target++)
                                         if ((size_t)target >= res.size() ||
                                             res[target] != -2) break;
                                     StateStore::instance().set_action_sheet(true, target);

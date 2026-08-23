@@ -31,6 +31,7 @@ struct Theme {
     ThemeColor warning;       /* warning / VIP badge        */
     ThemeColor error;         /* error / important          */
     ThemeColor vip;           /* VIP (◆) marker color       */
+    ThemeColor svip;          /* SVIP (download tier) color  */
     ThemeColor playlist;      /* playlist (▣) marker color  */
     ThemeColor logo;          /* netease logo watermark     */
     ThemeColor overlay_bg;    /* overlay/popup background   */

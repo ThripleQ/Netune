@@ -983,8 +983,10 @@ int netease_play_url(const char *id, char *url, size_t sz) {
 /* Quality ladder, highest first: used for fallback when the requested
    level is unavailable (VIP-gated, region-locked, ...). */
 static const char *const kQualityLadder[] = {
-    "hires", "lossless", "exhigh", "higher", "standard"
+    "jymaster", "sky", "jyeffect", "hires", "lossless",
+    "exhigh", "higher", "standard"
 };
+#define KQUALITY_N  8
 
 /* check-quality <id> <level> — single-level entitlement probe against the
    play endpoint (player/url/v1). *granted=1 only when the server would
@@ -1012,20 +1014,24 @@ int netease_check_quality(const char *id, const char *level, int *granted) {
 
 /* song-music-quality <id> — authoritative per-tier source probe. Returns a
    bitmask of which quality tiers the track actually has a file for, in
-   kQualityLadder order (hires=bit0, lossless=bit1, exhigh=bit2,
-   higher=bit3, standard=bit4). A song with no lossless/hires source simply
-   has those bits clear — this is what tells the download picker that a
-   "lossless" download would silently come back as 320k mp3. 0 = ok. */
-#define NQ_HIRES    (1u << 0)
-#define NQ_LOSSLESS (1u << 1)
-#define NQ_EXHIGH   (1u << 2)
-#define NQ_HIGHER   (1u << 3)
-#define NQ_STANDARD (1u << 4)
+   download-picker order high→low (jymaster=bit0 … standard=bit7). A tier
+   with no source simply has its bit clear — this is what tells the download
+   picker that a "lossless" download would silently come back as 320k mp3.
+   0 = ok. */
+#define NQ_JYMASTER  (1u << 0)
+#define NQ_SKY       (1u << 1)
+#define NQ_JYEFFECT  (1u << 2)
+#define NQ_HIRES     (1u << 3)
+#define NQ_LOSSLESS  (1u << 4)
+#define NQ_EXHIGH    (1u << 5)
+#define NQ_HIGHER    (1u << 6)
+#define NQ_STANDARD  (1u << 7)
+#define NQ_LEVELS    8
 int netease_song_music_quality(const char *id, unsigned *mask_out,
-                               int *br_out /* [5], ladder order, 0 = no source */) {
+                               int *br_out /* [8], high→low, 0 = no source */) {
     if (!id || !mask_out) return -1;
     if (br_out)
-        for (int i = 0; i < 5; i++) br_out[i] = 0;
+        for (int i = 0; i < NQ_LEVELS; i++) br_out[i] = 0;
     char *esc = shell_escape(id);
     char *j = run("%s song-music-quality %s%s", CLI, esc, STDERR_REDIRECT);
     free(esc);
@@ -1040,8 +1046,10 @@ int netease_song_music_quality(const char *id, unsigned *mask_out,
         yyjson_val *data = jget_obj(root, "data");
         if (data && yyjson_is_obj(data)) {
             static const struct { const char *k; unsigned bit; } tier[] = {
-                { "hr", NQ_HIRES }, { "sq", NQ_LOSSLESS }, { "h", NQ_EXHIGH },
-                { "m", NQ_HIGHER }, { "l", NQ_STANDARD }
+                { "jm", NQ_JYMASTER }, { "sk", NQ_SKY },
+                { "je", NQ_JYEFFECT }, { "hr", NQ_HIRES },
+                { "sq", NQ_LOSSLESS }, { "h", NQ_EXHIGH },
+                { "m", NQ_HIGHER },    { "l", NQ_STANDARD }
             };
             for (size_t i = 0; i < sizeof(tier)/sizeof(tier[0]); i++) {
                 yyjson_val *v = yyjson_obj_get(data, tier[i].k);
@@ -1101,18 +1109,18 @@ char* netease_download_song(const char *id, const char *level,
        tiers (standard/higher/exhigh) are served by the same stream the
        player uses, so grab those from the play URL. */
     static const char *const kDownloadApiLevels[] = {
-        "hires", "lossless", NULL
+        "jymaster", "sky", "jyeffect", "hires", "lossless", NULL
     };
 
     const char *want = (level && level[0]) ? level : "standard";
-    int start = 4;  /* index of "standard" */
-    for (int i = 0; i < 5; i++) {
+    int start = 7;  /* index of "standard" */
+    for (int i = 0; i < KQUALITY_N; i++) {
         if (strcmp(kQualityLadder[i], want) == 0) { start = i; break; }
     }
 
     char dl_url[4096];
     const char *used = NULL;
-    for (int i = start; i < 5; i++) {
+    for (int i = start; i < KQUALITY_N; i++) {
         const char *lvl = kQualityLadder[i];
         int via_dl = 0;
         for (int k = 0; kDownloadApiLevels[k]; k++) {
@@ -1136,8 +1144,11 @@ char* netease_download_song(const char *id, const char *level,
        endpoint may return a lower-encoded file than the requested level
        (e.g. "hires" delivered as 320k mp3), so guess from the URL path
        before the query string, falling back to the level mapping. */
-    const char *ext = (strcmp(used, "lossless") == 0 ||
-                       strcmp(used, "hires") == 0) ? "flac" : "mp3";
+    const char *ext = (strcmp(used, "jymaster") == 0 ||
+                       strcmp(used, "sky") == 0 ||
+                       strcmp(used, "jyeffect") == 0 ||
+                       strcmp(used, "hires") == 0 ||
+                       strcmp(used, "lossless") == 0) ? "flac" : "mp3";
     const char *q = strchr(dl_url, '?');
     size_t ulen = q ? (size_t)(q - dl_url) : strlen(dl_url);
     const char *p = dl_url + ulen;
@@ -1192,6 +1203,48 @@ char* netease_download_song(const char *id, const char *level,
     int rc = system(cmd);
     if (rc != 0) { remove_utf8(path); return NULL; }
     return strdup(path);
+}
+
+/* ── VIP status ─────────────────────────────────────── */
+/* Resolve the account's effective VIP entitlement for download gating.
+   Mirrors the client: redplus.vipCode non-zero & unexpired → SVIP;
+   else musicPackage.vipCode non-zero & unexpired → black-vinyl VIP;
+   else no VIP. Returns 0 = none, 1 = black-vinyl VIP, 2 = SVIP, -1 = error. */
+int netease_vip_level(void) {
+    char *j = run("%s vip-info%s", CLI, STDERR_REDIRECT);
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    int level = -1;
+    if (root && yyjson_is_obj(root)) {
+        yyjson_val *data = jget_obj(root, "data");
+        if (data && yyjson_is_obj(data)) {
+            long long now_ms = (long long)(time(NULL)) * 1000;
+            level = 0;
+            /* redplus (黑胶 SVIP): only count a non-zero, unexpired expiry */
+            yyjson_val *rp = jget_obj(data, "redplus");
+            if (rp) {
+                long long code = jget_int(rp, "vipCode");
+                long long exp  = jget_int(rp, "expireTime");
+                if (code > 0 && exp > now_ms)
+                    level = 2;
+            }
+            if (level < 2) {
+                /* musicPackage (黑胶 VIP): only count an unexpired expiry */
+                yyjson_val *mp = jget_obj(data, "musicPackage");
+                if (mp) {
+                    long long code = jget_int(mp, "vipCode");
+                    long long exp  = jget_int(mp, "expireTime");
+                    if (code > 0 && exp > now_ms)
+                        level = 1;
+                }
+            }
+        }
+    }
+    yyjson_doc_free(doc);
+    return level;
 }
 
 /* ── Lyrics ──────────────────────────────────────────── */
