@@ -18,6 +18,8 @@ Element render_action_sheet(const AppState &s) {
     std::string title = item.title ? item.title : "(nothing selected)";
     if (s.action_sheet_menu == 4)
         title = "\u4E0B\u8F7D\u97F3\u8D28: " + title;  /* 下载音质: <song> */
+    if (s.action_sheet_menu == 6)
+        title = "\u64AD\u653E\u97F3\u8D28: " + title;   /* 播放音质: <song> */
     auto &th = ThemeManager::instance().current();
 
     Elements body;
@@ -152,8 +154,19 @@ Element render_action_sheet(const AppState &s) {
         }
     } else if (s.action_sheet_menu == 6) {
         /* play-quality picker: per-song override for streaming. Rows are
-           the 8 levels high→low; the currently effective one (override or
-           global) is marked. Enter sets the override to the selected row. */
+           the 8 levels high→low; only tiers with a real source are shown
+           (-2 = no source, hidden), -1 = still probing. The currently
+           effective tier (override or global) is marked. Enter sets the
+           override, G sets the global default. */
+        if (s.action_sheet_quality_probing) {
+            auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            const char *frames[] = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"};
+            const char *f = frames[(now_ms / 16) % 10];
+            body.push_back(hbox({text(" " + std::string(f) + " "),
+                                 text("Loading...") | dim}));
+            body.push_back(text("  \u6B63\u5728\u68C0\u6D4B\u97F3\u8D28\u6E90...") | dim);  /* 正在检测音质源... */
+        } else {
         static const char *const kNames[] = {
             "\u8D85\u6E05\u6BCD\u5E26",      /* 超清母带 jymaster */
             "\u6C89\u6D78\u73AF\u7ED5",      /* 沉浸环绕 sky */
@@ -167,21 +180,26 @@ Element render_action_sheet(const AppState &s) {
         int count = s.action_sheet_quality_count > 0
                     ? s.action_sheet_quality_count : 8;
         for (int i = 0; i < count; i++) {
-            int sel = (int)s.action_sheet_quality_ok.size() > i
-                      ? s.action_sheet_quality_ok[i] : 0;
-            std::string label = " " + std::string(kNames[i]) +
-                                (sel == 1 ? " \u2713" : "");  /* ✓ current */
+            int st = (int)s.action_sheet_quality_ok.size() > i
+                     ? s.action_sheet_quality_ok[i] : -1;
+            if (st == -2) continue;  /* no source — don't show the row */
+            std::string label = " " + std::string(kNames[i]);
+            if (st == -1)
+                label += " (\u68C0\u6D4B\u4E2D...)";  /* (检测中...) */
+            else if (st == 1)
+                label += " \u2713";  /* ✓ current */
             auto row = text(label);
             if ((int)i == s.action_sheet_selected)
                 row = hbox({theme_selection(text(" \u203A ")), row | bold}) | focus;
             else
                 row = hbox({text("   "), row});
-            if (sel == 1)
+            if (st == 1)
                 row = row | color(Color::RGB(th.accent.r, th.accent.g, th.accent.b));
             body.push_back(row);
         }
         body.push_back(text("  \u56DE\u8F66\u8BBE\u6B64\u66F2\u97F3\u8D28  G \u8BBE\u5168\u5C40\u9ED8\u8BA4  Esc \u53D6\u6D88 ") | dim);
         /* 回车设此曲音质  G 设全局默认  Esc 取消 */
+        }
     } else if (s.action_sheet_menu == 5) {
         /* song detail (was the d-key popup, merged into the action sheet) */
         if (s.song_detail_lines.empty()) {

@@ -1968,7 +1968,7 @@ int run_app(int argc, char **argv) {
                         : as.action_sheet_opt_count;
                     if (n <= 0) n = 1;
                     int sel = as.action_sheet_selected;
-                    if (as.action_sheet_menu == 4) {
+                    if (as.action_sheet_menu == 4 || as.action_sheet_menu == 6) {
                         /* skip hidden (no-source) tiers */
                         for (int step = 0; step < n; step++) {
                             sel = (sel + 1) % n;
@@ -1990,7 +1990,7 @@ int run_app(int argc, char **argv) {
                         : as.action_sheet_opt_count;
                     if (n <= 0) n = 1;
                     int sel = as.action_sheet_selected;
-                    if (as.action_sheet_menu == 4) {
+                    if (as.action_sheet_menu == 4 || as.action_sheet_menu == 6) {
                         for (int step = 0; step < n; step++) {
                             sel = (sel + n - 1) % n;
                             if (as.action_sheet_quality_ok.size() > (size_t)sel &&
@@ -2046,6 +2046,14 @@ int run_app(int argc, char **argv) {
                         int qi = as.action_sheet_selected;
                         if (qi < 0 || qi >= (int)(sizeof(kLevels)/sizeof(kLevels[0])))
                             return true;
+                        /* a hidden (no-source) tier can't be chosen */
+                        if ((int)as.action_sheet_quality_ok.size() > qi &&
+                            (as.action_sheet_quality_ok[qi] == -2 ||
+                             as.action_sheet_quality_ok[qi] == -1)) {
+                            StateStore::instance().set_app_notice(
+                                "\u8BE5\u97F3\u8D28\u65E0\u6E90\u53EF\u7528");  /* 该音质无源可用 */
+                            return true;
+                        }
                         const auto &qitem = as.playlist[as.selected_index];
                         std::string qid = qitem.id ? qitem.id : "";
                         if (qid.empty()) return true;
@@ -2283,22 +2291,53 @@ int run_app(int argc, char **argv) {
                             }).detach();
                         } else if (idx == 3) {
                             /* play quality → picker (menu 6): per-song override
-                               (default = follow global). Current selection is
-                               shown, Enter sets the override. */
+                               (default = follow global). Only tiers the track
+                               actually has a source for are shown; the source
+                               table is served from the quality cache (probe +
+                               cache on miss). Current selection is marked,
+                               Enter sets the override. */
                             char cur[32] = {0};
                             std::string cur_str = nq_global_level();
                             if (nq_override_get(id.c_str(), cur, sizeof cur) == 0)
                                 cur_str = cur;
                             StateStore::instance().set_action_sheet_menu(6);
                             state.set_action_sheet(true, 0);
-                            std::vector<int> ok(NQ_LEVELS, 0);
-                            static const char *const kNames[] = {
-                                "jymaster", "sky", "jyeffect", "hires",
-                                "lossless", "exhigh", "higher", "standard"
-                            };
-                            for (int i = 0; i < NQ_LEVELS; i++)
-                                if (cur_str == kNames[i]) ok[i] = 1;
+                            StateStore::instance().set_action_sheet_quality_probing(true);
+                            /* initial state: all tiers probing (-1) */
+                            std::vector<int> ok(NQ_LEVELS, -1);
                             StateStore::instance().set_action_sheet_quality(id, ok);
+                            std::thread([id, cur_str]() {
+                                unsigned mask = 0;
+                                int br[NQ_LEVELS] = {0};
+                                if (nq_cache_get(id.c_str(), &mask, br) != 0)
+                                    netease_song_music_quality(id.c_str(), &mask, br);
+                                std::vector<int> res(NQ_LEVELS, -2);
+                                static const unsigned bits[NQ_LEVELS] = {
+                                    NQ_JYMASTER, NQ_SKY, NQ_JYEFFECT, NQ_HIRES,
+                                    NQ_LOSSLESS, NQ_EXHIGH, NQ_HIGHER, NQ_STANDARD
+                                };
+                                static const char *const kNames[] = {
+                                    "jymaster", "sky", "jyeffect", "hires",
+                                    "lossless", "exhigh", "higher", "standard"
+                                };
+                                for (int i = 0; i < NQ_LEVELS; i++) {
+                                    if (mask & bits[i]) {
+                                        res[i] = (cur_str == kNames[i]) ? 1 : 0;
+                                    }
+                                }
+                                if (mask) nq_cache_put(id.c_str(), mask, br);
+                                std::vector<int> brv(br, br + NQ_LEVELS);
+                                StateStore::instance().set_action_sheet_quality_br(id, brv);
+                                StateStore::instance().set_action_sheet_quality(id, res);
+                                StateStore::instance().set_action_sheet_quality_probing(false);
+                                /* park selection on the first visible tier */
+                                for (int i = 0; i < NQ_LEVELS; i++) {
+                                    if (res[i] != -2) {
+                                        StateStore::instance().set_action_sheet(true, i);
+                                        break;
+                                    }
+                                }
+                            }).detach();
                         } else if (idx == 4) {
                             /* song detail (merged from the old d-key popup) */
                             StateStore::instance().set_song_detail({"  \u52A0\u8F7D\u4E2D..."});  /* 加载中... */

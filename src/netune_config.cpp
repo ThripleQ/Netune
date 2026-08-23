@@ -516,6 +516,7 @@ int run_config(void) {
     if (cur_seek < 1) cur_seek = 1;
     if (cur_seek > 60) cur_seek = 60;
     int vol = cur_vol, loop_mode = cur_loop, seek = cur_seek;
+    std::string quality = cfg ? config_get_str(cfg, "netease.quality", "exhigh") : "exhigh";
 
     int ndirs = cfg ? config_get_array_size(cfg, "music_sources.local.dirs") : 0;
     for (int i = 0; i < ndirs; i++) {
@@ -614,9 +615,17 @@ int run_config(void) {
         /* body */
         if (th.cat == Cat::Playback) {
             const char *loops[] = {"顺序播放", "单曲循环", "列表循环", "随机播放"};
+            const char *quals[] = {"超清母带", "沉浸环绕", "高清臻音", "Hi-Res",
+                                   "无损", "极高", "较高", "标准"};
+            const char *qkeys[] = {"jymaster", "sky", "jyeffect", "hires",
+                                   "lossless", "exhigh", "higher", "standard"};
+            int qidx = 5;  /* default exhigh */
+            for (int i = 0; i < 8; i++)
+                if (quality == qkeys[i]) { qidx = i; break; }
             Elements body;
             body.push_back(text(std::string("  音量:  ") + std::to_string(vol) + "   [<- / ->]"));
             body.push_back(text(std::string("  循环:  ") + loops[loop_mode % 4] + "   [l 切换]"));
+            body.push_back(text(std::string("  播放音质: ") + quals[qidx] + "   [q 切换]"));
             body.push_back(text(std::string("  快进步长: ") + std::to_string(seek) + " 秒  [+ / -]"));
             body.push_back(text(""));
             body.push_back(text("  修改立即保存到 config.json") | dim);
@@ -1078,6 +1087,20 @@ int run_config(void) {
             loop_mode = (loop_mode + 1) % 4;
             if (cfg) {
                 config_set_int(cfg, "playback.loop_mode", loop_mode);
+                config_save(cfg);
+            }
+            return true;
+        }
+        if (k == "q" && st.cat == Cat::Playback) {
+            static const char *const qkeys[] = {"jymaster", "sky", "jyeffect", "hires",
+                                                "lossless", "exhigh", "higher", "standard"};
+            int qidx = 5;  /* default exhigh */
+            for (int i = 0; i < 8; i++)
+                if (quality == qkeys[i]) { qidx = i; break; }
+            qidx = (qidx + 1) % 8;
+            quality = qkeys[qidx];
+            if (cfg) {
+                config_set_str(cfg, "netease.quality", quality.c_str());
                 config_save(cfg);
             }
             return true;
