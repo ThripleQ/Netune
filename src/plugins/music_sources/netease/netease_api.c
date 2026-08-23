@@ -1,4 +1,5 @@
 #include "netease_api.h"
+#include "netease_quality.h"
 #include "infra/log.h"
 #include "infra/config_paths.h"
 #include <stdio.h>
@@ -947,9 +948,18 @@ int netease_menu_songs(int type, int limit, SongInfo **out, int *count) {
 }
 
 /* ── Play URL ──────────────────────────────────────── */
+/* Resolve the play quality from netease_quality (per-song override >
+   global config, then verify against the cached source table, degrading
+   down the ladder when the wanted tier has no source) and stream at it. */
 int netease_play_url(const char *id, char *url, size_t sz) {
-    return netease_song_url(id, "standard", url, sz);
-}int netease_song_url(const char *id, const char *level, char *url, size_t sz) {
+    char *lvl = nq_resolve_level(id);
+    if (!lvl) { if (sz > 0) url[0] = 0; return -1; }
+    int rc = netease_song_url(id, lvl, url, sz);
+    free(lvl);
+    return rc;
+}
+
+int netease_song_url(const char *id, const char *level, char *url, size_t sz) {
     if (!id || !url || sz == 0) return -1;
     const char *lvl = (level && level[0]) ? level : "standard";
     char *esc = shell_escape(id);

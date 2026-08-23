@@ -52,6 +52,7 @@ extern "C" {
 #include "plugins/music_sources/local/local_source.h"
 #include "plugins/music_sources/netease/netease_source.h"
 #include "plugins/music_sources/netease/netease_api.h"
+#include "plugins/music_sources/netease/netease_quality.h"
 }
 
 #include "ui/state_store.h"
@@ -1962,7 +1963,8 @@ int run_app(int argc, char **argv) {
                 if (k == "j" || k == "down") {
                     int n = (as.action_sheet_menu == 1)
                         ? (int)as.action_sheet_pls.size()
-                        : (as.action_sheet_menu == 4) ? as.action_sheet_quality_count
+                        : (as.action_sheet_menu == 4 || as.action_sheet_menu == 6)
+                          ? as.action_sheet_quality_count
                         : as.action_sheet_opt_count;
                     if (n <= 0) n = 1;
                     int sel = as.action_sheet_selected;
@@ -1983,7 +1985,8 @@ int run_app(int argc, char **argv) {
                 if (k == "k" || k == "up") {
                     int n = (as.action_sheet_menu == 1)
                         ? (int)as.action_sheet_pls.size()
-                        : (as.action_sheet_menu == 4) ? as.action_sheet_quality_count
+                        : (as.action_sheet_menu == 4 || as.action_sheet_menu == 6)
+                          ? as.action_sheet_quality_count
                         : as.action_sheet_opt_count;
                     if (n <= 0) n = 1;
                     int sel = as.action_sheet_selected;
@@ -2002,7 +2005,7 @@ int run_app(int argc, char **argv) {
                 }
                 if (k == "escape") {
                     if (as.action_sheet_menu == 1 || as.action_sheet_menu == 4 ||
-                        as.action_sheet_menu == 5) {
+                        as.action_sheet_menu == 5 || as.action_sheet_menu == 6) {
                         state.set_action_sheet_menu(0);
                         state.set_action_sheet(true, 0);
                     } else {
@@ -2010,7 +2013,55 @@ int run_app(int argc, char **argv) {
                     }
                     return true;
                 }
+                if (k == "g" || k == "G") {
+                    /* play-quality picker: set the selected level as the
+                       global default (all songs) */
+                    if (as.action_sheet_menu == 6) {
+                        static const char *const kLevels[] = {
+                            "jymaster", "sky", "jyeffect", "hires", "lossless",
+                            "exhigh", "higher", "standard"
+                        };
+                        int qi = as.action_sheet_selected;
+                        if (qi < 0 || qi >= (int)(sizeof(kLevels)/sizeof(kLevels[0])))
+                            return true;
+                        std::string lvl = kLevels[qi];
+                        std::string notice;
+                        if (nq_global_set(lvl.c_str()) == 0)
+                            notice = "\u5DF2\u8BBE\u5168\u5C40\u9ED8\u8BA4\u97F3\u8D28: " + lvl;  /* 已设全局默认音质 */
+                        else
+                            notice = "\u8BBE\u7F6E\u5168\u5C40\u97F3\u8D28\u5931\u8D25";  /* 设置全局音质失败 */
+                        state.set_action_sheet(false, 0);
+                        StateStore::instance().set_app_notice(notice);
+                        return true;
+                    }
+                }
                 if (k == "enter" || k == "\r") {
+                    if (as.action_sheet_menu == 6) {
+                        /* play quality picker: set the per-song override to
+                           the selected level, then close */
+                        static const char *const kLevels[] = {
+                            "jymaster", "sky", "jyeffect", "hires", "lossless",
+                            "exhigh", "higher", "standard"
+                        };
+                        int qi = as.action_sheet_selected;
+                        if (qi < 0 || qi >= (int)(sizeof(kLevels)/sizeof(kLevels[0])))
+                            return true;
+                        const auto &qitem = as.playlist[as.selected_index];
+                        std::string qid = qitem.id ? qitem.id : "";
+                        if (qid.empty()) return true;
+                        std::string lvl = kLevels[qi];
+                        std::string notice;
+                        if (lvl == nq_global_level()) {
+                            nq_override_del(qid.c_str());
+                            notice = "\u5DF2\u56DE\u590D\u5168\u5C40\u97F3\u8D28: " + lvl;  /* 已恢复全局音质 */
+                        } else {
+                            nq_override_set(qid.c_str(), lvl.c_str());
+                            notice = "\u5DF2\u8BBE\u6B64\u66F2\u97F3\u8D28: " + lvl;  /* 已设此曲音质 */
+                        }
+                        state.set_action_sheet(false, 0);
+                        StateStore::instance().set_app_notice(notice);
+                        return true;
+                    }
                     if (as.action_sheet_menu == 4) {
                         /* download quality picker: Enter starts the download
                            for the selected level. Denied levels (probed as
@@ -2231,6 +2282,24 @@ int run_app(int argc, char **argv) {
                                 StateStore::instance().set_action_sheet_quality_probing(false);
                             }).detach();
                         } else if (idx == 3) {
+                            /* play quality → picker (menu 6): per-song override
+                               (default = follow global). Current selection is
+                               shown, Enter sets the override. */
+                            char cur[32] = {0};
+                            std::string cur_str = nq_global_level();
+                            if (nq_override_get(id.c_str(), cur, sizeof cur) == 0)
+                                cur_str = cur;
+                            StateStore::instance().set_action_sheet_menu(6);
+                            state.set_action_sheet(true, 0);
+                            std::vector<int> ok(NQ_LEVELS, 0);
+                            static const char *const kNames[] = {
+                                "jymaster", "sky", "jyeffect", "hires",
+                                "lossless", "exhigh", "higher", "standard"
+                            };
+                            for (int i = 0; i < NQ_LEVELS; i++)
+                                if (cur_str == kNames[i]) ok[i] = 1;
+                            StateStore::instance().set_action_sheet_quality(id, ok);
+                        } else if (idx == 4) {
                             /* song detail (merged from the old d-key popup) */
                             StateStore::instance().set_song_detail({"  \u52A0\u8F7D\u4E2D..."});  /* 加载中... */
                             state.set_action_sheet_menu(5);
@@ -2264,7 +2333,7 @@ int run_app(int argc, char **argv) {
                                 song_detail_free(&d);
                                 StateStore::instance().set_song_detail(lines);
                             }).detach();
-                        } else if (idx == 4 && in_own) {
+                        } else if (idx == 5 && in_own) {
                             /* remove from current playlist */
                             std::string cid = as.current_playlist_id;
                             state.set_action_sheet(false, 0);

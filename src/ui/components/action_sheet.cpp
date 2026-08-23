@@ -42,6 +42,7 @@ Element render_action_sheet(const AppState &s) {
                 : " \u2665 \u559C\u6B22\u6B64\u6B4C\u66F2 ", 1});  /* ♥ 喜欢此歌曲 */
             opts.push_back({" \u21D2 \u6536\u85CF\u5230\u6B4C\u5355... ", 4});  /* ⇒ 收藏到歌单... */
             opts.push_back({" \u2B07 \u4E0B\u8F7D ", 6});   /* ⬇ 下载 */
+            opts.push_back({" \u266B \u64AD\u653E\u97F3\u8D28 ", 8}); /* ♫ 播放音质 */
             opts.push_back({" \u2139 \u6B4C\u66F2\u8BE6\u60C5 ", 7});  /* ℹ 歌曲详情 */
             if (s.detail_playlist_mine) {
                 opts.push_back({" \u2716 \u4ECE\u5F53\u524D\u6B4C\u5355\u79FB\u9664 ", 5}); /* ✖ 从当前歌单移除 */
@@ -149,6 +150,38 @@ Element render_action_sheet(const AppState &s) {
             body.push_back(row);
         }
         }
+    } else if (s.action_sheet_menu == 6) {
+        /* play-quality picker: per-song override for streaming. Rows are
+           the 8 levels high→low; the currently effective one (override or
+           global) is marked. Enter sets the override to the selected row. */
+        static const char *const kNames[] = {
+            "\u8D85\u6E05\u6BCD\u5E26",      /* 超清母带 jymaster */
+            "\u6C89\u6D78\u73AF\u7ED5",      /* 沉浸环绕 sky */
+            "\u9AD8\u6E05\u81FB\u97F3",      /* 高清臻音 jyeffect */
+            "Hi-Res",                         /* hires */
+            "\u65E0\u635F",                   /* 无损 lossless */
+            "\u6781\u9AD8",                   /* 极高 exhigh */
+            "\u8F83\u9AD8",                   /* 较高 higher */
+            "\u6807\u51C6"                    /* 标准 standard */
+        };
+        int count = s.action_sheet_quality_count > 0
+                    ? s.action_sheet_quality_count : 8;
+        for (int i = 0; i < count; i++) {
+            int sel = (int)s.action_sheet_quality_ok.size() > i
+                      ? s.action_sheet_quality_ok[i] : 0;
+            std::string label = " " + std::string(kNames[i]) +
+                                (sel == 1 ? " \u2713" : "");  /* ✓ current */
+            auto row = text(label);
+            if ((int)i == s.action_sheet_selected)
+                row = hbox({theme_selection(text(" \u203A ")), row | bold}) | focus;
+            else
+                row = hbox({text("   "), row});
+            if (sel == 1)
+                row = row | color(Color::RGB(th.accent.r, th.accent.g, th.accent.b));
+            body.push_back(row);
+        }
+        body.push_back(text("  \u56DE\u8F66\u8BBE\u6B64\u66F2\u97F3\u8D28  G \u8BBE\u5168\u5C40\u9ED8\u8BA4  Esc \u53D6\u6D88 ") | dim);
+        /* 回车设此曲音质  G 设全局默认  Esc 取消 */
     } else if (s.action_sheet_menu == 5) {
         /* song detail (was the d-key popup, merged into the action sheet) */
         if (s.song_detail_lines.empty()) {
