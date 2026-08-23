@@ -82,6 +82,12 @@ Element theme_vip(Element e) {
     return e | color(pick_vip(ThemeManager::instance().current()));
 }
 
+Element theme_warning(Element e) {
+    auto &t = ThemeManager::instance().current();
+    return e | color(t.warning.has_color ? Color::RGB(t.warning.r, t.warning.g, t.warning.b)
+                                        : kDefaultWarning);
+}
+
 Element theme_playlist(Element e) {
     return e | color(pick_playlist(ThemeManager::instance().current()));
 }

@@ -30,6 +30,10 @@ Element theme_spectrum(Element e);
 /* VIP (◆) marker color */
 Element theme_vip(Element e);
 
+/* Warning color — marks tiers with no entitlement when they're shown
+   but not playable/downloadable at the current account's level. */
+Element theme_warning(Element e);
+
 /* Playlist (▣) marker color */
 Element theme_playlist(Element e);
 

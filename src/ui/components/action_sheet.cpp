@@ -132,22 +132,16 @@ Element render_action_sheet(const AppState &s) {
                     else               snprintf(bbuf, sizeof bbuf, " %dk", br / 1000);
                     label += std::string(bbuf);
                 }
-                if (st == 0)
-                    label += " \u25CFVIP";       /* ●VIP */
-                else if (st == 2)
-                    label += " \u25CFSVIP";      /* ●SVIP */
             }
             auto row = text(label);
             if ((int)i == s.action_sheet_selected)
                 row = hbox({theme_selection(text(" \u203A ")), row | bold}) | focus;
             else
                 row = hbox({text("   "), row});
-            if (st == 0) {
-                /* VIP-gated tier: colour with the theme's VIP colour */
-                row = row | color(Color::RGB(th.vip.r, th.vip.g, th.vip.b));
-            } else if (st == 2) {
-                /* SVIP-gated tier: colour with the theme's SVIP colour */
-                row = row | color(Color::RGB(th.svip.r, th.svip.g, th.svip.b));
+            if (st == 0 || st == 2) {
+                /* no-entitlement tier (VIP/SVIP gated): colour the whole row
+                   with the theme's warning colour instead of a ●VIP/●SVIP tag */
+                row = theme_warning(row);
             }
             body.push_back(row);
         }
@@ -195,6 +189,8 @@ Element render_action_sheet(const AppState &s) {
                 row = hbox({text("   "), row});
             if (st == 1)
                 row = row | color(Color::RGB(th.accent.r, th.accent.g, th.accent.b));
+            else if (st == 2)
+                row = theme_warning(row);  /* no-entitlement tier */
             body.push_back(row);
         }
         body.push_back(text("  \u56DE\u8F66\u8BBE\u6B64\u66F2\u97F3\u8D28  G \u8BBE\u5168\u5C40\u9ED8\u8BA4  Esc \u53D6\u6D88 ") | dim);

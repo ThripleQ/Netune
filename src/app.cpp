@@ -2363,8 +2363,11 @@ int run_app(int argc, char **argv) {
                                             /* purchased: playable at any quality */
                                             res[i] = (cur_str == kNames[i]) ? 1 : 0;
                                         } else {
-                                            /* not purchased → not playable */
-                                            res[i] = -2;
+                                            /* not purchased → not playable, but
+                                               show + mark (shared entitlement
+                                               convention res=2 = warning) so the
+                                               user sees the tier exists. */
+                                            res[i] = 2;
                                         }
                                         continue;
                                     }
@@ -2373,9 +2376,12 @@ int run_app(int argc, char **argv) {
                                     } else if (require == 0) {
                                         res[i] = (cur_str == kNames[i]) ? 1 : 0;
                                     } else {
-                                        /* gated by VIP/SVIP → hide (can't play
-                                           at this quality without the tier) */
-                                        res[i] = -2;
+                                        /* gated by VIP/SVIP: show the tier but
+                                           mark it (res=2) — the picker maps 2
+                                           to the warning colour. The tier stays
+                                           selectable; the server silently
+                                           downgrades if actually streamed. */
+                                        res[i] = 2;
                                     }
                                 }
                                 if (mask) nq_cache_put(id.c_str(), mask, br);
@@ -2383,13 +2389,23 @@ int run_app(int argc, char **argv) {
                                 StateStore::instance().set_action_sheet_quality_br(id, brv);
                                 StateStore::instance().set_action_sheet_quality(id, res);
                                 StateStore::instance().set_action_sheet_quality_probing(false);
-                                /* park selection on the first visible tier */
+                                /* park selection on the first *entitled*
+                                   tier (1 = current, 0 = selectable), so the
+                                   default highlight isn't a no-entitlement
+                                   tier that the server would downgrade. Fall
+                                   back to any visible tier if none is. */
+                                int first_vis = -1;
                                 for (int i = 0; i < NQ_LEVELS; i++) {
-                                    if (res[i] != -2) {
+                                    if (res[i] == -2) continue;
+                                    if (first_vis < 0) first_vis = i;
+                                    if (res[i] == 1 || res[i] == 0) {
                                         StateStore::instance().set_action_sheet(true, i);
                                         break;
                                     }
                                 }
+                                if (first_vis >= 0)
+                                    StateStore::instance().set_action_sheet(
+                                        true, first_vis);
                             }).detach();
                         } else if (idx == 4) {
                             /* song detail (merged from the old d-key popup) */
