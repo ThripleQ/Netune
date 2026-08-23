@@ -1110,6 +1110,40 @@ int netease_download_url(const char *id, const char *level, char *url, size_t sz
     return r;
 }
 
+/* song-owned <id> <level> — resolve whether the track is purchased (owned).
+   The download endpoint returns per-item `payed` (1 = owned, 0 = not) plus
+   `code` (-120 = no download permission, 200 = ok). Free tracks report
+   payed=0 but download fine; ownership only gates VIP/paid tracks.
+   Returns: 1 = owned, 0 = not owned, -1 = probe failed / unavailable. */
+int netease_song_owned(const char *id, const char *level) {
+    if (!id) return -1;
+    const char *lvl = (level && level[0]) ? level : "lossless";
+    char *esc = shell_escape(id);
+    char *esc_lv = shell_escape(lvl);
+    char *j = run("%s song-download-url %s %s%s", CLI, esc, esc_lv, STDERR_REDIRECT);
+    free(esc); free(esc_lv);
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    int r = -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *data = root ? jget_arr(root, "data") : NULL;
+    if (data) {
+        yyjson_val *first = yyjson_arr_get_first(data);
+        if (first && yyjson_is_obj(first)) {
+            long long payed = jget_int(first, "payed");
+            long long code  = jget_int(first, "code");
+            if (payed == 1)      r = 1;
+            else if (code == 200) r = 1;   /* free tier downloadable */
+            else if (code == -120) r = 0;  /* no permission = not owned */
+            else r = -1;                   /* -110 delisted / other */
+        }
+    }
+    yyjson_doc_free(doc);
+    return r;
+}
+
 char* netease_download_song(const char *id, const char *level,
                             const char *title, char *used_level,
                             size_t used_sz) {

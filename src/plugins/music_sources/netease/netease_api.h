@@ -111,6 +111,11 @@ int  netease_song_music_quality(const char *song_id, unsigned *mask_out,
 int  netease_download_url(const char *song_id, const char *level,
                           char *url, size_t url_sz);
 
+/* Whether the track is purchased/owned (download endpoint's `payed`).
+   Level used for the probe (default lossless). Returns 1 = owned,
+   0 = not owned (needs purchase / no permission), -1 = probe failed. */
+int  netease_song_owned(const char *song_id, const char *level);
+
 /* Account VIP entitlement for download gating (vip-info). Mirrors the
    client: 0 = none, 1 = black-vinyl VIP, 2 = SVIP, -1 = error. */
 int  netease_vip_level(void);

@@ -2251,6 +2251,14 @@ int run_app(int argc, char **argv) {
                                     };
                                     int vip = netease_vip_level();  /* 0 none,1 black,2 svip */
                                     if (vip < 0) vip = 0;
+                                    /* purchased/owned check for VIP/paid
+                                       tracks: download-url's `payed`. Free
+                                       tracks (fee==0) are always downloadable. */
+                                    int owned = 0;   /* 0 not-owned, 1 owned, -1 unknown */
+                                    if (fee != 0) {
+                                        int o = netease_song_owned(id.c_str(), "lossless");
+                                        owned = (o == 1) ? 1 : (o == 0 ? 0 : -1);
+                                    }
                                     for (int i = 0; i < NQ_LEVELS; i++) {
                                         if (!(mask & bits[i])) { res[i] = -2; continue; }
                                         int require = 0; /* free tier */
@@ -2259,8 +2267,16 @@ int run_app(int argc, char **argv) {
                                         /* hires (i==3) folded into jyeffect tier; treat as VIP */
                                         if (i == 3) require = 1;
                                         if (fee != 0) {
-                                            /* VIP/paid track: only ownable → mark gated */
-                                            res[i] = require == 2 ? 2 : 0;
+                                            if (owned == 1) {
+                                                /* purchased: fully downloadable */
+                                                res[i] = 1;
+                                            } else if (owned == 0) {
+                                                /* not purchased → gated */
+                                                res[i] = require == 2 ? 2 : 0;
+                                            } else {
+                                                /* unknown: keep gated */
+                                                res[i] = require == 2 ? 2 : 0;
+                                            }
                                             continue;
                                         }
                                         if (vip >= require) res[i] = 1;
@@ -2324,16 +2340,30 @@ int run_app(int argc, char **argv) {
                                 /* entitlement mirrors the download picker:
                                    jyeffect/lossless/hires need black-vinyl
                                    VIP, jymaster/sky need SVIP; paid tracks
-                                   are gated entirely. */
+                                   are hidden unless purchased. */
                                 int vip = netease_vip_level();
                                 if (vip < 0) vip = 0;
+                                int owned = 0;
+                                if (fee != 0) {
+                                    int o = netease_song_owned(id.c_str(), "lossless");
+                                    owned = (o == 1) ? 1 : (o == 0 ? 0 : -1);
+                                }
                                 for (int i = 0; i < NQ_LEVELS; i++) {
                                     if (!(mask & bits[i])) continue;  /* no source → hidden */
                                     int require = 0;
                                     if (i == 2 || i == 4) require = 1;  /* jyeffect, lossless → VIP */
                                     else if (i == 0 || i == 1) require = 2; /* jymaster, sky → SVIP */
                                     if (i == 3) require = 1;  /* hires → VIP */
-                                    if (fee != 0) { res[i] = -2; continue; } /* paid: not playable at any quality here */
+                                    if (fee != 0) {
+                                        if (owned == 1) {
+                                            /* purchased: playable at any quality */
+                                            res[i] = (cur_str == kNames[i]) ? 1 : 0;
+                                        } else {
+                                            /* not purchased → not playable */
+                                            res[i] = -2;
+                                        }
+                                        continue;
+                                    }
                                     if (vip >= require) {
                                         res[i] = (cur_str == kNames[i]) ? 1 : 0;
                                     } else if (require == 0) {
