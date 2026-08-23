@@ -23,7 +23,7 @@ jobs:
             cmake pkg-config \
             libasound2-dev libpulse-dev libsdl2-dev \
             libavformat-dev libavcodec-dev libswresample-dev \
-            libyaml-dev
+            libyaml-dev libcurl4-openssl-dev
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -101,7 +101,8 @@ jobs:
           Write-Host "Collecting DLLs from: $bin"
           $dlls = @()
           foreach ($pattern in @("avformat*.dll","avcodec*.dll","avutil*.dll",
-                                  "swresample*.dll","SDL2*.dll","yyjson*.dll","yaml*.dll")) {
+                                  "swresample*.dll","SDL2*.dll","yyjson*.dll","yaml*.dll",
+                                  "libcurl*.dll","zlib*.dll")) {
             $found = Get-ChildItem -Path $bin -Filter $pattern -ErrorAction SilentlyContinue
             if ($found) { $dlls += $found }
           }

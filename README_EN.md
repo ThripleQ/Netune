@@ -29,7 +29,8 @@ cmake --build build -j$(nproc)
 | SDL2 | Audio output (cross-platform) |
 | yyjson | JSON parsing |
 | libyaml | Config loading |
-| Go >= 1.22 | Building netease-cli (needed for Netease features) |
+| libcurl | Netease API (libnetease dependency) |
+| zlib | PNG compression (libnetease dependency, optional) |
 
 FTXUI and yyjson are auto-downloaded by CMake when they are not installed system-wide.
 
@@ -42,7 +43,7 @@ apt install cmake pkg-config libavformat-dev libavcodec-dev libswresample-dev \
 
 > Notes:
 > - `libyyjson-dev` is not available in some Debian/Ubuntu releases. CMake will fall back to building yyjson from source automatically, so it does not need to be installed manually.
-> - `netease-cli` requires **Go >= 1.22**. The `golang-go` package in older Debian/Ubuntu releases (e.g., Ubuntu 22.04 ships Go 1.18) is too old; install a newer Go from [go.dev/dl](https://go.dev/dl/) if you need Netease Cloud Music support.
+> - `netease-cli` defaults to the **libnetease (C port)**, fetched and built automatically by CMake via FetchContent — **Go is not required**; `libcurl` is (Ubuntu: `apt install libcurl4-openssl-dev`). To switch back to the original Go backend use `-DNETUNE_NETEASE_CLI_GO=ON` (needs Go >= 1.22).
 
 ### Install to PATH
 

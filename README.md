@@ -29,7 +29,8 @@ cmake --build build -j$(nproc)
 | SDL2 | 音频输出（跨平台） |
 | yyjson | JSON 解析 |
 | libyaml | 配置加载 |
-| Go >= 1.22 | 构建 netease-cli（网易云功能需要） |
+| libcurl | 网易云 API（libnetease 依赖） |
+| zlib | PNG 压缩（libnetease 依赖，可选） |
 
 FTXUI 和 yyjson 由 CMake 自动下载（若系统未安装）。
 
@@ -42,7 +43,7 @@ apt install cmake pkg-config libavformat-dev libavcodec-dev libswresample-dev \
 
 > 注意：
 > - 部分 Debian/Ubuntu 版本没有 `libyyjson-dev` 包。CMake 会自动从源码编译 yyjson，无需手动安装。
-> - `netease-cli` 需要 **Go >= 1.22**。旧版 Debian/Ubuntu（如 Ubuntu 22.04 自带 Go 1.18）需要从 [go.dev/dl](https://go.dev/dl/) 安装新版 Go。
+> - `netease-cli` 默认使用 **libnetease（C 移植版）**，由 CMake 通过 FetchContent 自动拉取构建，**无需 Go**；需要 `libcurl`（Ubuntu: `apt install libcurl4-openssl-dev`）。切回原 Go 后端：`-DNETUNE_NETEASE_CLI_GO=ON`（需 Go >= 1.22）。
 
 ### 安装到 PATH
 
@@ -53,7 +54,7 @@ netune
 ```
 
 > - 首次运行会自动生成默认配置和数据树到 `~/.config/netune/`，无需手动复制 `data/`。
-> - `netease-cli` 在检测到 Go >= 1.22 时由 CMake 自动构建；无 Go 时会从 GitHub Release 自动下载预编译二进制。两种情况都失败时该文件不存在，可跳过复制——网易云功能不可用，其余功能正常。
+> - `netease-cli`（libnetease C 版）由 CMake 自动构建；构建失败时该文件不存在，可跳过复制——网易云功能不可用，其余功能正常。
 
 ## 功能
 
