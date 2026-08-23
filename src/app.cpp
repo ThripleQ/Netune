@@ -2306,7 +2306,8 @@ int run_app(int argc, char **argv) {
                             /* initial state: all tiers probing (-1) */
                             std::vector<int> ok(NQ_LEVELS, -1);
                             StateStore::instance().set_action_sheet_quality(id, ok);
-                            std::thread([id, cur_str]() {
+                            const int fee = item.fee;
+                            std::thread([id, cur_str, fee]() {
                                 unsigned mask = 0;
                                 int br[NQ_LEVELS] = {0};
                                 if (nq_cache_get(id.c_str(), &mask, br) != 0)
@@ -2320,9 +2321,27 @@ int run_app(int argc, char **argv) {
                                     "jymaster", "sky", "jyeffect", "hires",
                                     "lossless", "exhigh", "higher", "standard"
                                 };
+                                /* entitlement mirrors the download picker:
+                                   jyeffect/lossless/hires need black-vinyl
+                                   VIP, jymaster/sky need SVIP; paid tracks
+                                   are gated entirely. */
+                                int vip = netease_vip_level();
+                                if (vip < 0) vip = 0;
                                 for (int i = 0; i < NQ_LEVELS; i++) {
-                                    if (mask & bits[i]) {
+                                    if (!(mask & bits[i])) continue;  /* no source → hidden */
+                                    int require = 0;
+                                    if (i == 2 || i == 4) require = 1;  /* jyeffect, lossless → VIP */
+                                    else if (i == 0 || i == 1) require = 2; /* jymaster, sky → SVIP */
+                                    if (i == 3) require = 1;  /* hires → VIP */
+                                    if (fee != 0) { res[i] = -2; continue; } /* paid: not playable at any quality here */
+                                    if (vip >= require) {
                                         res[i] = (cur_str == kNames[i]) ? 1 : 0;
+                                    } else if (require == 0) {
+                                        res[i] = (cur_str == kNames[i]) ? 1 : 0;
+                                    } else {
+                                        /* gated by VIP/SVIP → hide (can't play
+                                           at this quality without the tier) */
+                                        res[i] = -2;
                                     }
                                 }
                                 if (mask) nq_cache_put(id.c_str(), mask, br);
