@@ -1144,6 +1144,100 @@ int netease_song_owned(const char *id, const char *level) {
     return r;
 }
 
+/* ── Purchased-track list (api/single/mybought/song/list) ── */
+static char *g_purchased_ids[1024];
+static int   g_purchased_n = 0;
+static int   g_purchased_loaded = 0;  /* 0 = not fetched, 1 = fetched ok, -1 = failed */
+
+/* Refresh the cached purchased-track id list. 0 = ok, -1 = failed. */
+int netease_purchased_refresh(void) {
+    for (int i = 0; i < g_purchased_n; i++) { free(g_purchased_ids[i]); g_purchased_ids[i] = NULL; }
+    g_purchased_n = 0;
+    g_purchased_loaded = -1;
+
+    /* paginate with limit=100 until hasMore is false */
+    char *j = run("%s song-purchased 100 0%s", CLI, STDERR_REDIRECT);
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *data = root ? jget_obj(root, "data") : NULL;
+    if (!data || !yyjson_is_obj(data)) { yyjson_doc_free(doc); return -1; }
+
+    int ok = 0;
+    yyjson_val *list = jget_arr(data, "list");
+    if (list) {
+        size_t n = yyjson_arr_size(list);
+        for (size_t i = 0; i < n; i++) {
+            yyjson_val *it = yyjson_arr_get(list, i);
+            if (!it || !yyjson_is_obj(it)) continue;
+            long long sid = jget_sint64(it, "songId");
+            if (sid <= 0) continue;
+            char buf[32];
+            snprintf(buf, sizeof buf, "%lld", sid);
+            if (g_purchased_n < (int)(sizeof(g_purchased_ids)/sizeof(g_purchased_ids[0]))) {
+                g_purchased_ids[g_purchased_n] = strdup(buf);
+                g_purchased_n++;
+            }
+        }
+        ok = 1;
+    }
+    /* hasMore handling: if there are more pages, keep fetching (cap safety) */
+    long long has_more = jget_int(data, "hasMore");
+    if (has_more && g_purchased_n < 512) {
+        /* fetch page 1.. until exhausted (simple loop; typically 1 page) */
+        for (int page = 1; page < 32 && g_purchased_n < 512; page++) {
+            char cmd[128];
+            snprintf(cmd, sizeof cmd, "%s song-purchased 100 %d%s", CLI, page * 100, STDERR_REDIRECT);
+            char *j2 = run("%s", cmd);
+            if (!j2) break;
+            yyjson_doc *d2 = yyjson_read(j2, strlen(j2), 0);
+            free(j2);
+            if (!d2) break;
+            yyjson_val *r2 = yyjson_doc_get_root(d2);
+            yyjson_val *d2d = r2 ? jget_obj(r2, "data") : NULL;
+            if (!d2d || !yyjson_is_obj(d2d)) { yyjson_doc_free(d2); break; }
+            yyjson_val *l2 = jget_arr(d2d, "list");
+            if (!l2) { yyjson_doc_free(d2); break; }
+            size_t m = yyjson_arr_size(l2);
+            if (m == 0) { yyjson_doc_free(d2); break; }
+            for (size_t i = 0; i < m; i++) {
+                yyjson_val *it = yyjson_arr_get(l2, i);
+                if (!it || !yyjson_is_obj(it)) continue;
+                long long sid = jget_sint64(it, "songId");
+                if (sid <= 0) continue;
+                char buf[32];
+                snprintf(buf, sizeof buf, "%lld", sid);
+                if (g_purchased_n < (int)(sizeof(g_purchased_ids)/sizeof(g_purchased_ids[0]))) {
+                    g_purchased_ids[g_purchased_n] = strdup(buf);
+                    g_purchased_n++;
+                }
+            }
+            yyjson_doc_free(d2);
+            if (jget_int(d2d, "hasMore") == 0) break;
+        }
+    }
+    yyjson_doc_free(doc);
+    if (ok) g_purchased_loaded = 1;
+    return ok ? 0 : -1;
+}
+
+/* Whether a track is in the purchased list. 1 = purchased, 0 = not (list
+   loaded), -1 = list not loaded yet / unknown. */
+int netease_is_purchased(const char *song_id) {
+    if (!song_id || !*song_id) return -1;
+    if (!g_purchased_loaded) {
+        if (netease_purchased_refresh() != 0)
+            return -1;
+    }
+    for (int i = 0; i < g_purchased_n; i++) {
+        if (g_purchased_ids[i] && strcmp(g_purchased_ids[i], song_id) == 0)
+            return 1;
+    }
+    return g_purchased_loaded == 1 ? 0 : -1;
+}
+
 char* netease_download_song(const char *id, const char *level,
                             const char *title, char *used_level,
                             size_t used_sz) {

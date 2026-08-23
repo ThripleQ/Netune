@@ -116,6 +116,14 @@ int  netease_download_url(const char *song_id, const char *level,
    0 = not owned (needs purchase / no permission), -1 = probe failed. */
 int  netease_song_owned(const char *song_id, const char *level);
 
+/* Refresh the cached purchased-track id list (api/single/mybought/song/
+   list, paginated). 0 = ok, -1 = failed. */
+int  netease_purchased_refresh(void);
+
+/* Whether a track is in the purchased list. 1 = purchased, 0 = not (list
+   loaded), -1 = list not loaded yet / unknown. */
+int  netease_is_purchased(const char *song_id);
+
 /* Account VIP entitlement for download gating (vip-info). Mirrors the
    client: 0 = none, 1 = black-vinyl VIP, 2 = SVIP, -1 = error. */
 int  netease_vip_level(void);

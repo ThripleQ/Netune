@@ -2252,11 +2252,14 @@ int run_app(int argc, char **argv) {
                                     int vip = netease_vip_level();  /* 0 none,1 black,2 svip */
                                     if (vip < 0) vip = 0;
                                     /* purchased/owned check for VIP/paid
-                                       tracks: download-url's `payed`. Free
-                                       tracks (fee==0) are always downloadable. */
+                                       tracks: prefer the purchased-track
+                                       list, fall back to download-url's
+                                       `payed`. Free tracks (fee==0) are
+                                       always downloadable. */
                                     int owned = 0;   /* 0 not-owned, 1 owned, -1 unknown */
                                     if (fee != 0) {
-                                        int o = netease_song_owned(id.c_str(), "lossless");
+                                        int o = netease_is_purchased(id.c_str());
+                                        if (o < 0) o = netease_song_owned(id.c_str(), "lossless");
                                         owned = (o == 1) ? 1 : (o == 0 ? 0 : -1);
                                     }
                                     for (int i = 0; i < NQ_LEVELS; i++) {
@@ -2345,7 +2348,8 @@ int run_app(int argc, char **argv) {
                                 if (vip < 0) vip = 0;
                                 int owned = 0;
                                 if (fee != 0) {
-                                    int o = netease_song_owned(id.c_str(), "lossless");
+                                    int o = netease_is_purchased(id.c_str());
+                                    if (o < 0) o = netease_song_owned(id.c_str(), "lossless");
                                     owned = (o == 1) ? 1 : (o == 0 ? 0 : -1);
                                 }
                                 for (int i = 0; i < NQ_LEVELS; i++) {
