@@ -35,8 +35,24 @@
 
 #define NAME_MAX 260
 
+/* DT_* constants — Linux <dirent.h> values, used by callers like
+   local_source.c to skip symlinks / recurse into dirs without stat(). */
+#ifndef DT_UNKNOWN
+#define DT_UNKNOWN 0
+#endif
+#ifndef DT_REG
+#define DT_REG 1
+#endif
+#ifndef DT_DIR
+#define DT_DIR 2
+#endif
+#ifndef DT_LNK
+#define DT_LNK 10
+#endif
+
 struct dirent {
-    char d_name[NAME_MAX];
+    char          d_name[NAME_MAX];
+    unsigned char d_type;   /* DT_* above; filled from Win32 attributes */
 };
 
 typedef struct DIR {
@@ -124,6 +140,16 @@ static inline struct dirent *readdir(DIR *d)
             /* conversion failed — return an empty name rather than crashing */
             d->entry.d_name[0] = '\0';
         }
+        /* d_type from Win32 attributes. A reparse point wins over the
+           directory bit (a directory symlink has both), so symlinks are
+           reported as DT_LNK and callers never follow them. */
+        DWORD attrs = d->ffd.dwFileAttributes;
+        if (attrs & FILE_ATTRIBUTE_REPARSE_POINT)
+            d->entry.d_type = DT_LNK;
+        else if (attrs & FILE_ATTRIBUTE_DIRECTORY)
+            d->entry.d_type = DT_DIR;
+        else
+            d->entry.d_type = DT_REG;
         return &d->entry;
     }
 }
