@@ -47,12 +47,17 @@ static const char *cli_path(void) {
         char *slash = strrchr(exe, '/');
         if (slash) {
             *slash = '\0';
-            /* bare path for the existence check, quoted for popen */
+            /* bare path for the existence check, quoted for popen.
+               Skip if the joined path would overflow the buffer —
+               PATH lookup is the fallback. */
             char bare[1024];
-            snprintf(bare, sizeof(bare), "%s/netease-cli", exe);
-            if (access(bare, X_OK) == 0) {
-                snprintf(g_cli, sizeof(g_cli), "\"%s\"", bare);
-                return g_cli;
+            int written = snprintf(bare, sizeof(bare), "%s/netease-cli", exe);
+            if (written > 0 && written < (int)sizeof(bare) - 3 &&
+                access(bare, X_OK) == 0) {
+                int n2 = snprintf(g_cli, sizeof(g_cli), "\"%s\"", bare);
+                if (n2 > 0 && n2 < (int)sizeof(g_cli))
+                    return g_cli;
+                /* overflow: fall through to PATH lookup */
             }
         }
     }
@@ -1032,9 +1037,23 @@ char* netease_download_song(const char *id, const char *level,
             c = '_';
         sane[k++] = c;
     }
-    sane[k] = 0;
+    /* dir (≤1024) + "/" + sane (≤247) + "." + ext (≤4) can exceed 1024.
+       Trim sane so the joined path fits. */
     char path[1024];
-    snprintf(path, sizeof(path), "%s" PATH_SEP "%s.%s", dir, sane, ext);
+    {
+        size_t dir_len  = strlen(dir);
+        size_t ext_len  = strlen(ext);
+        size_t budget   = sizeof(path) - dir_len - ext_len - 2; /* sep + dot + NUL */
+        if (budget > 247) budget = 247;                       /* sane[] cap */
+        else if (dir_len + ext_len + 2 >= sizeof(path)) budget = 0;
+        if (k > budget) k = budget;
+        sane[k] = 0;
+    }
+    int pw = snprintf(path, sizeof(path), "%s" PATH_SEP "%s.%s", dir, sane, ext);
+    if (pw < 0 || pw >= (int)sizeof(path)) {
+        LOG_ERROR("download path too long, aborting: %s", dir);
+        return NULL;
+    }
 
     /* netune_ensure_dir() creates the PARENT directory of the given path,
        so pass the file path itself to create netune_data_root()/downloads
