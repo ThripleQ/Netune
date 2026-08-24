@@ -44,6 +44,7 @@ typedef struct {
     long long size;  /* bytes */
     long long ts;    /* last use / last write (unix sec) */
     char *quality;   /* quality level the file was cached at */
+    int complete;    /* 1 = whole track, 0 = partial prefix (resumable) */
 } AucEntry;
 
 static AucEntry *g_entries = NULL;
@@ -146,6 +147,9 @@ static void load_locked(void) {
             e->ts = t && yyjson_is_num(t) ? (long long)yyjson_get_int(t) : 0;
             yyjson_val *q = yyjson_obj_get(v, "quality");
             e->quality = strdup(q && yyjson_is_str(q) ? yyjson_get_str(q) : "");
+            yyjson_val *c = yyjson_obj_get(v, "complete");
+            e->complete = c && yyjson_is_bool(c)
+                ? (yyjson_get_bool(c) ? 1 : 0) : 1;  /* legacy entries = full */
             g_count++;
         }
     }
@@ -165,6 +169,7 @@ static int flush_locked(void) {
         yyjson_mut_obj_add_int(mdoc, e, "size", (int64_t)g_entries[i].size);
         yyjson_mut_obj_add_int(mdoc, e, "ts", (int64_t)g_entries[i].ts);
         yyjson_mut_obj_add_str(mdoc, e, "quality", g_entries[i].quality);
+        yyjson_mut_obj_add_bool(mdoc, e, "complete", g_entries[i].complete ? 1 : 0);
         yyjson_mut_obj_add_val(mdoc, root, g_entries[i].id, e);
     }
     int rc = json_save_root(path, root);
@@ -210,7 +215,7 @@ int audio_cache_enabled(void) { return audio_enabled(); }
 const char *audio_cache_dir(void) { return audio_dir(); }
 
 int audio_cache_find(const char *song_id, const char *quality,
-                     char *path_out, size_t sz) {
+                     char *path_out, size_t sz, int *complete) {
     if (!song_id || !*song_id || !path_out || sz == 0) return -1;
     if (!audio_enabled()) return -1;
     pthread_mutex_lock(&g_mutex);
@@ -224,6 +229,7 @@ int audio_cache_find(const char *song_id, const char *quality,
                 strcmp(quality, g_entries[i].quality) == 0) {
                 snprintf(path_out, sz, "%s" PATH_SEP "%s",
                          audio_dir(), g_entries[i].file);
+                if (complete) *complete = g_entries[i].complete;
                 rc = 0;
             }
             break;
@@ -251,7 +257,7 @@ char *audio_cache_final_path(const char *song_id, const char *ext) {
 }
 
 int audio_cache_commit(const char *song_id, const char *final_path,
-                       const char *quality) {
+                       const char *quality, int complete) {
     if (!audio_enabled() || !song_id || !*song_id || !final_path) return -1;
     pthread_mutex_lock(&g_mutex);
     load_locked();
@@ -271,6 +277,7 @@ int audio_cache_commit(const char *song_id, const char *final_path,
         g_entries[idx].quality = strdup(quality ? quality : "");
         g_entries[idx].size = sz;
         g_entries[idx].ts = ts;
+        g_entries[idx].complete = complete ? 1 : 0;
     } else {
         if (g_count == g_cap) {
             g_cap = g_cap ? g_cap * 2 : 16;
@@ -283,6 +290,7 @@ int audio_cache_commit(const char *song_id, const char *final_path,
         e->quality = strdup(quality ? quality : "");
         e->size = sz;
         e->ts = ts;
+        e->complete = complete ? 1 : 0;
         g_count++;
     }
     prune_locked();
