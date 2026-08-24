@@ -162,11 +162,16 @@ struct AppState {
        action_sheet_quality_br holds each tier's bitrate (0 = no source).
        action_sheet_quality_probing is true while the source probe runs;
        the picker shows a spinner instead of the level list until it lands. */
-    std::string action_sheet_quality_id;
-    std::vector<int> action_sheet_quality_ok;
-    std::vector<int> action_sheet_quality_br;
-    int  action_sheet_quality_count = 8;
-    bool action_sheet_quality_probing = false;
+     std::string action_sheet_quality_id;
+     std::vector<int> action_sheet_quality_ok;
+     std::vector<int> action_sheet_quality_br;
+     int  action_sheet_quality_count = 8;
+     bool action_sheet_quality_probing = false;
+     /* display metadata for the picker's target song (set when the picker
+        opens; the picker's selection indexes quality levels, not the song
+        list, so Enter can't derive title/artist from as.playlist[]). */
+     std::string action_sheet_quality_title;
+     std::string action_sheet_quality_artist;
 
     /* active download tasks as visible to the UI (mirror, main-thread only).
        Empty when nothing is queued/downloading. */
@@ -320,6 +325,8 @@ public:
     void set_action_sheet_quality_br(const std::string &song_id,
                                      const std::vector<int> &br);
     void set_action_sheet_quality_probing(bool p);
+    void set_action_sheet_quality_meta(const std::string &title,
+                                       const std::string &artist);
     void set_current_playlist_id(const std::string &id);
 
     /* download tasks (mirror updated on main thread from EV_DOWNLOAD_UPDATE) */

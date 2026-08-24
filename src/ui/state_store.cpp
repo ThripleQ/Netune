@@ -396,6 +396,12 @@ void StateStore::set_action_sheet_quality_probing(bool p) {
     state_.action_sheet_quality_probing = p;
 }
 
+void StateStore::set_action_sheet_quality_meta(const std::string &title,
+                                               const std::string &artist) {
+    state_.action_sheet_quality_title = title;
+    state_.action_sheet_quality_artist = artist;
+}
+
 void StateStore::set_current_playlist_id(const std::string &id) {
     state_.current_playlist_id = id;
 }

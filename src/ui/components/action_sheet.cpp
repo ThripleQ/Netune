@@ -148,8 +148,9 @@ Element render_action_sheet(const AppState &s) {
             else
                 row = hbox({text("   "), row});
             if (st == 1) {
-                /* entitled/downloadable tier: VIP colour */
-                row = theme_vip(row);
+                /* entitled/downloadable tier: success colour (green), clearly
+                   distinct from the warning (yellow) used for gated tiers */
+                row = theme_success(row);
             } else if (st == 0 || st == 2) {
                 /* no-entitlement tier (VIP/SVIP gated): tint the whole row
                    background with the theme's warning colour */

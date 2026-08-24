@@ -98,6 +98,13 @@ Element theme_warning(Element e) {
                                         : kDefaultWarning);
 }
 
+/* Success: green-ish (downloadable/entitled tiers). */
+Element theme_success(Element e) {
+    auto &t = ThemeManager::instance().current();
+    return e | color(t.success.has_color ? Color::RGB(t.success.r, t.success.g, t.success.b)
+                                        : kDefaultSuccess);
+}
+
 Element theme_playlist(Element e) {
     return e | color(pick_playlist(ThemeManager::instance().current()));
 }

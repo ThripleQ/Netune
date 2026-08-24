@@ -51,6 +51,7 @@ static const NeteaseExt g_ext = {
 
     .download_song      = netease_download_song,
     .check_quality      = netease_check_quality,
+    .download_url       = netease_download_url,
 
     .lyric              = netease_lyric,
 };

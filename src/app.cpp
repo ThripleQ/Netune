@@ -2251,8 +2251,12 @@ int run_app(int argc, char **argv) {
                                 "\u8BE5\u97F3\u8D28\u65E0\u6E90\u53EF\u7528");  /* 该音质无源可用 */
                             return true;
                         }
-                        const auto &qitem = as.playlist[as.selected_index];
-                        std::string qid = qitem.id ? qitem.id : "";
+                        /* the picker's target song is carried in
+                           action_sheet_quality_id (set when the picker
+                           opened), NOT as.playlist[selected_index] — the
+                           selection index here indexes quality levels, not
+                           the surrounding song list. */
+                        std::string qid = as.action_sheet_quality_id;
                         if (qid.empty()) return true;
                         std::string lvl = kLevels[qi];
                         std::string notice;
@@ -2295,28 +2299,32 @@ int run_app(int argc, char **argv) {
                             }
                             state.set_action_sheet(true, qi);
                         }
-                        const auto &qitem = as.playlist[as.selected_index];
-                        std::string qid = qitem.id ? qitem.id : "";
+                        /* the picker's target song is carried in
+                           action_sheet_quality_id, not as.playlist[] (the
+                           selection here is a quality level, not a song). */
+                        std::string qid = as.action_sheet_quality_id;
                         if (qid.empty()) return true;
-                        if (as.action_sheet_quality_id != qid) return true; /* stale picker */
-                        /* deny tiers gated by VIP (0) / SVIP (2); -1 = still
-                           probing → allow, the ladder falls back anyway */
+                        /* pure result-driven: the probe already asked the
+                           download endpoint per tier; 1 = served (download),
+                           2 = denied (warning), -1 = still probing (allow —
+                           the ladder falls back anyway), -2 = no source. */
                         if ((int)as.action_sheet_quality_ok.size() > qi) {
                             int qs = as.action_sheet_quality_ok[qi];
-                            if (qs == 0) {
-                                StateStore::instance().set_app_notice(
-                                    "\u9700\u9ED1\u80F6VIP\u53EF\u4E0B\u8F7D");  /* 需黑胶VIP可下载 */
-                                return true;
-                            }
                             if (qs == 2) {
                                 StateStore::instance().set_app_notice(
-                                    "\u9700SVIP\u53EF\u4E0B\u8F7D");  /* 需SVIP可下载 */
+                                    "\u8BE5\u97F3\u8D28\u4E0D\u53EF\u4E0B\u8F7D");  /* 该音质不可下载 */
+                                return true;
+                            }
+                            if (qs == 0) {  /* legacy gated marker — defensive */
+                                StateStore::instance().set_app_notice(
+                                    "\u8BE5\u97F3\u8D28\u4E0D\u53EF\u4E0B\u8F7D");  /* 该音质不可下载 */
                                 return true;
                             }
                         }
                         std::string lvl = kLevels[qi];
-                        std::string title = qitem.title ? qitem.title : qid;
-                        std::string artist = qitem.artist ? qitem.artist : "";
+                        std::string title = !as.action_sheet_quality_title.empty()
+                            ? as.action_sheet_quality_title : qid;
+                        std::string artist = as.action_sheet_quality_artist;
                         state.set_action_sheet(false, 0);
                         /* hand off to the serial download queue (worker thread
                            runs the transfer; progress is published to the UI) */
@@ -2405,6 +2413,8 @@ int run_app(int argc, char **argv) {
                                tiers that exist are shown with their bitrate. */
                             std::vector<int> ok(NQ_LEVELS, -1);
                             StateStore::instance().set_action_sheet_quality(id, ok);
+                            StateStore::instance().set_action_sheet_quality_meta(
+                                item.title ? item.title : "", item.artist ? item.artist : "");
                             state.set_action_sheet_menu(4);
                             state.set_action_sheet(true, 0);
                             /* kick off the authoritative source probe. The
@@ -2415,58 +2425,42 @@ int run_app(int argc, char **argv) {
                                need SVIP (SVIP colour); VIP-paid tracks are
                                only downloadable when owned. */
                             StateStore::instance().set_action_sheet_quality_probing(true);
-                            const int fee = item.fee;
-                            std::thread([id, fee]() {
+                            std::thread([id]() {
+                                /* Pure result-driven entitlement: the download
+                                   endpoint's per-tier answer is the authority
+                                   (code 200 + real url = downloadable, -120 /
+                                   no url = denied). We do NOT infer from VIP
+                                   level / purchased list / fee — the server
+                                   decides, "能下就是能下". The source table
+                                   (song-music-quality) is used only to skip
+                                   tiers that have no file at all (-2 hidden);
+                                   every remaining tier is then probed via the
+                                   download endpoint for the real verdict. */
                                 unsigned mask = 0;
                                 int br[NQ_LEVELS] = {0};
                                 std::vector<int> res(NQ_LEVELS, -1);
+                                static const unsigned bits[NQ_LEVELS] = {
+                                    NQ_JYMASTER, NQ_SKY, NQ_JYEFFECT, NQ_HIRES,
+                                    NQ_LOSSLESS, NQ_EXHIGH, NQ_HIGHER, NQ_STANDARD
+                                };
+                                static const char *const kLv[NQ_LEVELS] = {
+                                    "jymaster", "sky", "jyeffect", "hires",
+                                    "lossless", "exhigh", "higher", "standard"
+                                };
                                 if (g_ne->song_music_quality(id.c_str(), &mask, br) == 0) {
-                                    static const unsigned bits[NQ_LEVELS] = {
-                                        NQ_JYMASTER, NQ_SKY, NQ_JYEFFECT, NQ_HIRES,
-                                        NQ_LOSSLESS, NQ_EXHIGH, NQ_HIGHER, NQ_STANDARD
-                                    };
-                                    int vip = g_ne->vip_level();  /* 0 none,1 black,2 svip */
-                                    if (vip < 0) vip = 0;
-                                    /* purchased/owned check for VIP/paid
-                                       tracks: prefer the purchased-track
-                                       list, fall back to download-url's
-                                       `payed`. Free tracks (fee==0) are
-                                       always downloadable. */
-                                    int owned = 0;   /* 0 not-owned, 1 owned, -1 unknown */
-                                    if (fee != 0) {
-                                        int o = g_ne->is_purchased(id.c_str());
-                                        if (o < 0) o = g_ne->song_owned(id.c_str(), "lossless");
-                                        owned = (o == 1) ? 1 : (o == 0 ? 0 : -1);
-                                    }
-                                    for (int i = 0; i < NQ_LEVELS; i++) {
-                                        if (!(mask & bits[i])) { res[i] = -2; continue; }
-                                        int require = 0; /* free tier */
-                                        if (i == 2 || i == 4) require = 1;  /* jyeffect, lossless → VIP */
-                                        else if (i == 0 || i == 1) require = 2; /* jymaster, sky → SVIP */
-                                        /* hires (i==3) folded into jyeffect tier; treat as VIP */
-                                        if (i == 3) require = 1;
-                                        if (fee != 0) {
-                                            if (owned == 1) {
-                                                /* purchased: fully downloadable */
-                                                res[i] = 1;
-                                            } else if (owned == 0) {
-                                                /* not purchased → gated */
-                                                res[i] = require == 2 ? 2 : 0;
-                                            } else {
-                                                /* unknown: keep gated */
-                                                res[i] = require == 2 ? 2 : 0;
-                                            }
-                                            continue;
-                                        }
-                                        if (vip >= require) res[i] = 1;
-                                        else if (require == 2) res[i] = 2;  /* SVIP colour */
-                                        else if (require == 1) res[i] = 0;  /* VIP colour */
-                                        else res[i] = 1;
-                                    }
                                     std::vector<int> brv(br, br + NQ_LEVELS);
                                     StateStore::instance().set_action_sheet_quality_br(id, brv);
+                                    for (int i = 0; i < NQ_LEVELS; i++) {
+                                        if (!(mask & bits[i])) { res[i] = -2; continue; }
+                                        char url[1024];
+                                        if (g_ne->download_url(id.c_str(), kLv[i],
+                                                               url, sizeof url) == 0)
+                                            res[i] = 1;   /* server serves it → downloadable */
+                                        else
+                                            res[i] = 2;   /* denied → warning (not downloadable) */
+                                    }
                                 } else {
-                                    res = { -2, -2, -2, -2, -2, 1, 1, 1 };
+                                    res = { -2, -2, -2, -2, -2, -2, -2, -2 };
                                 }
                                 StateStore::instance().set_action_sheet_quality(id, res);
                                 /* a tier that turned out hidden (no source)
@@ -2498,6 +2492,8 @@ int run_app(int argc, char **argv) {
                             StateStore::instance().set_action_sheet_menu(6);
                             state.set_action_sheet(true, 0);
                             StateStore::instance().set_action_sheet_quality_probing(true);
+                            StateStore::instance().set_action_sheet_quality_meta(
+                                item.title ? item.title : "", item.artist ? item.artist : "");
                             /* initial state: all tiers probing (-1) */
                             std::vector<int> ok(NQ_LEVELS, -1);
                             StateStore::instance().set_action_sheet_quality(id, ok);

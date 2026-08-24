@@ -34,6 +34,9 @@ Element theme_vip(Element e);
    but not playable/downloadable at the current account's level. */
 Element theme_warning(Element e);
 
+/* Success color — marks tiers that are downloadable / entitled. */
+Element theme_success(Element e);
+
 /* Background warning — whole-row bg for no-entitlement tiers */
 Element theme_warning_bg(Element e);
 
