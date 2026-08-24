@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <pthread.h>
 #include <sys/stat.h>
 #include <yyjson.h>
 
@@ -81,175 +82,262 @@ static int json_save_root(const char *path, yyjson_mut_val *root) {
     return ok ? 0 : -1;
 }
 
-/* ── Overrides (preference, persistent) ─────────────── */
+/* ── Overrides (preference, persistent) ───────────────
+   In-memory mirror of quality_overrides.json. Loaded lazily on first use
+   and kept write-through (set/del update memory + flush to disk), so the
+   common read path (nq_override_get) never touches the disk. */
+
 static void overrides_path(char *out, size_t sz) { path_for(out, sz, OVR_FILE); }
 
-static yyjson_mut_val *overrides_root(yyjson_mut_doc **doc_out) {
+/* song_id -> level; linear array is fine (overrides are few, user-set) */
+typedef struct { char *id; char *level; } OvrEntry;
+static OvrEntry *g_ovr = NULL;
+static int   g_ovr_count = 0;
+static int   g_ovr_cap   = 0;
+static int   g_ovr_loaded = 0;
+static pthread_mutex_t g_ovr_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static void overrides_load_locked(void) {
+    if (g_ovr_loaded) return;
+    g_ovr_loaded = 1;
     char path[1100];
     overrides_path(path, sizeof(path));
     yyjson_doc *doc = json_load_file(path);
-    yyjson_mut_doc *mdoc;
-    yyjson_mut_val *root;
-    if (doc) {
-        mdoc = yyjson_doc_mut_copy(doc, NULL);
-        yyjson_doc_free(doc);
-        root = yyjson_mut_doc_get_root(mdoc);
-        if (!root) {
-            root = yyjson_mut_obj(mdoc);
-            yyjson_mut_doc_set_root(mdoc, root);
+    if (!doc) return;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    if (root && yyjson_is_obj(root)) {
+        size_t idx, max;
+        yyjson_val *k, *v;
+        yyjson_obj_foreach(root, idx, max, k, v) {
+            const char *id = yyjson_get_str(k);
+            const char *lvl = yyjson_is_str(v) ? yyjson_get_str(v) : NULL;
+            if (!id || !lvl || level_index(lvl) < 0) continue;
+            if (g_ovr_count == g_ovr_cap) {
+                g_ovr_cap = g_ovr_cap ? g_ovr_cap * 2 : 8;
+                g_ovr = (OvrEntry*)realloc(g_ovr,
+                        (size_t)g_ovr_cap * sizeof(*g_ovr));
+            }
+            g_ovr[g_ovr_count].id    = strdup(id);
+            g_ovr[g_ovr_count].level = strdup(lvl);
+            g_ovr_count++;
         }
-    } else {
-        mdoc = yyjson_mut_doc_new(NULL);
-        root = yyjson_mut_obj(mdoc);
-        yyjson_mut_doc_set_root(mdoc, root);
     }
-    *doc_out = mdoc;
-    return root;
+    yyjson_doc_free(doc);
+}
+
+static int overrides_flush_locked(void) {
+    char path[1100];
+    overrides_path(path, sizeof(path));
+    yyjson_mut_doc *mdoc = yyjson_mut_doc_new(NULL);
+    yyjson_mut_val *root = yyjson_mut_obj(mdoc);
+    yyjson_mut_doc_set_root(mdoc, root);
+    for (int i = 0; i < g_ovr_count; i++)
+        yyjson_mut_obj_add_str(mdoc, root, g_ovr[i].id, g_ovr[i].level);
+    netune_ensure_dir(path);
+    int rc = json_save_root(path, root);
+    yyjson_mut_doc_free(mdoc);
+    return rc;
 }
 
 int nq_override_set(const char *song_id, const char *level) {
     if (!song_id || !*song_id || level_index(level) < 0) return -1;
-    yyjson_mut_doc *mdoc;
-    yyjson_mut_val *root = overrides_root(&mdoc);
-    if (!root) { yyjson_mut_doc_free(mdoc); return -1; }
-    yyjson_mut_obj_add_str(mdoc, root, song_id, level);
-    char path[1100];
-    overrides_path(path, sizeof(path));
-    netune_ensure_dir(path);
-    int rc = json_save_root(path, root);
-    yyjson_mut_doc_free(mdoc);
+    pthread_mutex_lock(&g_ovr_mutex);
+    overrides_load_locked();
+    int i;
+    for (i = 0; i < g_ovr_count; i++)
+        if (strcmp(g_ovr[i].id, song_id) == 0) break;
+    if (i < g_ovr_count) {
+        free(g_ovr[i].level);
+        g_ovr[i].level = strdup(level);
+    } else {
+        if (g_ovr_count == g_ovr_cap) {
+            g_ovr_cap = g_ovr_cap ? g_ovr_cap * 2 : 8;
+            g_ovr = (OvrEntry*)realloc(g_ovr,
+                    (size_t)g_ovr_cap * sizeof(*g_ovr));
+        }
+        g_ovr[g_ovr_count].id    = strdup(song_id);
+        g_ovr[g_ovr_count].level = strdup(level);
+        g_ovr_count++;
+    }
+    int rc = overrides_flush_locked();
+    pthread_mutex_unlock(&g_ovr_mutex);
     return rc;
 }
 
 int nq_override_get(const char *song_id, char *level, size_t sz) {
     if (!song_id || !level || sz == 0) return -1;
-    char path[1100];
-    overrides_path(path, sizeof(path));
-    yyjson_doc *doc = json_load_file(path);
-    if (!doc) return -1;
+    pthread_mutex_lock(&g_ovr_mutex);
+    overrides_load_locked();
     int rc = -1;
-    yyjson_val *root = yyjson_doc_get_root(doc);
-    yyjson_val *v = root && yyjson_is_obj(root) ? yyjson_obj_get(root, song_id) : NULL;
-    if (v && yyjson_is_str(v)) {
-        const char *s = yyjson_get_str(v);
-        if (level_index(s) >= 0) {
-            snprintf(level, sz, "%s", s);
+    for (int i = 0; i < g_ovr_count; i++) {
+        if (strcmp(g_ovr[i].id, song_id) == 0) {
+            snprintf(level, sz, "%s", g_ovr[i].level);
             rc = 0;
+            break;
         }
     }
-    yyjson_doc_free(doc);
+    pthread_mutex_unlock(&g_ovr_mutex);
     return rc;
 }
 
 int nq_override_del(const char *song_id) {
     if (!song_id || !*song_id) return -1;
-    yyjson_mut_doc *mdoc;
-    yyjson_mut_val *root = overrides_root(&mdoc);
-    if (!root) { yyjson_mut_doc_free(mdoc); return -1; }
-    yyjson_mut_obj_remove_key(root, song_id);
+    pthread_mutex_lock(&g_ovr_mutex);
+    overrides_load_locked();
+    int rc = -1;
+    for (int i = 0; i < g_ovr_count; i++) {
+        if (strcmp(g_ovr[i].id, song_id) == 0) {
+            free(g_ovr[i].id);
+            free(g_ovr[i].level);
+            g_ovr[i] = g_ovr[g_ovr_count - 1];
+            g_ovr_count--;
+            rc = overrides_flush_locked();
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_ovr_mutex);
+    return rc;
+}
+
+/* ── Source-table cache (LRU-capped) ──────────────────
+   In-memory mirror of quality_cache.json: lazily loaded on first use,
+   kept write-through (put updates memory + flushes to disk), LRU-capped
+   by CACHE_MAX. nq_cache_get never touches the disk after first load. */
+
+static void cache_path(char *out, size_t sz) { path_for(out, sz, CACHE_FILE); }
+
+typedef struct { char *id; unsigned mask; long long ts; int br[NQ_LEVELS]; } CacheEntry;
+static CacheEntry *g_cache = NULL;
+static int   g_cache_count = 0;
+static int   g_cache_cap   = 0;
+static int   g_cache_loaded = 0;
+static pthread_mutex_t g_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static void cache_load_locked(void) {
+    if (g_cache_loaded) return;
+    g_cache_loaded = 1;
     char path[1100];
-    overrides_path(path, sizeof(path));
+    cache_path(path, sizeof(path));
+    yyjson_doc *doc = json_load_file(path);
+    if (!doc) return;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    if (root && yyjson_is_obj(root)) {
+        size_t idx, max;
+        yyjson_val *k, *v;
+        yyjson_obj_foreach(root, idx, max, k, v) {
+            const char *id = yyjson_get_str(k);
+            if (!id || !yyjson_is_obj(v)) continue;
+            yyjson_val *m = yyjson_obj_get(v, "mask");
+            if (!m || !yyjson_is_num(m)) continue;
+            if (g_cache_count == g_cache_cap) {
+                g_cache_cap = g_cache_cap ? g_cache_cap * 2 : 32;
+                g_cache = (CacheEntry*)realloc(g_cache,
+                        (size_t)g_cache_cap * sizeof(*g_cache));
+            }
+            CacheEntry *e = &g_cache[g_cache_count];
+            e->id   = strdup(id);
+            e->mask = (unsigned)yyjson_get_int(m);
+            yyjson_val *t = yyjson_obj_get(v, "ts");
+            e->ts = t && yyjson_is_num(t) ? (long long)yyjson_get_int(t) : 0;
+            for (int i = 0; i < NQ_LEVELS; i++) e->br[i] = 0;
+            yyjson_val *br = yyjson_obj_get(v, "br");
+            if (br && yyjson_is_arr(br)) {
+                size_t n = yyjson_arr_size(br);
+                for (size_t i = 0; i < n && i < (size_t)NQ_LEVELS; i++) {
+                    yyjson_val *b = yyjson_arr_get(br, i);
+                    if (b && yyjson_is_num(b)) e->br[i] = yyjson_get_int(b);
+                }
+            }
+            g_cache_count++;
+        }
+    }
+    yyjson_doc_free(doc);
+}
+
+static int cache_find_locked(const char *song_id) {
+    for (int i = 0; i < g_cache_count; i++)
+        if (strcmp(g_cache[i].id, song_id) == 0) return i;
+    return -1;
+}
+
+/* drop the entry with the smallest ts (least recently written) until
+   under the cap */
+static void cache_prune_locked(void) {
+    while (g_cache_count > CACHE_MAX) {
+        int oldest = 0;
+        for (int i = 1; i < g_cache_count; i++)
+            if (g_cache[i].ts < g_cache[oldest].ts) oldest = i;
+        free(g_cache[oldest].id);
+        g_cache[oldest] = g_cache[g_cache_count - 1];
+        g_cache_count--;
+    }
+}
+
+static int cache_flush_locked(void) {
+    char path[1100];
+    cache_path(path, sizeof(path));
+    netune_ensure_dir(path);
+    yyjson_mut_doc *mdoc = yyjson_mut_doc_new(NULL);
+    yyjson_mut_val *root = yyjson_mut_obj(mdoc);
+    yyjson_mut_doc_set_root(mdoc, root);
+    for (int i = 0; i < g_cache_count; i++) {
+        yyjson_mut_val *e = yyjson_mut_obj(mdoc);
+        yyjson_mut_obj_add_uint(mdoc, e, "mask", g_cache[i].mask);
+        yyjson_mut_obj_add_int(mdoc, e, "ts", g_cache[i].ts);
+        yyjson_mut_val *arr = yyjson_mut_arr(mdoc);
+        for (int j = 0; j < NQ_LEVELS; j++)
+            yyjson_mut_arr_add_int(mdoc, arr, g_cache[i].br[j]);
+        yyjson_mut_obj_add_val(mdoc, e, "br", arr);
+        yyjson_mut_obj_add_val(mdoc, root, g_cache[i].id, e);
+    }
     int rc = json_save_root(path, root);
     yyjson_mut_doc_free(mdoc);
     return rc;
 }
 
-/* ── Source-table cache (LRU-capped) ────────────────── */
-static void cache_path(char *out, size_t sz) { path_for(out, sz, CACHE_FILE); }
-
 int nq_cache_get(const char *song_id, unsigned *mask_out, int *br_out) {
     if (!song_id || !mask_out) return -1;
-    char path[1100];
-    cache_path(path, sizeof(path));
-    yyjson_doc *doc = json_load_file(path);
-    if (!doc) return -1;
+    pthread_mutex_lock(&g_cache_mutex);
+    cache_load_locked();
+    int idx = cache_find_locked(song_id);
     int rc = -1;
-    yyjson_val *root = yyjson_doc_get_root(doc);
-    yyjson_val *e = root && yyjson_is_obj(root) ? yyjson_obj_get(root, song_id) : NULL;
-    if (e && yyjson_is_obj(e)) {
-        yyjson_val *m = yyjson_obj_get(e, "mask");
-        if (m && yyjson_is_num(m)) {
-            *mask_out = (unsigned)yyjson_get_int(m);
-            if (br_out) {
-                for (int i = 0; i < NQ_LEVELS; i++) br_out[i] = 0;
-                yyjson_val *br = yyjson_obj_get(e, "br");
-                if (br && yyjson_is_arr(br)) {
-                    size_t n = yyjson_arr_size(br);
-                    for (size_t i = 0; i < n && i < (size_t)NQ_LEVELS; i++) {
-                        yyjson_val *b = yyjson_arr_get(br, i);
-                        if (b && yyjson_is_num(b)) br_out[i] = yyjson_get_int(b);
-                    }
-                }
-            }
-            rc = 0;
+    if (idx >= 0) {
+        *mask_out = g_cache[idx].mask;
+        if (br_out) {
+            for (int i = 0; i < NQ_LEVELS; i++) br_out[i] = g_cache[idx].br[i];
         }
+        rc = 0;
     }
-    yyjson_doc_free(doc);
+    pthread_mutex_unlock(&g_cache_mutex);
     return rc;
-}
-
-static void cache_prune(yyjson_mut_doc *mdoc, yyjson_mut_val *root) {
-    (void)mdoc;
-    size_t max = (size_t)CACHE_MAX;
-    while (yyjson_mut_obj_size(root) > max) {
-        /* drop the entry with the smallest ts (least recently written) */
-        const char *oldest_key = NULL;
-        size_t oldest_key_len = 0;
-        long long oldest = 0;
-        int first = 1;
-        size_t idx, maxi;
-        yyjson_mut_val *k, *v;
-        yyjson_mut_obj_foreach(root, idx, maxi, k, v) {
-            long long ts = 0;
-            if (yyjson_mut_is_obj(v)) {
-                yyjson_mut_val *t = yyjson_mut_obj_get(v, "ts");
-                if (t && yyjson_mut_is_num(t)) ts = yyjson_mut_get_int(t);
-            }
-            if (first || ts < oldest) {
-                first = 0;
-                oldest = ts;
-                oldest_key = yyjson_mut_get_str(k);
-                oldest_key_len = yyjson_mut_get_len(k);
-            }
-        }
-        if (!oldest_key) break;
-        yyjson_mut_obj_remove_keyn(root, oldest_key, oldest_key_len);
-    }
 }
 
 int nq_cache_put(const char *song_id, unsigned mask, const int *br) {
     if (!song_id || !*song_id) return -1;
-    char path[1100];
-    cache_path(path, sizeof(path));
-    netune_ensure_dir(path);
-
-    yyjson_mut_doc *mdoc;
-    yyjson_mut_val *root;
-    yyjson_doc *doc = json_load_file(path);
-    if (doc) {
-        mdoc = yyjson_doc_mut_copy(doc, NULL);
-        yyjson_doc_free(doc);
-        root = yyjson_mut_doc_get_root(mdoc);
-        if (!root) { root = yyjson_mut_obj(mdoc); yyjson_mut_doc_set_root(mdoc, root); }
+    pthread_mutex_lock(&g_cache_mutex);
+    cache_load_locked();
+    int idx = cache_find_locked(song_id);
+    if (idx >= 0) {
+        g_cache[idx].mask = mask;
+        if (br) for (int i = 0; i < NQ_LEVELS; i++) g_cache[idx].br[i] = br[i];
+        g_cache[idx].ts = (long long)time(NULL);
     } else {
-        mdoc = yyjson_mut_doc_new(NULL);
-        root = yyjson_mut_obj(mdoc);
-        yyjson_mut_doc_set_root(mdoc, root);
+        if (g_cache_count == g_cache_cap) {
+            g_cache_cap = g_cache_cap ? g_cache_cap * 2 : 32;
+            g_cache = (CacheEntry*)realloc(g_cache,
+                    (size_t)g_cache_cap * sizeof(*g_cache));
+        }
+        CacheEntry *e = &g_cache[g_cache_count];
+        e->id   = strdup(song_id);
+        e->mask = mask;
+        e->ts   = (long long)time(NULL);
+        if (br) for (int i = 0; i < NQ_LEVELS; i++) e->br[i] = br[i];
+        else    for (int i = 0; i < NQ_LEVELS; i++) e->br[i] = 0;
+        g_cache_count++;
     }
-
-    yyjson_mut_val *e = yyjson_mut_obj(mdoc);
-    yyjson_mut_obj_add_uint(mdoc, e, "mask", mask);
-    yyjson_mut_obj_add_int(mdoc, e, "ts", (long long)time(NULL));
-    if (br) {
-        yyjson_mut_val *arr = yyjson_mut_arr(mdoc);
-        for (int i = 0; i < NQ_LEVELS; i++) yyjson_mut_arr_add_int(mdoc, arr, br[i]);
-        yyjson_mut_obj_add_val(mdoc, e, "br", arr);
-    }
-    yyjson_mut_obj_add_val(mdoc, root, song_id, e);
-
-    cache_prune(mdoc, root);
-    int rc = json_save_root(path, root);
-    yyjson_mut_doc_free(mdoc);
+    cache_prune_locked();
+    int rc = cache_flush_locked();
+    pthread_mutex_unlock(&g_cache_mutex);
     return rc;
 }
 
