@@ -53,6 +53,9 @@ jobs:
         shell: pwsh
     env:
       VCPKG_DEFAULT_TRIPLET: x64-windows
+      # Release-only: skip building debug variants of vcpkg deps (FFmpeg is
+      # compiled from source twice otherwise). Windows CI only builds Release.
+      VCPKG_INSTALL_ONLY_RELEASE: '1'
 
     steps:
       - uses: actions/checkout@v4
