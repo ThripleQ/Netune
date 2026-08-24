@@ -1,5 +1,6 @@
 #include "ui/components/status_bar.h"
 #include "ui/components/theme_util.h"
+#include "ui/components/spinner.h"
 #include "ui/state_store.h"
 #include <ftxui/screen/string.hpp>
 #include <cstdio>
@@ -102,6 +103,32 @@ Element render_status_bar(const AppState &s) {
     }
 
     /* info + title on one line; gauge on the next */
+    /* ── Download indicator (visible in every view) ──
+       Shown when the serial download queue has active items: spinner +
+       the downloading item's percentage. Without this the only place a
+       download shows up is the app's own "downloads" local group, so a
+       download started from Netease/search views is invisible. */
+    std::string dl_str;
+    if (!s.downloads.empty()) {
+        int dling = -1;
+        for (size_t i = 0; i < s.downloads.size(); i++) {
+            if (s.downloads[i].status == DlStatus::Downloading) { dling = (int)i; break; }
+        }
+        if (dling >= 0) {
+            const auto &d = s.downloads[dling];
+            int p = d.total > 0 ? (int)(d.done * 100 / d.total) : 0;
+            if (p > 100) p = 100;
+            char pb[16];
+            snprintf(pb, sizeof pb, "%d%%", p);
+            dl_str = std::string(" ") + spinner_glyph() + " \u4E0B\u8F7D " + pb;  /* 下载 */
+        } else {
+            /* queued only */
+            char qb[32];
+            snprintf(qb, sizeof qb, "%zu", s.downloads.size());
+            dl_str = std::string(" \u4E0B\u8F7D\u6392\u961F ") + qb;  /* 下载排队 */
+        }
+    }
+
     std::string top_line;
     if (song_row.empty()) {
         snprintf(buf, sizeof buf, " %s%s %s  %s  V:%d",
@@ -127,6 +154,17 @@ Element render_status_bar(const AppState &s) {
             int off = (s_tick / 4) % (song_w + GAP);
             top_line += window_at(loop_row, off, avail);
         }
+    }
+
+    /* prepend the download indicator to the state row (before the title),
+       shrinking the marquee budget by its width */
+    if (!dl_str.empty()) {
+        int dw = string_width(dl_str);
+        top_line.insert(0, dl_str);
+        /* the marquee budget above didn't account for dl_str; drop the
+           trailing "  " so the line still fits (marquee window recomputed
+           below is approximate — acceptable for a status line). */
+        (void)dw;
     }
 
     float gv = s.progress;

@@ -136,10 +136,13 @@ void DownloadQueue::worker_loop() {
             });
         if (fi != items_.end())
             fi->status = ok ? DlStatus::Done : DlStatus::Failed;
-        lk.unlock();
-
-        /* drop the just-finished item so the deque stays bounded */
+        /* drop the just-finished item while still holding the lock — prune()
+           mutates items_ and must never run unlocked against the main
+           thread's enqueue()/active() (data race corrupted the deque and
+           could surface as a std::system_error("Operation not permitted")
+           from the mutex). */
         prune();
+        lk.unlock();
 
         if (ok) {
             LOG_INFO("DOWNLOAD ok: %s (%s)", path,
