@@ -92,6 +92,11 @@ typedef struct NeteaseExt {
     int  (*song_music_quality)(const char *song_id, unsigned *mask_out,
                                int *br_out);
     int  (*vip_level)(void);
+    /* play endpoint URL at an explicit quality — the authority for "can
+       this tier stream": 0 = a real url is served (code 200), -1 = denied.
+       Purely result-driven. */
+    int  (*song_url)(const char *song_id, const char *level,
+                     char *url, size_t url_sz);
 
     /* ownership / purchases */
     int  (*song_owned)(const char *song_id, const char *level);

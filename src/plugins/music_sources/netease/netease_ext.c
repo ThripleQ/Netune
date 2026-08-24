@@ -41,6 +41,7 @@ static const NeteaseExt g_ext = {
 
     .song_music_quality = netease_song_music_quality,
     .vip_level          = netease_vip_level,
+    .song_url           = netease_song_url,
 
     .song_owned         = netease_song_owned,
     .purchased_refresh  = netease_purchased_refresh,

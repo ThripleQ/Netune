@@ -2497,8 +2497,15 @@ int run_app(int argc, char **argv) {
                             /* initial state: all tiers probing (-1) */
                             std::vector<int> ok(NQ_LEVELS, -1);
                             StateStore::instance().set_action_sheet_quality(id, ok);
-                            const int fee = item.fee;
-                            std::thread([id, cur_str, fee]() {
+                            std::thread([id, cur_str]() {
+                                /* Pure result-driven (mirrors the download
+                                   picker): the play endpoint (song-url) is the
+                                   authority for "can this tier stream" — code
+                                   200 + a real url = playable, anything else
+                                   (denied / no url) = not. No inference from
+                                   VIP level / purchased list / fee. The source
+                                   table is used only to skip tiers that have
+                                   no file at all (-2 hidden). */
                                 unsigned mask = 0;
                                 int br[NQ_LEVELS] = {0};
                                 if (nq_cache_get(id.c_str(), &mask, br) != 0)
@@ -2512,49 +2519,16 @@ int run_app(int argc, char **argv) {
                                     "jymaster", "sky", "jyeffect", "hires",
                                     "lossless", "exhigh", "higher", "standard"
                                 };
-                                /* entitlement mirrors the download picker:
-                                   jyeffect/lossless/hires need black-vinyl
-                                   VIP, jymaster/sky need SVIP; paid tracks
-                                   are hidden unless purchased. */
-                                int vip = g_ne->vip_level();
-                                if (vip < 0) vip = 0;
-                                int owned = 0;
-                                if (fee != 0) {
-                                    int o = g_ne->is_purchased(id.c_str());
-                                    if (o < 0) o = g_ne->song_owned(id.c_str(), "lossless");
-                                    owned = (o == 1) ? 1 : (o == 0 ? 0 : -1);
-                                }
                                 for (int i = 0; i < NQ_LEVELS; i++) {
                                     if (!(mask & bits[i])) continue;  /* no source → hidden */
-                                    int require = 0;
-                                    if (i == 2 || i == 4) require = 1;  /* jyeffect, lossless → VIP */
-                                    else if (i == 0 || i == 1) require = 2; /* jymaster, sky → SVIP */
-                                    if (i == 3) require = 1;  /* hires → VIP */
-                                    if (fee != 0) {
-                                        if (owned == 1) {
-                                            /* purchased: playable at any quality */
-                                            res[i] = (cur_str == kNames[i]) ? 1 : 0;
-                                        } else {
-                                            /* not purchased → not playable, but
-                                               show + mark (shared entitlement
-                                               convention res=2 = warning) so the
-                                               user sees the tier exists. */
-                                            res[i] = 2;
-                                        }
-                                        continue;
-                                    }
-                                    if (vip >= require) {
+                                    char url[1024];
+                                    int playable =
+                                        (g_ne->song_url(id.c_str(), kNames[i],
+                                                        url, sizeof url) == 0);
+                                    if (playable)
                                         res[i] = (cur_str == kNames[i]) ? 1 : 0;
-                                    } else if (require == 0) {
-                                        res[i] = (cur_str == kNames[i]) ? 1 : 0;
-                                    } else {
-                                        /* gated by VIP/SVIP: show the tier but
-                                           mark it (res=2) — the picker maps 2
-                                           to the warning colour. The tier stays
-                                           selectable; the server silently
-                                           downgrades if actually streamed. */
-                                        res[i] = 2;
-                                    }
+                                    else
+                                        res[i] = 2;  /* denied → warning */
                                 }
                                 if (mask) nq_cache_put(id.c_str(), mask, br);
                                 std::vector<int> brv(br, br + NQ_LEVELS);
@@ -2562,7 +2536,7 @@ int run_app(int argc, char **argv) {
                                 StateStore::instance().set_action_sheet_quality(id, res);
                                 StateStore::instance().set_action_sheet_quality_probing(false);
                                 /* park selection on the first *entitled*
-                                   tier (1 = current, 0 = selectable), so the
+                                   tier (1 = current, 0 = playable), so the
                                    default highlight isn't a no-entitlement
                                    tier that the server would downgrade. Fall
                                    back to any visible tier if none is. */
