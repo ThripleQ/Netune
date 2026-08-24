@@ -31,6 +31,7 @@
 #include "core/audio_cache.h"
 #include "ui/keybindings.h"
 #include "ui/theme.h"
+#include "ui/components/theme_util.h"
 #include <yaml.h>
 
 using namespace ftxui;
@@ -526,6 +527,10 @@ int run_config(void) {
 
     Config *cfg = config_load((data_root() + "/config.json").c_str());
     st.cur_theme = cfg ? config_get_str(cfg, "ui.theme", "default") : "default";
+    /* Load the applied theme so the manager's own chrome (background, text,
+       popups) uses the same theme system as the main app, not hardcoded RGB. */
+    ThemeManager::instance().load(
+        ThemeManager::resolve_path(st.cur_theme));
     int cur_vol  = cfg ? config_get_int(cfg, "audio.volume", 80) : 80;
     int cur_loop = cfg ? config_get_int(cfg, "playback.loop_mode", 0) : 0;
     int cur_seek = cfg ? config_get_int(cfg, "playback.seek_step_sec", 5) : 5;
@@ -549,43 +554,40 @@ int run_config(void) {
         auto &th = st;
         if (th.mode == Mode::Input) {
             Elements body;
-            body.push_back(text("  " + th.input_title) | bold);
+            body.push_back(theme_fg(text("  " + th.input_title) | bold));
             body.push_back(separator());
             body.push_back(text("  " + th.input_buf + "\u258C"));
             body.push_back(separator());
             body.push_back(text("  Enter 确认   ESC 取消") | dim);
-            auto box = vbox(std::move(body)) | borderRounded
-                       | bgcolor(Color::RGB(26,27,38))
-                       | color(Color::RGB(122,162,247));
+            auto box = theme_border(vbox(std::move(body)) | borderRounded);
+            box = theme_overlay_bg(box);
             return vbox({filler(), hbox({filler(), box})});
         }
         if (th.mode == Mode::Confirm) {
             Elements body;
-            body.push_back(text("  " + th.confirm_msg) | bold | color(Color::RGB(247,118,142)));
+            body.push_back(theme_fg(text("  " + th.confirm_msg) | bold | color(Color::RGB(247,118,142))));
             body.push_back(separator());
             body.push_back(text("  y 确认   n/ESC 取消") | dim);
-            auto box = vbox(std::move(body)) | borderRounded
-                       | bgcolor(Color::RGB(26,27,38))
-                       | color(Color::RGB(122,162,247));
+            auto box = theme_border(vbox(std::move(body)) | borderRounded);
+            box = theme_overlay_bg(box);
             return vbox({filler(), hbox({filler(), box})});
         }
         if (th.mode == Mode::Capture) {
             Elements body;
-            body.push_back(text("  编辑按键: 按新键=绑定(支持 ctrl/alt), 已有键=取消") | bold);
+            body.push_back(theme_fg(text("  编辑按键: 按新键=绑定(支持 ctrl/alt), 已有键=取消") | bold));
             body.push_back(separator());
             body.push_back(text("  当前: " + key_list_str(th.kb_map[th.kb_sel].second)));
             body.push_back(text("  Backspace 删除最后一个  Enter 完成  ESC 取消") | dim);
-            auto box = vbox(std::move(body)) | borderRounded
-                       | bgcolor(Color::RGB(26,27,38))
-                       | color(Color::RGB(122,162,247));
+            auto box = theme_border(vbox(std::move(body)) | borderRounded);
+            box = theme_overlay_bg(box);
             return vbox({filler(), hbox({filler(), box})});
         }
         if (th.mode == Mode::ColorEdit) {
             const ColorSlot &slot = kSlots[th.slot_sel];
             ThemeColor &c = th.theme_edit.*(slot.member);
             Elements body;
-            body.push_back(text(std::string("  编辑颜色 [") + slot.name + "]  当前 " +
-                                theme_color_to_hex(c)) | bold);
+            body.push_back(theme_fg(text(std::string("  编辑颜色 [") + slot.name + "]  当前 " +
+                                theme_color_to_hex(c)) | bold));
             body.push_back(separator());
             Element swatch = c.has_color
                 ? text("  ") | bgcolor(Color::RGB(c.r, c.g, c.b))
@@ -602,9 +604,8 @@ int run_config(void) {
             }
             body.push_back(hbox(std::move(pal)));
             body.push_back(text("  ←/→ 选色板  x 无色  Enter 应用  ESC 取消") | dim);
-            auto box = vbox(std::move(body)) | borderRounded
-                       | bgcolor(Color::RGB(26,27,38))
-                       | color(Color::RGB(122,162,247));
+            auto box = theme_border(vbox(std::move(body)) | borderRounded);
+            box = theme_overlay_bg(box);
             return vbox({filler(), hbox({filler(), box})});
         }
         return text("");
@@ -766,7 +767,7 @@ int run_config(void) {
         els.push_back(text("  ←/→ 或 1-4 切换分类   q 退出") | dim);
 
         return dbox({
-            vbox(std::move(els)) | flex | border | bgcolor(Color::RGB(26,27,38)),
+            theme_overlay_bg(vbox(std::move(els)) | flex | border),
             render_popup(),
         });
     };
