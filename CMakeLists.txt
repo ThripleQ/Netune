@@ -247,6 +247,7 @@ set(CORE_SOURCES
   src/core/decoder_manager.c
   src/core/audio_output_mgr.c
   src/core/playback_coordinator.c
+  src/core/audio_cache.c
   src/core/cache_manager.c
   src/core/search_manager.c
   src/core/spectrum.c
