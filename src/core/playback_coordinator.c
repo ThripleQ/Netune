@@ -209,11 +209,36 @@ static void audio_teardown(AudioOutput *audio) {
    per-song override / global default). On success fills the thread's
    ffstream/decoder/audio + samplerate/channels/total_frames.
    Returns: 0 = ready, 1 = no play URL (caller should skip), -1 = failed. */
+
+/* Called right before a stream is torn down at stop/switch (NOT at
+   end-of-stream, which commits a complete cache): keep whatever contiguous
+   bytes were received as a partial cache entry instead of discarding them,
+   so a half-heard track still starts instantly next time. */
+static void cache_keep_partial(FFStream *ffstream) {
+    if (!ffstream || !g_rec_active) return;
+    if (!ffstream_recording(ffstream)) {  /* seek'd or append unavailable */
+        g_rec_active = 0;
+        return;
+    }
+    char *final = audio_cache_final_path(g_rec_song,
+                                         ffstream_media_ext(ffstream));
+    if (final) {
+        if (ffstream_recorder_commit(ffstream, final) == 0)
+            audio_cache_commit(g_rec_song, final, g_rec_level, 0);  /* partial */
+        free(final);
+    }
+    g_rec_active = 0;
+}
+
 static int open_stream(const char *path,
                        FFStream **ffstream, Decoder **decoder,
                        AudioOutput **audio,
                        int *samplerate, int *channels, int *total_frames) {
-    if (*ffstream) { ffstream_close(*ffstream); *ffstream = NULL; }
+    if (*ffstream) {
+        cache_keep_partial(*ffstream);   /* preserve partial recording */
+        ffstream_close(*ffstream);
+        *ffstream = NULL;
+    }
     if (*decoder)  { decoder_close(*decoder); *decoder = NULL; }
     audio_teardown(*audio); *audio = NULL;
 
@@ -255,21 +280,50 @@ static int open_stream(const char *path,
         snprintf(g_rec_level, sizeof(g_rec_level), "%s", level);
 
         /* 1. cache hit → play the cached file directly (offline, the stream
-              never touches the network) */
+              never touches the network when the copy is complete; a partial
+              prefix continues from disk and resumes the rest via network) */
         char cache_path[1100];
-        if (audio_cache_find(path, level, cache_path, sizeof(cache_path)) == 0) {
-            *decoder = decoder_open(cache_path);
-            if (!*decoder) {
-                LOG_ERROR("Cannot open cached: %s", cache_path);
-                free(level);
-                return -1;
+        int  cache_complete = 1;
+        if (audio_cache_find(path, level, cache_path, sizeof(cache_path),
+                             &cache_complete) == 0) {
+            if (cache_complete) {
+                *decoder = decoder_open(cache_path);
+                if (!*decoder) {
+                    LOG_ERROR("Cannot open cached: %s", cache_path);
+                    free(level);
+                    return -1;
+                }
+                DecoderInfo info;
+                decoder_get_info(*decoder, &info);
+                *samplerate   = info.sample_rate;
+                *channels     = info.channels;
+                *total_frames = info.total_frames;
+                audio_cache_touch(path);
+            } else {
+                /* partial prefix → play from the cache, then resume +
+                   backfill the rest from the network (no audible seam) */
+                char url[2048] = {0};
+                MusicSource *src = music_source_get("netease");
+                if (!src || !src->get_play_url ||
+                    src->get_play_url(path, 0, url, sizeof(url)) != 0 || !url[0]) {
+                    LOG_WARN("No play URL for %s", path);
+                    free(level);
+                    return 1;  /* unplayable — caller decides skip/error */
+                }
+                LOG_INFO("Continuing partial cache: %s", path);
+                int dur_sec = 0;
+                *ffstream = ffstream_open_partial(url, cache_path,
+                                                  samplerate, channels,
+                                                  &dur_sec);
+                if (!*ffstream) {
+                    LOG_WARN("FFmpeg partial stream open failed %s", path);
+                    free(level);
+                    return -1;
+                }
+                *total_frames = (int64_t)dur_sec * (*samplerate);
+                g_rec_active = ffstream_recording(*ffstream);
+                audio_cache_touch(path);
             }
-            DecoderInfo info;
-            decoder_get_info(*decoder, &info);
-            *samplerate   = info.sample_rate;
-            *channels     = info.channels;
-            *total_frames = info.total_frames;
-            audio_cache_touch(path);
         } else {
             /* 2. cache miss → stream from netease, recording raw bytes to a
                   .part file that is committed on natural end-of-stream */
@@ -389,6 +443,11 @@ static void* playback_thread(void *arg) {
                 goto cleanup;
             case CMD_STOP:
                 if (state == PS_STOPPED) continue; /* guard feedback loop */
+                if (ffstream) {
+                    cache_keep_partial(ffstream);
+                    ffstream_close(ffstream);
+                    ffstream = NULL;
+                }
                 if (decoder) { decoder_close(decoder); decoder = NULL; }
                 audio_teardown(audio); audio = NULL;
                 state = PS_STOPPED;
@@ -503,7 +562,11 @@ static void* playback_thread(void *arg) {
                     break;
                 case CMD_STOP:
                     if (state == PS_STOPPED) goto next_song;
-                    if (ffstream) { ffstream_close(ffstream); ffstream = NULL; }
+                    if (ffstream) {
+                        cache_keep_partial(ffstream);
+                        ffstream_close(ffstream);
+                        ffstream = NULL;
+                    }
                     if (decoder) { decoder_close(decoder); decoder = NULL; }
                     audio_teardown(audio); audio = NULL;
                     state = PS_STOPPED;
@@ -513,7 +576,11 @@ static void* playback_thread(void *arg) {
                     goto next_song;
                 case CMD_PLAY:
                     /* switch to new track */
-                    if (ffstream) { ffstream_close(ffstream); ffstream = NULL; }
+                    if (ffstream) {
+                        cache_keep_partial(ffstream);
+                        ffstream_close(ffstream);
+                        ffstream = NULL;
+                    }
                     if (decoder) { decoder_close(decoder); decoder = NULL; }
                     audio_teardown(audio); audio = NULL;
                     state = PS_STOPPED;
@@ -523,7 +590,11 @@ static void* playback_thread(void *arg) {
                 case CMD_RELOAD:
                     /* in-place quality switch while playing: reopen the
                        stream via the outer loop, preserving seek + state */
-                    if (ffstream) { ffstream_close(ffstream); ffstream = NULL; }
+                    if (ffstream) {
+                        cache_keep_partial(ffstream);
+                        ffstream_close(ffstream);
+                        ffstream = NULL;
+                    }
                     if (decoder) { decoder_close(decoder); decoder = NULL; }
                     audio_teardown(audio); audio = NULL;
                     state = PS_STOPPED;
@@ -566,7 +637,8 @@ static void* playback_thread(void *arg) {
                         g_rec_song, ffstream_media_ext(ffstream));
                     if (final) {
                         if (ffstream_recorder_commit(ffstream, final) == 0)
-                            audio_cache_commit(g_rec_song, final, g_rec_level);
+                            audio_cache_commit(g_rec_song, final,
+                                               g_rec_level, 1);  /* complete */
                         free(final);
                     }
                     g_rec_active = 0;
@@ -642,6 +714,7 @@ next_song:
 
 cleanup:
     if (ffstream) {
+        cache_keep_partial(ffstream);
         ffstream_close(ffstream);
         ffstream = NULL;
     }

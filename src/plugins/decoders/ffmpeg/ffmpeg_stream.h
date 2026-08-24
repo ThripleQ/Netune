@@ -23,6 +23,17 @@ FFStream* ffstream_open_rec(const char *url, const char *rec_path,
                             int *sample_rate, int *channels,
                             int *duration_sec);
 
+/* Open a stream that continues from a partial cache file: the cached
+   prefix (the file's current size) is played from disk first, then the
+   network source is resumed from that byte offset (HTTP Range) and the
+   remaining bytes are appended back into the same file, so a full play
+   backfills it into a complete cache entry. Any seek switches to pure
+   network and freezes the file (the partial prefix is kept). Returns
+   NULL on failure. */
+FFStream* ffstream_open_partial(const char *url, const char *prefix_path,
+                                int *sample_rate, int *channels,
+                                int *duration_sec);
+
 /* Decode up to max_frames of PCM S16. Returns actual frames decoded (0=EOF). */
 int ffstream_decode(FFStream *s, int16_t *pcm, int max_frames);
 
@@ -32,7 +43,8 @@ int ffstream_seek(FFStream *s, int64_t timestamp_sec);
 /* Whether the stream currently has an open recorder (.part being written). */
 int ffstream_recording(const FFStream *s);
 
-/* Finalize a complete recording: flush + rename the .part to final_path.
+/* Finalize a recording: flush + rename the .part to final_path (for a
+   partial continuation the file is already at final_path and is kept).
    0 = ok (the file is now final and survives close), -1 = no active
    recorder or rename failed (the .part is discarded). */
 int ffstream_recorder_commit(FFStream *s, const char *final_path);
