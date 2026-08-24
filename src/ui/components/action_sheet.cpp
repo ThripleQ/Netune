@@ -202,10 +202,10 @@ Element render_action_sheet(const AppState &s) {
                 row = hbox({text("   "), row});
             if (st == 1)
                 row = row | color(Color::RGB(th.accent.r, th.accent.g, th.accent.b));
-            else if (st == 0)
-                row = theme_vip(row);  /* entitled, not current — VIP colour */
             else if (st == 2)
                 row = theme_warning_bg(row);  /* no-entitlement tier */
+            /* st == 0 (playable, not current) stays in the default colour —
+               no VIP marker colour any more. */
             body.push_back(row);
         }
         body.push_back(text("  \u56DE\u8F66\u8BBE\u6B64\u66F2\u97F3\u8D28  G \u8BBE\u5168\u5C40\u9ED8\u8BA4  Esc \u53D6\u6D88 ") | dim);
