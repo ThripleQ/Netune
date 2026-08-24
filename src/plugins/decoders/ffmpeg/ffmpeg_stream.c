@@ -278,9 +278,19 @@ FFStream* ffstream_open_rec(const char *url, const char *rec_path,
     if (avformat_open_input(&s->fmt, url, NULL, NULL) < 0) goto fail;
     if (setup_decoder(s, sr, ch, dur) < 0) goto fail;
 
-    /* open the recorder only after probe completes, so probe-time seeks
-       never corrupt the .part — it always starts at the first stream byte */
-    if (rec_path && rec_path[0]) {
+    /* Probe done — rewind the stream to its very start before recording.
+       FFmpeg only rewinds itself for mpeg/mpegts; for other formats (e.g.
+       WAV, whose probe consumes a large chunk) the position is left where
+       probing stopped, which would truncate the cache head. If we cannot
+       rewind, skip caching rather than write a truncated cache file. */
+    int do_rec = rec_path && rec_path[0];
+    if (do_rec && avio_seek(s->rec_pb, 0, SEEK_SET) < 0)
+        do_rec = 0;
+
+    /* open the recorder only after probe completes + rewind, so probe-time
+       reads/seek never corrupt the .part — it always starts at the first
+       stream byte */
+    if (do_rec) {
         s->rec_path = strdup(rec_path);
         s->rec_file = fopen_utf8(rec_path, "wb");
         if (!s->rec_file) {   /* recorder unavailable → plain stream */

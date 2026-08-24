@@ -60,6 +60,7 @@ Netune 是一个终端音乐播放器：C11 + C++17，FTXUI 渲染 TUI，FFmpeg 
 - 播放线程（`playback_coordinator.c`）是缓存的唯一写者：`g_rec_song/g_rec_level/g_rec_active` 线程局部语义，无锁。
 - `ffstream_seek` 语义：非 partial 模式 → 删 .part（本次录制作废）；partial 模式 → 交给 `tee_seek` 按位置决定（前缀内读磁盘、前缀外冻结）。
 - 录制只在**探测完成之后**开始（probe 期 seek 不污染缓存文件）。
+- `ffstream_open_rec`（纯网络录制）在探测完成后**主动 `avio_seek(rec_pb, 0)` 归位再开录**：FFmpeg 只在 mpeg/mpegts 探测后自己归位，WAV 等格式会停在探测读过的位置（WAV 因 `probe_packets=32` 会丢掉开头 ~850KB）；seek 失败则跳过缓存（退化为纯网络播放，不写坏文件）。
 - partial 模式探测若越过前缀：前缀句柄保持打开、网络字节不落盘；探测完成后重开 Range 网络源 + tee 重绕到 0，再开追加写句柄——保证缓存文件始终是连续前缀（无空洞）。这是 `rec_probing` 字段的语义。
 - partial 续播预取（`rec_prefetch`）：探测完成后同步拉 512KB 网络字节到内存；`tee_read` 在前缀耗尽后先消费预取块（消费时才写盘，保持文件连续），耗尽后回落直接读网络；任何 seek 都清空预取块。
 - `ffstream_open_partial` 打开网络源**必须同时设置 `headers`(Range) 和 `offset` option**：只设 Range 时 FFmpeg http 校验 Content-Range 起始偏移失败（"Unexpected offset: expected 0, got N"），直接拒绝打开——已实测确认，两处 `avio_open2` 都要带 `offset`。
@@ -83,7 +84,9 @@ b29ca14 feat(cache): track partial vs complete cache entries
 
 > 2026-08-24 已用自动化测试（`netune_test/`，本地 Range HTTP 服务器 + `ffstream_open_partial` 直接解码）验证：
 > - 场景 A（完整续播）：部分缓存（262KB 前缀）+ 完整播放 → 回填后缓存文件与源文件**逐字节一致**（7056044B），无缝无空洞；
-> - 场景 B（seek 越界）：播 3s 后 seek 到缓存外 → 缓存文件冻结（seek 后不再增长），解码继续。
+> - 场景 B（seek 越界）：播 3s 后 seek 到缓存外 → 缓存文件冻结（seek 后不再增长），解码继续；
+> - rec 模式（网络录制）：探测后主动 seek 回 0 再开录 → 录制文件与源文件**逐字节一致**（WAV 复现并修复了"缺开头"问题）；
+> - net 模式（纯网络）：完整解码 40s。
 
 - [x] 完整播完一首 → `%LOCALAPPDATA%\netune\audio\` 出现 `.mp3`，索引 `complete: true`。
 - [x] 播 30 秒切歌 → 出现部分缓存（`complete: false`）；再播同一首 → 日志出现 `Continuing partial cache` 且立即出声。
