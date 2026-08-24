@@ -3,7 +3,9 @@
 #include "core/audio_output_mgr.h"
 #include "core/music_source.h"
 #include "core/music_source_manager.h"
+#include "core/audio_cache.h"
 #include "plugins/decoders/ffmpeg/ffmpeg_stream.h"
+#include "plugins/music_sources/netease/netease_quality.h"
 #include "infra/config.h"
 #include "core/event_bus.h"
 #include "core/spectrum.h"
@@ -115,6 +117,14 @@ static Command cmd_queue_pop(CmdQueue *q) {
 static pthread_t       g_thread;
 static CmdQueue        g_cmd_queue;
 static volatile bool   g_running = false;
+
+/* ── Active audio-cache context ───────────────────────
+   Set by open_stream on the netease branch (which song/quality is being
+   recorded) and consumed at natural end-of-stream to commit the .part.
+   Only the playback thread touches these, so no locking is needed. */
+static char g_rec_song[128]  = {0};
+static char g_rec_level[32]  = {0};
+static int  g_rec_active     = 0;
 
 /* ── Event bus handlers ────────────────────────────── */
 static void on_app_shutdown(const BusEvent *ev, void *ud) {
@@ -230,23 +240,62 @@ static int open_stream(const char *path,
     }
 
     if (!is_local) {
-        char url[2048] = {0};
-        MusicSource *src = music_source_get("netease");
-        if (src && src->get_play_url &&
-            src->get_play_url(path, 0, url, sizeof(url)) == 0 && url[0]) {
-            LOG_INFO("Streaming netease: %s", path);
-            int dur_sec = 0;
-            *ffstream = ffstream_open(url, samplerate, channels, &dur_sec);
-            if (*ffstream) {
-                *total_frames = (int64_t)dur_sec * (*samplerate);
-            } else {
-                LOG_WARN("FFmpeg stream open failed %s", path);
-                return -1;
-            }
-        } else {
-            LOG_WARN("No play URL for %s", path);
+        /* resolve the effective quality once (in-memory when cached) so we
+           can (a) reuse a cached copy recorded at the same level and
+           (b) tag the recording with the level it was cached at */
+        g_rec_active = 0;
+        snprintf(g_rec_song, sizeof(g_rec_song), "%s", path);
+        g_rec_level[0] = '\0';
+
+        char *level = nq_resolve_level(path);
+        if (!level) {
+            LOG_WARN("No usable quality for %s", path);
             return 1;  /* unplayable — caller decides skip/error */
         }
+        snprintf(g_rec_level, sizeof(g_rec_level), "%s", level);
+
+        /* 1. cache hit → play the cached file directly (offline, the stream
+              never touches the network) */
+        char cache_path[1100];
+        if (audio_cache_find(path, level, cache_path, sizeof(cache_path)) == 0) {
+            *decoder = decoder_open(cache_path);
+            if (!*decoder) {
+                LOG_ERROR("Cannot open cached: %s", cache_path);
+                free(level);
+                return -1;
+            }
+            DecoderInfo info;
+            decoder_get_info(*decoder, &info);
+            *samplerate   = info.sample_rate;
+            *channels     = info.channels;
+            *total_frames = info.total_frames;
+            audio_cache_touch(path);
+        } else {
+            /* 2. cache miss → stream from netease, recording raw bytes to a
+                  .part file that is committed on natural end-of-stream */
+            char url[2048] = {0};
+            MusicSource *src = music_source_get("netease");
+            if (!src || !src->get_play_url ||
+                src->get_play_url(path, 0, url, sizeof(url)) != 0 || !url[0]) {
+                LOG_WARN("No play URL for %s", path);
+                free(level);
+                return 1;  /* unplayable — caller decides skip/error */
+            }
+            LOG_INFO("Streaming netease: %s", path);
+            int dur_sec = 0;
+            char *part = audio_cache_part_path(path);
+            *ffstream = ffstream_open_rec(url, part, samplerate, channels,
+                                          &dur_sec);
+            free(part);
+            if (!*ffstream) {
+                LOG_WARN("FFmpeg stream open failed %s", path);
+                free(level);
+                return -1;
+            }
+            *total_frames = (int64_t)dur_sec * (*samplerate);
+            g_rec_active = ffstream_recording(*ffstream);
+        }
+        free(level);
     } else {
         *decoder = decoder_open(path);
         if (!*decoder) {
@@ -510,6 +559,18 @@ static void* playback_thread(void *arg) {
             int frames = ffstream ? ffstream_decode(ffstream, pcm_buf, FRAMES_PER_CHUNK)
                                     : decoder_decode(decoder, pcm_buf, FRAMES_PER_CHUNK);
             if (frames <= 0) {
+                /* natural end-of-stream — finalize the recording as a
+                   cache entry (the whole stream has been received) */
+                if (ffstream && g_rec_active) {
+                    char *final = audio_cache_final_path(
+                        g_rec_song, ffstream_media_ext(ffstream));
+                    if (final) {
+                        if (ffstream_recorder_commit(ffstream, final) == 0)
+                            audio_cache_commit(g_rec_song, final, g_rec_level);
+                        free(final);
+                    }
+                    g_rec_active = 0;
+                }
                 state = PS_STOPPED;
                 event_bus_publish(EV_PLAYBACK_FINISH, NULL, 0);
                 break;
