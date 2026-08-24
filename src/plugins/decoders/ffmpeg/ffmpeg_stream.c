@@ -316,8 +316,12 @@ int ffstream_decode(FFStream *s, int16_t *pcm, int max_frames) {
 
 int ffstream_seek(FFStream *s, int64_t timestamp_sec) {
     if (!s) return -1;
-    /* seeking breaks byte-continuity of the recording → drop the .part */
-    recorder_discard(s);
+    /* plain network recording: a seek breaks byte-continuity, so the .part
+       is discarded. Partial-continuation mode keeps the cached prefix and
+       lets tee_seek decide: seeks inside the prefix are served from disk
+       (backfill stays contiguous), seeks past it freeze the file. */
+    if (!s->rec_partial)
+        recorder_discard(s);
     int64_t ts = timestamp_sec * AV_TIME_BASE;
     if (av_seek_frame(s->fmt, -1, ts, AVSEEK_FLAG_BACKWARD) < 0)
         return -1;

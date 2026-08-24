@@ -27,9 +27,10 @@ FFStream* ffstream_open_rec(const char *url, const char *rec_path,
    prefix (the file's current size) is played from disk first, then the
    network source is resumed from that byte offset (HTTP Range) and the
    remaining bytes are appended back into the same file, so a full play
-   backfills it into a complete cache entry. Any seek switches to pure
-   network and freezes the file (the partial prefix is kept). Returns
-   NULL on failure. */
+   backfills it into a complete cache entry. Seeking inside the cached
+   prefix is served from disk (backfill stays contiguous); seeking past it
+   switches to pure network and freezes the file (the partial prefix is
+   kept). Returns NULL on failure. */
 FFStream* ffstream_open_partial(const char *url, const char *prefix_path,
                                 int *sample_rate, int *channels,
                                 int *duration_sec);
