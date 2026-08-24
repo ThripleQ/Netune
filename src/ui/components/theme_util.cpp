@@ -44,6 +44,12 @@ static Color pick_playlist(const Theme &t) {
                               : kDefaultAccent);
 }
 
+static Color pick_artist(const Theme &t) {
+    if (t.artist.has_color) return Color::RGB(t.artist.r, t.artist.g, t.artist.b);
+    if (t.muted.has_color)  return Color::RGB(t.muted.r,  t.muted.g,  t.muted.b);
+    return kDefaultMuted;
+}
+
 /* ── Core theme colors ─────────────────────────────── */
 
 Element theme_fg(Element e) {
@@ -80,6 +86,10 @@ Element theme_progress_track(Element e) {
 
 Element theme_vip(Element e) {
     return e | color(pick_vip(ThemeManager::instance().current()));
+}
+
+Element theme_artist(Element e) {
+    return e | color(pick_artist(ThemeManager::instance().current()));
 }
 
 Element theme_warning(Element e) {
@@ -154,6 +164,15 @@ Element theme_vip_sel_bg(Element e) {
 Element theme_playlist_sel_bg(Element e) {
     auto &t = ThemeManager::instance().current();
     ThemeColor c = t.playlist.has_color ? t.playlist : t.accent;
+    return e | bgcolor(Color::RGB(c.r, c.g, c.b));
+}
+
+/* Background warning: whole-row bg tinted with a darkened warning color so
+   text stays readable (mirrors theme_vip_bg's dark-theme treatment). */
+Element theme_warning_bg(Element e) {
+    auto &t = ThemeManager::instance().current();
+    ThemeColor c = t.warning.has_color ? t.warning : ThemeColor{224, 175, 104, true};
+    c = scale_tc(c, 0.45f, theme_bg_is_light(t));
     return e | bgcolor(Color::RGB(c.r, c.g, c.b));
 }
 

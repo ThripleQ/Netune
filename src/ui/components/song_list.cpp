@@ -248,45 +248,41 @@ Element render_song_list(const AppState &s) {
             shown_rows++;
             bool sel = ((int)i == s.selected_index);
 
-            /* Row markers: full-width symbols for playlist (＠) and
-               paid/VIP (＄) rows. Full-width chars render as exactly
-               2 columns in both FTXUI (fullwidth table) and CJK
-               terminals, so prefix alignment is safe. */
             std::string title = (song.title && song.title[0]) ? song.title : "(unknown)";
-            Element line = text(title);
-            if (song.artist && song.artist[0])
-                line = hbox({line, text(std::string(" \u2014 ") + song.artist)});
 
+            /* Text badge at the row tail: 歌单 → playlist, VIP → fee==1.
+               A playlist row and a VIP single never co-occur. */
+            bool is_pl = song.is_playlist;
+            bool is_vip = (!is_pl && song.fee == 1);
+            std::string tail = is_pl ? " \u6B4C\u5355" : (is_vip ? " VIP" : "");
+
+            Element line = theme_fg(text(title));
             bool scroll = (s.active_panel == 1 && sel && !s.top_search_active);
             if (scroll) {
                 std::string content = title;
                 if (song.artist && song.artist[0])
                     content += std::string(" \u2014 ") + song.artist;
+                content += tail;
                 line = text(build_info_row(content, avail_w, true));
+            } else {
+                if (song.artist && song.artist[0])
+                    line = hbox({line, text(" \u2014 ") | theme_fg,
+                                 theme_artist(text(song.artist))});
+                if (!tail.empty())
+                    line = hbox({line, text(tail) | (is_pl ? theme_playlist
+                                                           : theme_vip)});
             }
 
             bool active_sel = (sel && s.active_panel == 1 && !s.top_search_active);
             std::string pad = active_sel ? "> " : "  ";
-            auto &th = ThemeManager::instance().current();
-            Element prefix;
-            if (song.is_playlist || song.fee == 1) {
-                Color mc = song.is_playlist
-                    ? Color::RGB(th.playlist.r, th.playlist.g, th.playlist.b)
-                    : Color::RGB(th.vip.r, th.vip.g, th.vip.b);
-                const char *sym = song.is_playlist ? "\xEF\xBC\xA0"      /* ＠ */
-                                                  : "\xEF\xBC\x84";      /* ＄ */
-                prefix = hbox({text(pad), text(sym) | color(mc), text(" ")});
-            } else {
-                prefix = text(pad + "   ");
-            }
-
+            const auto &th = ThemeManager::instance().current();
             if (active_sel) {
                 /* selected: full marker background accent, or the
                    generic selection color for plain rows */
-                if (song.is_playlist) {
+                if (is_pl) {
                     line = theme_playlist_sel_bg(line);
                     line = line | color(Color::RGB(th.bg.r, th.bg.g, th.bg.b));
-                } else if (song.fee == 1) {
+                } else if (is_vip) {
                     line = theme_vip_sel_bg(line);
                     line = line | color(Color::RGB(th.bg.r, th.bg.g, th.bg.b));
                 } else {
@@ -297,11 +293,11 @@ Element render_song_list(const AppState &s) {
                            : Color::RGB(80, 80, 80));
                     line = line | bgcolor(sel_bg);
                 }
-                els.push_back(theme_fg(hbox({prefix | bold, line}) | focus));
+                els.push_back(hbox({text(pad) | bold, line}) | focus);
             } else if (sel) {
-                els.push_back(theme_fg(hbox({prefix | bold, line}) | focus));
+                els.push_back(hbox({text(pad) | bold, line}) | focus);
             } else {
-                els.push_back(theme_fg(hbox({prefix, line})));
+                els.push_back(hbox({text(pad), line}));
             }
         }
         if (shown_rows == 0 && !filter_q.empty())

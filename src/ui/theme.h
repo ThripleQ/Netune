@@ -36,6 +36,7 @@ struct Theme {
     ThemeColor logo;          /* netease logo watermark     */
     ThemeColor overlay_bg;    /* overlay/popup background   */
     ThemeColor spectrum;      /* spectrum visualization     */
+    ThemeColor artist;        /* artist/secondary text color */
 };
 
 /* ── Theme manager (singleton) ──────────────────────── */

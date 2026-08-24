@@ -148,6 +148,10 @@ void ThemeManager::derive_colors() {
     /* spectrum: defaults to accent if not set */
     if (!theme_.spectrum.has_color && theme_.accent.has_color)
         theme_.spectrum = theme_.accent;
+
+    /* artist: differentiated secondary text, defaults to muted */
+    if (!theme_.artist.has_color && theme_.muted.has_color)
+        theme_.artist = theme_.muted;
 }
 
 /* Resolve a theme name to a file path.
@@ -199,6 +203,7 @@ bool ThemeManager::load(const std::string &yaml_path) {
         std::string hex_success, hex_warning, hex_error, hex_overlay_bg, hex_spectrum;
         std::string hex_vip, hex_svip, hex_playlist, hex_logo;
         std::string hex_progress_track;
+        std::string hex_artist;
         std::string current_field;
 
         while (yaml_parser_parse(&parser, &event)) {
@@ -228,6 +233,7 @@ bool ThemeManager::load(const std::string &yaml_path) {
                         else if (current_field == "svip")        hex_svip        = val;
                         else if (current_field == "playlist")    hex_playlist    = val;
                         else if (current_field == "logo")         hex_logo        = val;
+                        else if (current_field == "artist")       hex_artist      = val;
                         current_field.clear();
                     }
                 } else if (strcmp(val, "name") == 0) {
@@ -262,6 +268,7 @@ bool ThemeManager::load(const std::string &yaml_path) {
         if (!hex_svip.empty())        theme_.svip        = theme_color_from_hex(hex_svip);
         if (!hex_playlist.empty())    theme_.playlist    = theme_color_from_hex(hex_playlist);
         if (!hex_logo.empty())        theme_.logo        = theme_color_from_hex(hex_logo);
+        if (!hex_artist.empty())      theme_.artist      = theme_color_from_hex(hex_artist);
 
         /* Derive any unset extended colors */
         derive_colors();

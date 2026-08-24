@@ -34,6 +34,12 @@ Element theme_vip(Element e);
    but not playable/downloadable at the current account's level. */
 Element theme_warning(Element e);
 
+/* Background warning — whole-row bg for no-entitlement tiers */
+Element theme_warning_bg(Element e);
+
+/* Artist name — differentiated secondary text color */
+Element theme_artist(Element e);
+
 /* Playlist (▣) marker color */
 Element theme_playlist(Element e);
 
