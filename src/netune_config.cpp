@@ -28,6 +28,7 @@
 #include "infra/config.h"
 #include "infra/config_paths.h"
 #include "netune_config.h"
+#include "core/audio_cache.h"
 #include "ui/keybindings.h"
 #include "ui/theme.h"
 #include <yaml.h>
@@ -43,7 +44,7 @@ static std::string data_root(void) {
     return std::string(netune_data_root());
 }
 
-enum class Cat { Theme, Keybind, Layout, Main, Playback };
+enum class Cat { Theme, Keybind, Layout, Main, Playback, Cache };
 
 static std::string dir_of(Cat cat);  /* fwd */
 
@@ -219,12 +220,13 @@ static std::string cat_name(Cat cat) {
         case Cat::Layout:  return "布局";
         case Cat::Main:    return "本地音乐";
         case Cat::Playback:return "播放";
+        case Cat::Cache:   return "缓存";
     }
     return "";
 }
 
 /* Visible tabs — Layout is hidden until users are ready to edit it */
-static const Cat kTabs[] = { Cat::Theme, Cat::Keybind, Cat::Main, Cat::Playback };
+static const Cat kTabs[] = { Cat::Theme, Cat::Keybind, Cat::Main, Cat::Playback, Cat::Cache };
 static const int kTabCount = (int)(sizeof(kTabs)/sizeof(kTabs[0]));
 
 static int tab_index(Cat cat) {
@@ -283,6 +285,19 @@ static std::string fmt_size(long n) {
     return buf;
 }
 
+/* Human-readable byte count: 800 KB / 350 MB / 1.2 GB / ... */
+static std::string fmt_capacity(long long bytes) {
+    char buf[32];
+    double v;
+    const char *u;
+    if (bytes >= 1024LL * 1024 * 1024) { v = bytes / (1024.0 * 1024 * 1024); u = "GB"; }
+    else if (bytes >= 1024 * 1024)      { v = bytes / (1024.0 * 1024);       u = "MB"; }
+    else if (bytes >= 1024)             { v = bytes / 1024.0;                u = "KB"; }
+    else                                { v = (double)bytes;                 u = "B"; }
+    snprintf(buf, sizeof buf, "%.1f %s", v, u);
+    return buf;
+}
+
 static void refresh_files(CfgState &st) {
     st.files.clear();
     if (st.cat == Cat::Main) {
@@ -298,6 +313,7 @@ static void refresh_files(CfgState &st) {
         return;
     }
     if (st.cat == Cat::Playback) return;
+    if (st.cat == Cat::Cache) return;
     DIR *dp = opendir(dir_of(st.cat).c_str());
     if (!dp) return;
     struct dirent *e;
@@ -630,6 +646,22 @@ int run_config(void) {
             body.push_back(text(""));
             body.push_back(text("  修改立即保存到 config.json") | dim);
             els.push_back(vbox(std::move(body)) | flex | border);
+        } else if (th.cat == Cat::Cache) {
+            /* audio cache: live size usage + clear action */
+            long long total = audio_cache_total_bytes();
+            Config *gcfg = config_global();
+            int limit_mb = gcfg
+                ? config_get_int(gcfg, "cache.audio_limit_mb", 2048) : 2048;
+            Elements body;
+            body.push_back(text("  音频缓存 (播放时自动缓存, 透明可重建)") | bold);
+            body.push_back(separator());
+            body.push_back(text("  占用:  " + fmt_capacity(total) +
+                                "  /  上限 " + std::to_string(limit_mb) + " MB"));
+            body.push_back(text("  目录:  " + std::string(audio_cache_dir())));
+            body.push_back(text(""));
+            body.push_back(text("  d  清空音频缓存") | bold);
+            body.push_back(text("  上限通过 config.json 的 cache.audio_limit_mb 调整 (默认 2048 MB)") | dim);
+            els.push_back(vbox(std::move(body)) | flex | border);
         } else if (th.mode == Mode::KeyEdit || th.mode == Mode::Capture) {
             /* key editor sub-view */
             Elements body;
@@ -728,6 +760,7 @@ int run_config(void) {
             case Cat::Layout:  hints = "Enter 选用   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
             case Cat::Main:    hints = "a 添加音乐目录   d 删除选中   ↑/↓ 选择"; break;
             case Cat::Playback:hints = "←/→ 音量   l 循环   + / - 快进步长"; break;
+            case Cat::Cache:   hints = "d 清空音频缓存"; break;
         }
         els.push_back(text("  " + hints) | dim);
         els.push_back(text("  ←/→ 或 1-4 切换分类   q 退出") | dim);
@@ -880,6 +913,12 @@ int run_config(void) {
                             st.notice = "删除失败";
                         }
                     }
+                } else if (st.confirm_kind == 3) {
+                    /* clear the audio cache */
+                    int removed = audio_cache_clear();
+                    st.notice = removed > 0
+                        ? "已清空音频缓存 (" + std::to_string(removed) + " 个文件)"
+                        : "音频缓存已是空的";
                 } else {
                     std::string target = dir_of(st.cat) + "/" + st.files[st.sel].name;
                     if (st.confirm_kind == 0) {
@@ -1079,6 +1118,13 @@ int run_config(void) {
         if (k == "d" && st.cat == Cat::Main && !st.dirs.empty()) {
             st.confirm_kind = 2;
             st.confirm_msg = "删除音乐目录: " + st.dirs[st.dir_sel] + " ? (y/n)";
+            st.mode = Mode::Confirm;
+            st.notice.clear();
+            return true;
+        }
+        if (k == "d" && st.cat == Cat::Cache) {
+            st.confirm_kind = 3;
+            st.confirm_msg = "确认清空所有音频缓存? (y/n)";
             st.mode = Mode::Confirm;
             st.notice.clear();
             return true;

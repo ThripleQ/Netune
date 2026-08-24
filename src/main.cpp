@@ -26,11 +26,15 @@ int main(int argc, char **argv) {
     SetConsoleCP(CP_UTF8);
 #endif
 
-    /* Subcommand: built-in configuration UI (former standalone
-       `netune-config` executable, now merged into this binary).
-       Dispatched AFTER the UTF-8 setup above so the config TUI also
-       renders Chinese correctly on Windows. */
-    if (argc > 1 && strcmp(argv[1], "--config") == 0)
+    /* Subcommand: built-in configuration & maintenance UI (former
+       standalone `netune-config` executable, now merged into this binary).
+       Primary name is `--manage`; `--config` is kept as a backwards-
+       compatible alias (README/docs historically referenced it).
+       Dispatched AFTER the UTF-8 setup above so the TUI also renders
+       Chinese correctly on Windows. */
+    if (argc > 1 &&
+        (strcmp(argv[1], "--manage") == 0 ||
+         strcmp(argv[1], "--config") == 0))
         return run_config();
 
     return run_app(argc, argv);

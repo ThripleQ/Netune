@@ -1,7 +1,9 @@
-/* netune_config.h — entry point of the built-in configuration UI.
+/* netune_config.h — entry point of the built-in configuration &
+ * maintenance UI.
  *
  * Formerly a separate `netune-config` executable; now built into the
- * main binary and launched as `netune --config` (see main.cpp).
+ * main binary and launched as `netune --manage` (with `--config` kept
+ * as a backwards-compatible alias) — see main.cpp.
  */
 #ifndef NETUNE_CONFIG_H
 #define NETUNE_CONFIG_H
