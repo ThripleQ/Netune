@@ -27,6 +27,7 @@ typedef enum {
     CMD_RESUME,
     CMD_STOP,
     CMD_SEEK,
+    CMD_RELOAD,
     CMD_QUIT,
 } CmdType;
 
@@ -155,6 +156,17 @@ static void on_seek(const BusEvent *ev, void *ud) {
     cmd_queue_push(&g_cmd_queue, &cmd);
 }
 
+static void on_play_reload(const BusEvent *ev, void *ud) {
+    (void)ud;
+    const PlaybackReloadCmd *r = (const PlaybackReloadCmd*)ev->data;
+    Command cmd = {.type = CMD_RELOAD};
+    if (r) {
+        snprintf(cmd.path, sizeof(cmd.path), "%s", r->id);
+        cmd.seek_frame = r->seek_sec;
+    }
+    cmd_queue_push(&g_cmd_queue, &cmd);
+}
+
 /* ── Playback thread ────────────────────────────────── */
 typedef enum { PS_STOPPED, PS_PLAYING, PS_PAUSED } PlayState;
 
@@ -179,6 +191,98 @@ static bool cmd_queue_try_pop(CmdQueue *q, Command *out) {
    coalescing means rapid skipping only ever drains once. */
 static void audio_teardown(AudioOutput *audio) {
     if (audio) audio_output_destroy(audio);
+}
+
+/* ── Shared stream-open (CMD_PLAY / CMD_RELOAD) ───────
+   Tears down the previous stream, then opens `path` — a local file or a
+   netease song id (URL re-resolved, so a quality switch picks up the new
+   per-song override / global default). On success fills the thread's
+   ffstream/decoder/audio + samplerate/channels/total_frames.
+   Returns: 0 = ready, 1 = no play URL (caller should skip), -1 = failed. */
+static int open_stream(const char *path,
+                       FFStream **ffstream, Decoder **decoder,
+                       AudioOutput **audio,
+                       int *samplerate, int *channels, int *total_frames) {
+    if (*ffstream) { ffstream_close(*ffstream); *ffstream = NULL; }
+    if (*decoder)  { decoder_close(*decoder); *decoder = NULL; }
+    audio_teardown(*audio); *audio = NULL;
+
+    /* Determine if path points to a local file (vs. a streaming
+       source ID such as a netease song ID).  Checks, in order:
+       1. file:// URL prefix
+       2. POSIX absolute path (starts with '/')
+       3. User home directory (starts with '~')
+       4. Windows drive-letter absolute path (e.g. C:\ or C:/)
+       5. Contains a path separator AND a dot — likely a
+          relative file path with an extension */
+    int is_local = 0;
+    if (strncmp(path, "file://", 7) == 0) {
+        is_local = 1;
+    } else if (path[0] == '/' || path[0] == '~') {
+        is_local = 1;
+    } else if (((path[0] >= 'A' && path[0] <= 'Z') ||
+                (path[0] >= 'a' && path[0] <= 'z')) &&
+               path[1] == ':') {
+        is_local = 1;
+    } else if ((strchr(path, '/') || strchr(path, '\\')) &&
+               strchr(path, '.')) {
+        is_local = 1;
+    }
+
+    if (!is_local) {
+        char url[2048] = {0};
+        MusicSource *src = music_source_get("netease");
+        if (src && src->get_play_url &&
+            src->get_play_url(path, 0, url, sizeof(url)) == 0 && url[0]) {
+            LOG_INFO("Streaming netease: %s", path);
+            int dur_sec = 0;
+            *ffstream = ffstream_open(url, samplerate, channels, &dur_sec);
+            if (*ffstream) {
+                *total_frames = (int64_t)dur_sec * (*samplerate);
+            } else {
+                LOG_WARN("FFmpeg stream open failed %s", path);
+                return -1;
+            }
+        } else {
+            LOG_WARN("No play URL for %s", path);
+            return 1;  /* unplayable — caller decides skip/error */
+        }
+    } else {
+        *decoder = decoder_open(path);
+        if (!*decoder) {
+            LOG_ERROR("Cannot open: %s", path);
+            return -1;
+        }
+        DecoderInfo info;
+        decoder_get_info(*decoder, &info);
+        *samplerate   = info.sample_rate;
+        *channels     = info.channels;
+        *total_frames = info.total_frames;
+    }
+
+    *audio = audio_output_create(*samplerate, *channels);
+    if (!*audio) {
+        if (*ffstream) { ffstream_close(*ffstream); *ffstream = NULL; }
+        if (*decoder)  { decoder_close(*decoder); *decoder = NULL; }
+        return -1;
+    }
+    return 0;
+}
+
+/* Apply a seek (seconds) to the current stream, updating current_frame. */
+static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
+                    int total_frames, int seek_sec, int *current_frame) {
+    if (total_frames <= 0) return;
+    int target = seek_sec * samplerate;
+    if (target < 0) target = 0;
+    if (target >= total_frames) target = total_frames - 1;
+    int ok = 1;
+    if (ffstream)
+        ok = (ffstream_seek(ffstream, seek_sec) == 0);
+    if (decoder)
+        decoder_seek(decoder, target);
+    if (ok)
+        *current_frame = target;
 }
 
 static void* playback_thread(void *arg) {
@@ -247,89 +351,45 @@ static void* playback_thread(void *arg) {
                 continue;
 
             case CMD_PLAY: {
-                /* cleanup previous */
-                if (ffstream) { ffstream_close(ffstream); ffstream = NULL; }
-                if (decoder) { decoder_close(decoder); decoder = NULL; }
-                audio_teardown(audio); audio = NULL;
-
-                const char *play_path = cmd.path;
-
-                /* Determine if path points to a local file (vs. a streaming
-                   source ID such as a netease song ID).  Checks, in order:
-                   1. file:// URL prefix
-                   2. POSIX absolute path (starts with '/')
-                   3. User home directory (starts with '~')
-                   4. Windows drive-letter absolute path (e.g. C:\ or C:/)
-                   5. Contains a path separator AND a dot — likely a
-                      relative file path with an extension */
-                int is_local = 0;
-                if (strncmp(cmd.path, "file://", 7) == 0) {
-                    is_local = 1;
-                } else if (cmd.path[0] == '/' || cmd.path[0] == '~') {
-                    is_local = 1;
-                } else if (((cmd.path[0] >= 'A' && cmd.path[0] <= 'Z') ||
-                            (cmd.path[0] >= 'a' && cmd.path[0] <= 'z')) &&
-                           cmd.path[1] == ':') {
-                    is_local = 1;
-                } else if ((strchr(cmd.path, '/') || strchr(cmd.path, '\\')) &&
-                           strchr(cmd.path, '.')) {
-                    is_local = 1;
-                }
-
-                int is_ff = 0;  /* using FFmpeg stream */
-
-                if (!is_local) {
-                    char url[2048] = {0};
-                    MusicSource *src = music_source_get("netease");
-                    if (src && src->get_play_url &&
-                        src->get_play_url(cmd.path, 0, url, sizeof(url)) == 0
-                        && url[0]) {
-                        LOG_INFO("Streaming netease: %s", cmd.path);
-                        int dur_sec = 0;
-                        ffstream = ffstream_open(url, &samplerate,
-                                                  &channels, &dur_sec);
-                        if (ffstream) {
-                            total_frames = (int64_t)dur_sec * samplerate;
-                            is_ff = 1;
-                        } else {
-                            LOG_WARN("FFmpeg stream open failed %s",cmd.path);
-                        }
-                    } else {
-                        LOG_WARN("No play URL for %s", cmd.path);
-                        /* unplayable (no copyright / delisted): skip to
-                           the next track instead of stalling */
-                        event_bus_publish(EV_PLAYBACK_SKIP, NULL, 0);
-                        continue;
-                    }
-                }
-
-                if (!is_ff && is_local) {
-                    decoder = decoder_open(play_path);
-                }
-                if ((!is_ff && !decoder) || (!is_local && !ffstream)) {
-                    LOG_ERROR("Cannot open: %s", cmd.path);
-                    event_bus_publish(EV_PLAYBACK_ERROR, NULL, 0);
+                int rc = open_stream(cmd.path, &ffstream, &decoder, &audio,
+                                     &samplerate, &channels, &total_frames);
+                if (rc == 1) {
+                    /* unplayable (no copyright / delisted): skip to the
+                       next track instead of stalling */
+                    event_bus_publish(EV_PLAYBACK_SKIP, NULL, 0);
                     continue;
                 }
-
-                if (is_ff) {
-                    audio = audio_output_create(samplerate, channels);
-                } else {
-                    DecoderInfo info;
-                    decoder_get_info(decoder, &info);
-                    samplerate   = info.sample_rate;
-                    channels     = info.channels;
-                    total_frames = info.total_frames;
-                    audio = audio_output_create(samplerate, channels);
-                }
-                if (!audio) {
-                    if (ffstream) { ffstream_close(ffstream); ffstream = NULL; }
-                    if (decoder)  { decoder_close(decoder); decoder = NULL; }
+                if (rc != 0) {
                     event_bus_publish(EV_PLAYBACK_ERROR, NULL, 0);
                     continue;
                 }
                 current_frame = 0;
                 state = PS_PLAYING;
+                continue;
+            }
+
+            case CMD_RELOAD: {
+                /* in-place quality switch: reopen the same netease track at
+                   the now-resolved quality and resume from seek_frame sec,
+                   keeping the playing/paused state. */
+                bool was_paused = (state == PS_PAUSED);
+                int rc = open_stream(cmd.path, &ffstream, &decoder, &audio,
+                                     &samplerate, &channels, &total_frames);
+                if (rc != 0) {
+                    LOG_ERROR("Reload failed for %s", cmd.path);
+                    event_bus_publish(EV_PLAYBACK_ERROR, NULL, 0);
+                    continue;
+                }
+                if (cmd.seek_frame > 0)
+                    do_seek(ffstream, decoder, samplerate, total_frames,
+                            cmd.seek_frame, &current_frame);
+                else
+                    current_frame = 0;
+                state = was_paused ? PS_PAUSED : PS_PLAYING;
+                if (was_paused && audio) {
+                    audio_output_flush(audio);
+                    audio_output_pause(audio);
+                }
                 continue;
             }
 
@@ -409,6 +469,15 @@ static void* playback_thread(void *arg) {
                     audio_teardown(audio); audio = NULL;
                     state = PS_STOPPED;
                     /* push a fresh CMD_PLAY for the outer loop */
+                    cmd_queue_push(&g_cmd_queue, &icmd);
+                    goto next_song;
+                case CMD_RELOAD:
+                    /* in-place quality switch while playing: reopen the
+                       stream via the outer loop, preserving seek + state */
+                    if (ffstream) { ffstream_close(ffstream); ffstream = NULL; }
+                    if (decoder) { decoder_close(decoder); decoder = NULL; }
+                    audio_teardown(audio); audio = NULL;
+                    state = PS_STOPPED;
                     cmd_queue_push(&g_cmd_queue, &icmd);
                     goto next_song;
                 case CMD_SEEK:
@@ -535,6 +604,7 @@ int playback_coordinator_init(void) {
     event_bus_subscribe(EV_PLAYBACK_RESUME, on_play_resume, NULL);
     event_bus_subscribe(EV_PLAYBACK_STOP, on_play_stop, NULL);
     event_bus_subscribe(EV_BUFFERING_UPDATE, on_seek, NULL); /* reuse for seek */
+    event_bus_subscribe(EV_PLAYBACK_RELOAD, on_play_reload, NULL);
 
     if (pthread_create(&g_thread, NULL, playback_thread, NULL) != 0) {
         LOG_ERROR("Failed to create playback thread");

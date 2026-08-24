@@ -1081,6 +1081,7 @@ static void ev_playback_stop(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
     StateStore::instance().set_playback_state(PlaybackState::Stopped);
     StateStore::instance().set_current_song(SongInfo{});
+    StateStore::instance().set_current_quality("");
     StateStore::instance().set_progress(0, 0, 0);
     StateStore::instance().set_lyric_mode(false);
 }
@@ -1409,9 +1410,67 @@ static void load_lyrics_for_current_song(void) {
     }
 }
 
+/* Refresh the current-quality mirror in StateStore from the override/global
+   resolution, then, if the now-playing netease track's effective quality
+   actually changed and it is exactly `song_id` (or song_id is null = any),
+   tell the playback thread to reopen it at the new quality and resume at
+   the current position (in-place quality switch). */
+static void quality_changed_refresh(const char *song_id) {
+    auto &st = StateStore::instance();
+    const AppState &s = st.state();
+
+    /* recompute the effective quality for the now-playing netease track */
+    std::string new_eff;
+    if (s.music_mode == MusicMode::Netease &&
+        s.current_song.id && s.current_song.id[0]) {
+        char lvl[64] = {0};
+        const char *eff = nullptr;
+        if (nq_override_get(s.current_song.id, lvl, sizeof lvl) == 0 && lvl[0])
+            eff = lvl;
+        else
+            eff = nq_global_level();
+        if (eff && eff[0]) new_eff = eff;
+    }
+    bool changed = (new_eff != s.current_quality);
+    st.set_current_quality(new_eff);
+
+    /* reopen the playing track in place only if its quality really changed */
+    bool playing = (s.playback_state == PlaybackState::Playing ||
+                    s.playback_state == PlaybackState::Paused);
+    if (!playing || !changed || s.music_mode != MusicMode::Netease ||
+        !s.current_song.id || !s.current_song.id[0])
+        return;
+    if (song_id && song_id[0] && strcmp(song_id, s.current_song.id) != 0)
+        return;  /* the changed song isn't the one playing */
+    PlaybackReloadCmd rc = {};
+    snprintf(rc.id, sizeof rc.id, "%s", s.current_song.id);
+    rc.seek_sec = s.current_time_sec;
+    event_bus_publish(EV_PLAYBACK_RELOAD, &rc, sizeof(rc));
+}
+
 static void ev_track_changed(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
     load_lyrics_for_current_song();
+    /* Resolve the effective quality once at track-change time (per-song
+       override > global default), so status_bar just reads the cached tag
+       instead of hitting nq_override_get (which reads a JSON file) on every
+       render frame. Uses the cheap override/global lookup only — the full
+       nq_resolve_level (with network probing) happens on the async play
+       path, so we must not block the main thread on a probe here. */
+    auto &stq = StateStore::instance();
+    const SongInfo &cs = stq.state().current_song;
+    if (stq.state().music_mode == MusicMode::Netease &&
+        cs.id && cs.id[0]) {
+        char lvl[64] = {0};
+        if (nq_override_get(cs.id, lvl, sizeof lvl) == 0 && lvl[0])
+            stq.set_current_quality(lvl);
+        else {
+            const char *g = nq_global_level();
+            stq.set_current_quality(g ? g : "");
+        }
+    } else {
+        stq.set_current_quality("");
+    }
     /* Always clear the old cover — a track without artwork must not leave
        the previous cover lingering (the raw-image overlay would keep
        showing it); a new cover_url triggers a fresh download. */
@@ -2119,10 +2178,14 @@ int run_app(int argc, char **argv) {
                             return true;
                         std::string lvl = kLevels[qi];
                         std::string notice;
-                        if (nq_global_set(lvl.c_str()) == 0)
+                        if (nq_global_set(lvl.c_str()) == 0) {
                             notice = "\u5DF2\u8BBE\u5168\u5C40\u9ED8\u8BA4\u97F3\u8D28: " + lvl;  /* 已设全局默认音质 */
-                        else
+                            /* the global default changed → the playing track
+                               only restarts if it has NO per-song override */
+                            quality_changed_refresh(nullptr);
+                        } else {
                             notice = "\u8BBE\u7F6E\u5168\u5C40\u97F3\u8D28\u5931\u8D25";  /* 设置全局音质失败 */
+                        }
                         state.set_action_sheet(false, 0);
                         StateStore::instance().set_app_notice(notice);
                         return true;
@@ -2159,6 +2222,9 @@ int run_app(int argc, char **argv) {
                             nq_override_set(qid.c_str(), lvl.c_str());
                             notice = "\u5DF2\u8BBE\u6B64\u66F2\u97F3\u8D28: " + lvl;  /* 已设此曲音质 */
                         }
+                        /* refresh the mirror + reopen the playing track if
+                           this song is the one currently playing */
+                        quality_changed_refresh(qid.c_str());
                         state.set_action_sheet(false, 0);
                         StateStore::instance().set_app_notice(notice);
                         return true;

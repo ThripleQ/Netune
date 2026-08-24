@@ -73,6 +73,9 @@ struct AppState {
     /* playback */
     PlaybackState playback_state = PlaybackState::Stopped;
     SongInfo      current_song = {};
+    /* effective quality tag for the now-playing netease track (resolved at
+       track-change time; empty = unknown). Shown by status_bar. */
+    std::string   current_quality;
     double        progress = 0.0;
     int           current_time_sec = 0;
     int           current_time_ms  = 0;  /* ms precision for lyrics/karaoke */
@@ -223,6 +226,7 @@ public:
     /* playback */
     void set_playback_state(PlaybackState s);
     void set_current_song(const SongInfo &song);
+    void set_current_quality(const std::string &lvl);
     void set_progress(double pos, int cur_sec, int total_sec);
     void set_progress_ms(double pos, int cur_ms, int total_sec);
     void set_seek_indicator(int delta);

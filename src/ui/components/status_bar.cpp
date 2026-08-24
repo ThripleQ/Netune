@@ -1,7 +1,9 @@
 #include "ui/components/status_bar.h"
 #include "ui/components/theme_util.h"
+#include "ui/state_store.h"
 #include <ftxui/screen/string.hpp>
 #include <cstdio>
+#include <cctype>
 #include <string>
 using namespace ftxui;
 
@@ -79,15 +81,35 @@ Element render_status_bar(const AppState &s) {
         }
     }
 
+    /* Effective quality for the now-playing netease track, pre-resolved at
+       track-change time and cached in StateStore (per-song override >
+       global default). Shown as an English-shortname tag on the state row. */
+    std::string qual;
+    if (s.music_mode == MusicMode::Netease && !s.current_quality.empty()) {
+        qual = std::string(" [") + s.current_quality + "]";
+    } else if (s.music_mode == MusicMode::Local &&
+               s.current_song.id && s.current_song.id[0]) {
+        /* local/downloaded file: show the container format as the suffix
+           (bitrate / sample-rate probing is deferred for now — we only
+           know the extension at play time) */
+        std::string p = s.current_song.id;
+        size_t dot = p.rfind('.');
+        if (dot != std::string::npos && dot + 1 < p.size()) {
+            std::string f = p.substr(dot + 1);
+            for (auto &c : f) c = (char)toupper((unsigned char)c);
+            qual = std::string(" [") + f + "]";
+        }
+    }
+
     /* info + title on one line; gauge on the next */
     std::string top_line;
     if (song_row.empty()) {
-        snprintf(buf, sizeof(buf), " %s  %s  %s  V:%d",
-                 state_str.c_str(), loop_str, time_str.c_str(), s.volume);
+        snprintf(buf, sizeof buf, " %s%s %s  %s  V:%d",
+                 state_str.c_str(), qual.c_str(), loop_str, time_str.c_str(), s.volume);
         top_line = buf;
     } else {
-        snprintf(buf, sizeof(buf), " %s  %s  %s  V:%d  ",
-                 state_str.c_str(), loop_str, time_str.c_str(), s.volume);
+        snprintf(buf, sizeof buf, " %s%s %s  %s  V:%d  ",
+                 state_str.c_str(), qual.c_str(), loop_str, time_str.c_str(), s.volume);
         top_line = buf;
         int prefix_w = string_width(top_line);
         int avail = s.top_row_width - 1 - prefix_w;   /* one column margin */

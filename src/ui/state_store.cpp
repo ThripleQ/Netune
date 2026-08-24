@@ -49,6 +49,10 @@ void StateStore::set_current_song(const SongInfo &song) {
     song_info_copy(&state_.current_song, &song);
 }
 
+void StateStore::set_current_quality(const std::string &lvl) {
+    state_.current_quality = lvl;
+}
+
 void StateStore::set_progress(double pos, int cur_sec, int total_sec) {
     set_progress_ms(pos, cur_sec * 1000, total_sec);
 }

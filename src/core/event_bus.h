@@ -16,6 +16,10 @@ typedef enum {
     EV_PLAYBACK_FINISH,
     EV_PLAYBACK_ERROR,
     EV_PLAYBACK_SKIP,  /* song unplayable (no copyright/url) — auto next */
+    /* reopen the current netease track at a new quality (per-song override
+       or global default changed): payload = PlaybackReloadCmd { id, seek_sec }
+       — re-resolves the URL, reopens the stream, seeks and resumes in place */
+    EV_PLAYBACK_RELOAD,
     EV_PROGRESS_UPDATE,
     EV_BUFFERING_UPDATE,
 

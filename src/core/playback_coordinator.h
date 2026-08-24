@@ -10,6 +10,13 @@ extern "C" {
  * State changes published via event bus.
  */
 
+/* Payload for EV_PLAYBACK_RELOAD: reopen `id` at the currently-resolved
+   quality and resume from seek_sec seconds (in-place quality switch). */
+typedef struct {
+    char id[128];
+    int  seek_sec;
+} PlaybackReloadCmd;
+
 int  playback_coordinator_init(void);
 void playback_coordinator_shutdown(void);
 
