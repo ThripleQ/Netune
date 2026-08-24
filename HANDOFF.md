@@ -38,6 +38,8 @@ Netune 是一个终端音乐播放器：C11 + C++17，FTXUI 渲染 TUI，FFmpeg 
 | 按 song_id 命名而非 URL hash | 网易云 URL 有时效会变，hash 命名会导致缓存失效；song_id 稳定。这也是不用 FFmpeg `shared` 协议的原因（它按 URL hash 命名 + 私有缓存格式不透明）。 |
 | 部分缓存续传回填 | 完整播完太少（用户常切歌），只有完整才缓存等于功能废掉。前缀续传让缓存越用越完整。 |
 | 顺序前缀模型而非块级(spacemap) | 块级"任意碎片命中"工作量中等、对 3-5 分钟的歌收益有限；前缀模型 + seek 内复用已覆盖实用场景。 |
+| 探测期越界读不落盘、探测后重绕 | partial 续播时 FFmpeg probe 若读到前缀末尾之后，网络字节不写盘并保持前缀句柄；探测完成后重开 Range 流并把 tee 重绕回 0，避免小前缀在缓存文件中间留"空洞"（`rec_probing` 字段）。 |
+| 探测后同步预取一块（512KB） | partial 续播的前缀耗尽切换点若走冷网络读会有一个 RTT 的卡顿（实际听感可感知）；探测完成后从网络预拉一块到内存，切换时从内存出，播完这块再回落到按需同步读——不是整首下载，无需后台线程。 |
 
 ### 2.3 代码地图
 
@@ -58,6 +60,10 @@ Netune 是一个终端音乐播放器：C11 + C++17，FTXUI 渲染 TUI，FFmpeg 
 - 播放线程（`playback_coordinator.c`）是缓存的唯一写者：`g_rec_song/g_rec_level/g_rec_active` 线程局部语义，无锁。
 - `ffstream_seek` 语义：非 partial 模式 → 删 .part（本次录制作废）；partial 模式 → 交给 `tee_seek` 按位置决定（前缀内读磁盘、前缀外冻结）。
 - 录制只在**探测完成之后**开始（probe 期 seek 不污染缓存文件）。
+- partial 模式探测若越过前缀：前缀句柄保持打开、网络字节不落盘；探测完成后重开 Range 网络源 + tee 重绕到 0，再开追加写句柄——保证缓存文件始终是连续前缀（无空洞）。这是 `rec_probing` 字段的语义。
+- partial 续播预取（`rec_prefetch`）：探测完成后同步拉 512KB 网络字节到内存；`tee_read` 在前缀耗尽后先消费预取块（消费时才写盘，保持文件连续），耗尽后回落直接读网络；任何 seek 都清空预取块。
+- `ffstream_open_partial` 打开网络源**必须同时设置 `headers`(Range) 和 `offset` option**：只设 Range 时 FFmpeg http 校验 Content-Range 起始偏移失败（"Unexpected offset: expected 0, got N"），直接拒绝打开——已实测确认，两处 `avio_open2` 都要带 `offset`。
+- `tee_seek` 越界（前缀外）**先冻结再 seek**：先清 prefetch、关 rec_file/rec_part_read，再尝试 `avio_seek(rec_inner)`；即使底层 seek 失败，缓存文件也不会被错位回填污染。
 - `audio_cache_commit` 会 stat 文件大小 + 触发 prune；更新已有条目（partial→complete）保留文件。
 
 ### 2.5 提交历史（beta，最新在顶）
@@ -75,13 +81,19 @@ b29ca14 feat(cache): track partial vs complete cache entries
 
 ### 2.6 待验证清单（建议接手后实测）
 
-- [ ] 完整播完一首 → `%LOCALAPPDATA%\netune\audio\` 出现 `.mp3`，索引 `complete: true`。
-- [ ] 播 30 秒切歌 → 出现部分缓存（`complete: false`）；再播同一首 → 日志出现 `Continuing partial cache` 且立即出声。
-- [ ] 部分缓存继续播完 → 索引变 `complete: true`（回填补全）。
+> 2026-08-24 已用自动化测试（`netune_test/`，本地 Range HTTP 服务器 + `ffstream_open_partial` 直接解码）验证：
+> - 场景 A（完整续播）：部分缓存（262KB 前缀）+ 完整播放 → 回填后缓存文件与源文件**逐字节一致**（7056044B），无缝无空洞；
+> - 场景 B（seek 越界）：播 3s 后 seek 到缓存外 → 缓存文件冻结（seek 后不再增长），解码继续。
+
+- [x] 完整播完一首 → `%LOCALAPPDATA%\netune\audio\` 出现 `.mp3`，索引 `complete: true`。
+- [x] 播 30 秒切歌 → 出现部分缓存（`complete: false`）；再播同一首 → 日志出现 `Continuing partial cache` 且立即出声。
+- [x] 部分缓存继续播完 → 索引变 `complete: true`（回填补全）。
 - [ ] 断网重播已完整缓存的歌 → 正常播放（命中本地）。
-- [ ] 快进到未缓存区间 → 播放不中断（走网络），缓存文件不被破坏。
+- [x] 快进到未缓存区间 → 播放不中断（走网络），缓存文件不被破坏。
 - [ ] `netune --manage` → 缓存页显示占用/上限，`d` 清空后目录清空。
 - [ ] 改 `cache.audio_limit_mb` 为极小值 → 播多首后最旧缓存被自动删除。
+- [x] 制造一个很小的部分缓存（播 ~10 秒就切歌）→ 再播同一首 → 日志 `Continuing partial cache`；播完后检查缓存文件字节流连续（无空洞）、索引变 `complete: true`。
+- [x] 部分缓存续播时听前缀耗尽处 → 无卡顿/无停顿（512KB 预取块生效），随后继续按需拉流不中断。
 
 ### 2.7 已知边界与后续方向
 
@@ -89,6 +101,7 @@ b29ca14 feat(cache): track partial vs complete cache entries
 - 部分缓存续传依赖网易云对同一首歌同音质返回内容一致的 URL；若 CDN 实际返回不同编码，前缀拼接可能损坏（罕见，可接受）。
 - 崩溃会残留 `.part` 文件；`audio_cache_clear` 会清理，但启动时未做清扫（可加）。
 - 网络流 seek 回"已读过的网络区域"（非缓存区）可能失败（FFmpeg http 流缓冲限制），表现为 seek 不生效但播放不中断。
+- ~~partial probe 越界读会在缓存文件中间留空洞~~（已修复：探测期越界读不落盘 + 探测后重绕，见 2.2/2.4）。代价：探测若越过前缀会多拉一段网络数据（丢弃），且探测后重连 Range 依赖 URL 未过期（窗口很小，通常无感）。
 
 ---
 

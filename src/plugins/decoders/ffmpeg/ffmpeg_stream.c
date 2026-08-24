@@ -34,8 +34,15 @@ struct FFStream {
     int64_t      rec_part_size;  /* prefix byte count */
     int64_t      rec_part_pos;   /* prefix bytes served so far */
     int          rec_partial;    /* 1 = continuing from a partial cache */
+    int          rec_probing;    /* 1 = avformat probe still running */
+    /* single-chunk prefetch: pulled right after the probe so the partial
+       prefix → network handover is served from memory, not a cold read */
+    uint8_t     *rec_prefetch;
+    size_t       rec_prefetch_cap, rec_prefetch_len, rec_prefetch_pos;
     int64_t      rec_pos;        /* logical stream position (for SEEK_CUR) */
 };
+
+static void prefetch_clear(FFStream *s);   /* defined below, used by tee_seek */
 
 /* ── Recorder (raw-stream tee) ─────────────────────── */
 static int tee_read(void *opaque, uint8_t *buf, int buf_size) {
@@ -54,9 +61,34 @@ static int tee_read(void *opaque, uint8_t *buf, int buf_size) {
             }
             if (ferror(s->rec_part_read)) return AVERROR(EIO);
         }
-        /* prefix exhausted → resume from the network source */
+        /* prefix exhausted → resume from the network source. During the
+           probe the prefix handle is kept open (the stream is rewound right
+           after) and probed network bytes are NOT written to the file —
+           otherwise a short prefix would leave a hole in the cache. */
+        if (s->rec_probing) {
+            int n = avio_read(s->rec_inner, buf, buf_size);
+            if (n > 0) s->rec_pos += n;
+            return n;
+        }
         fclose(s->rec_part_read);
         s->rec_part_read = NULL;
+    }
+    /* serve from the prefetch chunk first (seamless handover) */
+    if (s->rec_prefetch && s->rec_prefetch_pos < s->rec_prefetch_len) {
+        size_t left = s->rec_prefetch_len - s->rec_prefetch_pos;
+        size_t want = (size_t)buf_size;
+        if (want > left) want = left;
+        memcpy(buf, s->rec_prefetch + s->rec_prefetch_pos, want);
+        s->rec_prefetch_pos += want;
+        s->rec_pos += (int64_t)want;
+        if (s->rec_file)
+            fwrite(buf, 1, want, s->rec_file);
+        return (int)want;
+    }
+    if (s->rec_prefetch) {   /* exhausted → drop it, read directly from now on */
+        av_free(s->rec_prefetch);
+        s->rec_prefetch = NULL;
+        s->rec_prefetch_len = s->rec_prefetch_pos = 0;
     }
     int n = avio_read(s->rec_inner, buf, buf_size);
     if (n > 0) {
@@ -83,17 +115,59 @@ static int64_t tee_seek(void *opaque, int64_t offset, int whence) {
             return -1;
         s->rec_part_pos = target;
         s->rec_pos = target;
+        prefetch_clear(s);   /* cached bytes no longer line up with target */
         return target;
     }
-    /* beyond the prefix → delegate to the source. After a seek past the
-       prefix the fetched bytes are no longer contiguous with it, so stop
-       appending (freeze the file). */
+    /* beyond the prefix → delegate to the source. A seek past the prefix
+       means the fetched bytes are no longer contiguous with it, so the
+       cache is frozen (rec_file closed, prefetch dropped) FIRST — even if
+       the source seek fails below, the cache file is never corrupted by
+       misaligned backfill. */
+    prefetch_clear(s);
+    if (!s->rec_probing) {
+        /* probing keeps both handles alive so the stream can be rewound
+           cleanly after the probe completes */
+        if (s->rec_file)       { fclose(s->rec_file);       s->rec_file = NULL; }
+        if (s->rec_part_read)  { fclose(s->rec_part_read);  s->rec_part_read = NULL; }
+    }
     int64_t r = avio_seek(s->rec_inner, target - s->rec_part_size, SEEK_SET);
     if (r < 0) return r;
-    if (s->rec_file)       { fclose(s->rec_file);       s->rec_file = NULL; }
-    if (s->rec_part_read)  { fclose(s->rec_part_read);  s->rec_part_read = NULL; }
     s->rec_pos = target;
     return target;
+}
+
+/* ── Single-chunk prefetch (seamless partial → network handover) ──
+   A chunk of the network stream is pulled right after the probe completes,
+   so when the cached prefix runs out the handover is served from memory
+   instead of a cold network read (one RTT + server response). The chunk is
+   NOT the whole song — after it is consumed, reads fall back to the normal
+   on-demand path. Consumed bytes are appended to the cache file so the
+   file stays byte-contiguous. Any seek discards the chunk. */
+#define PREFETCH_BYTES (512 * 1024)
+
+static void prefetch_clear(FFStream *s) {
+    if (s->rec_prefetch) {
+        av_free(s->rec_prefetch);
+        s->rec_prefetch = NULL;
+        s->rec_prefetch_len = s->rec_prefetch_pos = 0;
+    }
+}
+
+static void prefetch_start(FFStream *s) {
+    prefetch_clear(s);
+    s->rec_prefetch_cap = PREFETCH_BYTES;
+    s->rec_prefetch = (uint8_t*)av_malloc(s->rec_prefetch_cap);
+    if (!s->rec_prefetch) return;   /* no prefetch → cold handover, still works */
+    size_t len = 0;
+    while (len < s->rec_prefetch_cap) {
+        int n = avio_read(s->rec_inner, s->rec_prefetch + len,
+                          (int)(s->rec_prefetch_cap - len));
+        if (n <= 0) break;   /* EOF / error: keep whatever we already have */
+        len += (size_t)n;
+    }
+    s->rec_prefetch_len = len;
+    s->rec_prefetch_pos = 0;
+    if (len == 0) prefetch_clear(s);
 }
 
 static void recorder_close_io(FFStream *s) {
@@ -106,6 +180,7 @@ static void recorder_close_io(FFStream *s) {
 static void recorder_discard(FFStream *s) {
     if (s->rec_file)       { fclose(s->rec_file);       s->rec_file = NULL; }
     if (s->rec_part_read)  { fclose(s->rec_part_read);  s->rec_part_read = NULL; }
+    prefetch_clear(s);
     if (s->rec_path) {
         if (!s->rec_committed) remove_utf8(s->rec_path);
         free(s->rec_path);
@@ -231,12 +306,18 @@ FFStream* ffstream_open_partial(const char *url, const char *prefix_path,
     if (stat_utf8(prefix_path, &st) != 0 || st.st_size <= 0) goto fail;
     s->rec_part_size = (int64_t)st.st_size;
 
-    /* resume the network source from the byte after the prefix */
+    /* resume the network source from the byte after the prefix.
+       The `offset` option is REQUIRED: without it FFmpeg's http protocol
+       sees the server's Content-Range start (rec_part_size) and fails the
+       internal check ("Unexpected offset: expected 0, got N"). */
     char range[64];
     snprintf(range, sizeof(range), "Range: bytes=%lld-\r\n",
              (long long)s->rec_part_size);
+    char offbuf[32];
+    snprintf(offbuf, sizeof(offbuf), "%lld", (long long)s->rec_part_size);
     AVDictionary *opts = NULL;
     av_dict_set(&opts, "headers", range, 0);
+    av_dict_set(&opts, "offset", offbuf, 0);
     int oret = avio_open2(&s->rec_inner, url, AVIO_FLAG_READ, NULL, &opts);
     av_dict_free(&opts);
     if (oret < 0) goto fail;
@@ -251,6 +332,8 @@ FFStream* ffstream_open_partial(const char *url, const char *prefix_path,
        through the AVIO; the append handle is opened only after probe
        completes so probe-time seeks never corrupt the file */
     s->rec_partial = 1;
+    s->rec_probing = 1;   /* probe reads may cross the prefix — keep the
+                             prefix handle alive and don't write the file yet */
     s->rec_part_pos = 0;
     s->rec_pos = 0;
     s->rec_path = strdup(prefix_path);   /* file already final: never unlink */
@@ -265,7 +348,31 @@ FFStream* ffstream_open_partial(const char *url, const char *prefix_path,
     if (avformat_open_input(&s->fmt, url, NULL, NULL) < 0) goto fail;
     if (setup_decoder(s, sr, ch, dur) < 0) goto fail;
 
-    /* probe done → open the append handle to backfill the rest of the file */
+    /* Probe done. If the probe read past the prefix it consumed bytes from
+       the network source and the tee AVIO buffer; rewind both so playback
+       starts contiguous from byte 0 and backfill resumes exactly at the
+       prefix boundary (Range start). The probed network bytes are discarded
+       instead of leaving a hole in the cache file. */
+    avio_close(s->rec_inner);
+    {
+        char range[64];
+        snprintf(range, sizeof(range), "Range: bytes=%lld-\r\n",
+                 (long long)s->rec_part_size);
+        char offbuf[32];
+        snprintf(offbuf, sizeof(offbuf), "%lld", (long long)s->rec_part_size);
+        AVDictionary *opts = NULL;
+        av_dict_set(&opts, "headers", range, 0);
+        av_dict_set(&opts, "offset", offbuf, 0);
+        int r = avio_open2(&s->rec_inner, url, AVIO_FLAG_READ, NULL, &opts);
+        av_dict_free(&opts);
+        if (r < 0) goto fail;
+    }
+    if (avio_seek(s->rec_pb, 0, SEEK_SET) < 0) goto fail;
+    s->rec_probing = 0;
+    s->rec_part_pos = 0;
+    s->rec_pos = 0;
+
+    /* open the append handle to backfill the rest of the file */
     if (s->rec_part_read) {
         s->rec_file = fopen_utf8(prefix_path, "ab");
         if (!s->rec_file) {   /* append unavailable → prefix-only play */
@@ -273,6 +380,8 @@ FFStream* ffstream_open_partial(const char *url, const char *prefix_path,
             s->rec_part_read = NULL;
         }
     }
+    /* pull one prefetch chunk now → the prefix→network handover is seamless */
+    prefetch_start(s);
     return s;
 
 fail:
