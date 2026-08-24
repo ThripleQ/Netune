@@ -5,7 +5,7 @@
 #include <ctime>
 
 extern "C" {
-#include "plugins/music_sources/netease/netease_api.h"
+#include "plugins/music_sources/netease/netease_ext.h"
 }
 
 /* Use the C API's song_info_copy/song_info_free (from core/music_source.h,
@@ -285,8 +285,8 @@ void StateStore::set_music_mode(MusicMode mode) {
             {"\u641C\u7D22\u7F51\u6613\u4E91", 100, ""},  /* 搜索网易云 */
         };
         /* If already logged in from a previous session, show account name */
-        if (netease_is_logged_in()) {
-            const char *name = netease_account_name();
+        if (netease_ext()->is_logged_in()) {
+            const char *name = netease_ext()->account_name();
             if (name && name[0])
                 state_.netease_menu[0].name = name;
             else

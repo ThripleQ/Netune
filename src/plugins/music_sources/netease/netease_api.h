@@ -5,6 +5,7 @@ extern "C" {
 #include <stdbool.h>
 #include <stddef.h>
 #include "core/music_source.h"
+#include "netease_ext.h"   /* 类型 (NSSong/SearchResult/SongDetail/NQ_*) 在此 */
 
 /* ── Netease API client (netease-cli backend) ──────── */
 
@@ -15,8 +16,6 @@ const char* netease_account_name(void);
 /* ── Search ────────────────────────────────────────── */
 /* ⚠️ 加字段后同步修改: netease_api.c(fill/search), netease_source.c(ns_search) */
 /*    app.cpp 手动构造 NSSong 的地方 */
-typedef struct { char *id, *title, *artist, *album, *cover_url; int dur_ms; int fee; } NSSong;
-typedef struct { NSSong *songs; int count; } NSSearchResult;
 
 int  netease_search(const char *kw, int limit, int offset, NSSearchResult *out);
 void netease_search_free(NSSearchResult *r);
@@ -46,17 +45,7 @@ int  netease_liked_check(const char *song_id, bool *liked); /* 0 = ok, liked set
 int  netease_subscribe_playlist(const char *pl_id, bool sub); /* 0 = ok */
 int  netease_toplist(SongInfo **out, int *count);       /* chart list */
 /* ── Song detail ──────────────────────────────────── */
-typedef struct {
-    char *title;
-    char *artist;      /* joined artists */
-    char *album;
-    int   duration_sec;
-    int   fee;         /* 0 free, 1/8 vip, 4 paid */
-    char *publish;     /* YYYY-MM-DD (local) */
-    int   pop;         /* hotness 0..100, -1 unknown */
-    char *cover_url;
-} SongDetail;
-void song_detail_free(SongDetail *d);
+void song_detail_free(SongDetail *d);   /* type SongDetail in netease_ext.h */
 int  netease_song_detail(const char *song_id, SongDetail *out); /* 0 = ok */
 int  netease_track_add(const char *pl_id, const char *song_id);   /* 0 = ok */
 int  netease_track_remove(const char *pl_id, const char *song_id);/* 0 = ok */
@@ -72,11 +61,6 @@ int  netease_play_url(const char *song_id, char *url, size_t url_sz);
    (standard/higher/exhigh/lossless/hires). 0 = ok, url filled. */
 int  netease_song_url(const char *song_id, const char *level,
                       char *url, size_t url_sz);
-
-/* Download progress callback (invoked from the libcurl worker thread).
-   `done`/`total` are bytes; total is 0 until Content-Length is known. */
-typedef void (*netease_download_progress)(void *ud, long long done,
-                                          long long total);
 
 /* Download a song (resolved at `level`, falling back down the quality
    ladder when unavailable) into the app download dir
@@ -97,19 +81,10 @@ int  netease_check_quality(const char *song_id, const char *level,
                            int *granted);
 
 /* Authoritative per-tier source probe (song-music-quality): *mask_out
-   receives a bitmask (NQ_JYMASTER|NQ_SKY|NQ_JYEFFECT|NQ_HIRES|NQ_LOSSLESS|
-   NQ_EXHIGH|NQ_HIGHER|NQ_STANDARD) of which levels the track actually has
-   a file for, high→low. br_out (optional, NQ_LEVELS ints, same order)
-   receives each tier's bitrate, 0 = no source. 0 = ok, -1 = failed. */
-#define NQ_JYMASTER  (1u << 0)
-#define NQ_SKY       (1u << 1)
-#define NQ_JYEFFECT  (1u << 2)
-#define NQ_HIRES     (1u << 3)
-#define NQ_LOSSLESS  (1u << 4)
-#define NQ_EXHIGH    (1u << 5)
-#define NQ_HIGHER    (1u << 6)
-#define NQ_STANDARD  (1u << 7)
-#define NQ_LEVELS    8
+   receives a bitmask (NQ_* in netease_ext.h) of which levels the track
+   actually has a file for, high→low. br_out (optional, NQ_LEVELS ints,
+   same order) receives each tier's bitrate, 0 = no source.
+   0 = ok, -1 = failed. */
 int  netease_song_music_quality(const char *song_id, unsigned *mask_out,
                                 int *br_out);
 

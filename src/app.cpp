@@ -51,7 +51,7 @@ extern "C" {
 #include "stb_image.h"
 #include "plugins/music_sources/local/local_source.h"
 #include "plugins/music_sources/netease/netease_source.h"
-#include "plugins/music_sources/netease/netease_api.h"
+#include "plugins/music_sources/netease/netease_ext.h"
 #include "plugins/music_sources/netease/netease_quality.h"
 }
 
@@ -73,6 +73,11 @@ extern "C" {
 #include "core/lyric.h"
 #include "plugins/lyrics/lrc/lrc_parser.h"
 }
+
+/* Netease 特化接口（netease_ext.h）。netease_ext() 返回编译期 static
+   const 表，声明即初始化，无 NULL 窗口；app.cpp 通过它调用网易云
+   能力，不直接依赖 netease_api.h 实现。 */
+static const NeteaseExt *g_ne = netease_ext();
 #include "ui/theme.h"
 #include "ui/layout_engine.h"
 
@@ -253,7 +258,7 @@ static std::vector<uint8_t> b64_decode(const char *s) {
 
 /* Generate QR code text using netease-cli's built-in qr-render */
 static std::string gen_qr(const char *url) {
-    char *qr = netease_qr_render(url);
+    char *qr = g_ne->qr_render(url);
     if (!qr) return "";
     std::string s(qr);
     free(qr);
@@ -265,7 +270,7 @@ static void start_login(void) {
     StateStore::instance().set_login_state(1, "Contacting server...", "");
     char unikey[128] = {0};
     char qr_url[512] = {0};
-    if (netease_qr_key(unikey, sizeof(unikey), qr_url, sizeof(qr_url)) == 0
+    if (g_ne->qr_key(unikey, sizeof(unikey), qr_url, sizeof(qr_url)) == 0
         && unikey[0]) {
         g_login_unikey = unikey;
         g_login_poll_tick = 0;
@@ -294,7 +299,7 @@ static void start_login(void) {
         }
         std::string qr_url_copy = qr_url;
         std::thread([](std::string url) {
-            char *b64 = netease_qr_image(url.c_str());
+            char *b64 = g_ne->qr_image(url.c_str());
             if (!b64) return;
             std::vector<uint8_t> png = b64_decode(b64);
             free(b64);
@@ -321,7 +326,7 @@ static void start_login(void) {
 static void update_login_menu(void) {
     const auto &cur = StateStore::instance().state();
     if (cur.netease_menu.empty()) return;
-    const char *name = netease_account_name();
+    const char *name = g_ne->account_name();
     if (!name) name = "Logged in";
     auto menu = cur.netease_menu;
     std::string label = "";
@@ -384,7 +389,7 @@ static void do_netease_search(const char *query, bool push_nav) {
 
     std::thread([q]() {
         NSSearchResult nr;
-        if (netease_search(q.c_str(), 100, 0, &nr) != 0) {
+        if (g_ne->search(q.c_str(), 100, 0, &nr) != 0) {
             /* search failed — publish done to clear search+loading */
             event_bus_publish(EV_SEARCH_DONE, NULL, 0);
             return;
@@ -403,12 +408,12 @@ static void do_netease_search(const char *query, bool push_nav) {
             si.fee          = nr.songs[i].fee;
             vec.push_back(si);
         }
-        netease_search_free(&nr);
+        g_ne->search_free(&nr);
 
         /* Append matching playlists so a query finds both songs and
            playlist entries (distinguished by is_playlist). */
         SongInfo *pls = NULL; int pc = 0;
-        if (netease_search_playlists(q.c_str(), &pls, &pc) == 0 && pc > 0) {
+        if (g_ne->search_playlists(q.c_str(), &pls, &pc) == 0 && pc > 0) {
             for (int i = 0; i < pc; i++)
                 vec.push_back(pls[i]);
             free(pls);
@@ -645,7 +650,7 @@ static void activate_netease_menu_item(int idx) {
         StateStore::instance().set_loading(true);
         std::thread([]() {
             SongInfo *pl = NULL; int pc = 0;
-            int ret = netease_playlists(false, &pl, &pc);
+            int ret = g_ne->playlists(false, &pl, &pc);
             LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
             if (ret == 0 && pc > 0) {
                 for (int i = 0; i < pc; i++) pl[i].mine = 1;
@@ -669,7 +674,7 @@ static void activate_netease_menu_item(int idx) {
         StateStore::instance().set_loading(true);
         std::thread([]() {
             SongInfo *ms = NULL; int mc = 0;
-            int ret = netease_liked_songs(&ms, &mc);
+            int ret = g_ne->liked_songs(&ms, &mc);
             LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
             if (ret == 0 && mc > 0) {
                 ld->songs = ms; ld->count = mc;
@@ -689,9 +694,9 @@ static void activate_netease_menu_item(int idx) {
     } else if (type == 303) {
         /* refresh login */
         std::thread([]() {
-            int ok = netease_login_refresh();
+            int ok = g_ne->login_refresh();
             if (ok == 0) {
-                const char *name = netease_account_name();
+                const char *name = g_ne->account_name();
                 StateStore::instance().set_login_state(3,
                     name ? name : "Logged in", "");
             } else {
@@ -702,7 +707,7 @@ static void activate_netease_menu_item(int idx) {
     } else if (type == 304) {
         /* logout: drop cookies, rebuild the default (logged-out) menu
            without leaving Netease mode (no flicker to Local) */
-        netease_logout();
+        g_ne->logout();
         StateStore::instance().clear_nav_stack();
         StateStore::instance().set_netease_menu({});
         StateStore::instance().set_music_mode(MusicMode::Netease);
@@ -714,7 +719,7 @@ static void activate_netease_menu_item(int idx) {
         StateStore::instance().set_action_sheet_input("");
     } else if (type == 306) {
         /* my purchased: submenu of purchased singles + digital albums */
-        if (!netease_is_logged_in()) { start_login(); }
+        if (!g_ne->is_logged_in()) { start_login(); }
         else {
             StateStore::instance().nav_push();
             StateStore::instance().set_netease_menu({
@@ -730,7 +735,7 @@ static void activate_netease_menu_item(int idx) {
         StateStore::instance().set_loading(true);
         std::thread([]() {
             SongInfo *songs = NULL; int sc = 0;
-            int ret = netease_purchased_songs(&songs, &sc);
+            int ret = g_ne->purchased_songs(&songs, &sc);
             LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
             if (ret == 0 && sc > 0) {
                 ld->songs = songs; ld->count = sc;
@@ -753,7 +758,7 @@ static void activate_netease_menu_item(int idx) {
         StateStore::instance().set_loading(true);
         std::thread([]() {
             SongInfo *songs = NULL; int sc = 0;
-            int ret = netease_purchased_albums(&songs, &sc);
+            int ret = g_ne->purchased_albums(&songs, &sc);
             LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
             if (ret == 0 && sc > 0) {
                 ld->songs = songs; ld->count = sc;
@@ -787,8 +792,8 @@ static void activate_netease_menu_item(int idx) {
         std::thread([_pl_id, is_purchased_album]() {
             SongInfo *songs = NULL; int sc = 0;
             int ret = is_purchased_album
-                ? netease_album_songs(_pl_id.c_str(), &songs, &sc)
-                : netease_playlist_songs(_pl_id.c_str(), &songs, &sc);
+                ? g_ne->album_songs(_pl_id.c_str(), &songs, &sc)
+                : g_ne->playlist_songs(_pl_id.c_str(), &songs, &sc);
             LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
             if (ret == 0 && sc > 0) {
                 ld->songs = songs; ld->count = sc;
@@ -811,7 +816,7 @@ static void activate_netease_menu_item(int idx) {
                type == 6 || type == 7) {
         /* 每日推荐 (0, songs) / 推荐歌单 (1, playlists) / 排行榜 (5)
            最近播放 (6, songs) / 每日歌单 (7, playlists) */
-        if (!netease_is_logged_in() &&
+        if (!g_ne->is_logged_in() &&
             (type == 0 || type == 6 || type == 7)) {
             start_login();  /* these need a session */
         } else {
@@ -820,10 +825,10 @@ static void activate_netease_menu_item(int idx) {
             std::thread([type]() {
                 SongInfo *songs = NULL; int sc = 0;
                 int ret = -1;
-                if (type == 5)            ret = netease_toplist(&songs, &sc);
-                else if (type == 6)       ret = netease_recent_songs(&songs, &sc);
-                else if (type == 7)       ret = netease_daily_playlists(&songs, &sc);
-                else                      ret = netease_menu_songs(type, 30, &songs, &sc);
+                if (type == 5)            ret = g_ne->toplist(&songs, &sc);
+                else if (type == 6)       ret = g_ne->recent_songs(&songs, &sc);
+                else if (type == 7)       ret = g_ne->daily_playlists(&songs, &sc);
+                else                      ret = g_ne->menu_songs(type, 30, &songs, &sc);
                 LOG_INFO("MENU SONGS: type=%d ret=%d count=%d", type, ret, sc);
                 LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
                 if (ret == 0 && sc > 0) {
@@ -845,14 +850,14 @@ static void activate_netease_menu_item(int idx) {
             }).detach();
         }
     } else if (type == 2 || type == 3) {
-        if (!netease_is_logged_in()) {
+        if (!g_ne->is_logged_in()) {
             start_login();
         } else {
             StateStore::instance().nav_push();
             StateStore::instance().set_loading(true);
             std::thread([type]() {
                 SongInfo *pl = NULL; int pc = 0;
-                int ret = netease_playlists(type == 3, &pl, &pc);
+                int ret = g_ne->playlists(type == 3, &pl, &pc);
                 LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
                 if (ret == 0 && pc > 0) {
                     ld->songs = pl; ld->count = pc;
@@ -872,14 +877,14 @@ static void activate_netease_menu_item(int idx) {
         }
     } else if (type == 4) {
         /* 我喜欢的音乐 (liked songs) */
-        if (!netease_is_logged_in()) {
+        if (!g_ne->is_logged_in()) {
             start_login();
         } else {
             StateStore::instance().nav_push();
             StateStore::instance().set_loading(true);
             std::thread([]() {
                 SongInfo *songs = NULL; int sc = 0;
-                int ret = netease_liked_songs(&songs, &sc);
+                int ret = g_ne->liked_songs(&songs, &sc);
                 LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
                 if (ret == 0 && sc > 0) {
                     ld->songs = songs; ld->count = sc;
@@ -956,7 +961,7 @@ static void lyric_load_worker(void *arg) {
     char *song_id = (char*)arg;
     char *lyric_buf = NULL;
     Lyrics *ly = NULL;
-    if (netease_lyric(song_id, &lyric_buf) == 0 && lyric_buf) {
+    if (g_ne->lyric(song_id, &lyric_buf) == 0 && lyric_buf) {
         ly = lyric_parse(lyric_buf);
         free(lyric_buf);
     }
@@ -1965,20 +1970,20 @@ int run_app(int argc, char **argv) {
                 qr_min_dims(s.login_qr, &qneed_w, &qneed_h) &&
                 s.top_row_width >= qneed_w && s.screen_height >= qneed_h;
             if (qr_fits) {
-            int rc = netease_qr_poll(g_login_unikey.c_str());
+            int rc = g_ne->qr_poll(g_login_unikey.c_str());
             LOG_INFO("LOGIN POLL: rc=%d", rc);
             if (rc == 0) {
                 /* 803: authorized, login successful */
                 login_done_at = std::chrono::steady_clock::now();
                 StateStore::instance().set_login_state(3,
-                    netease_account_name() ? netease_account_name() : "Logged in", "");
+                    g_ne->account_name() ? g_ne->account_name() : "Logged in", "");
                 update_login_menu();
                 /* Data-loading phase: warm up the user's playlists in
                    the background; the success overlay closes when this
                    finishes (or after the 10s timeout above). */
                 std::thread([]() {
                     SongInfo *pl = NULL; int pc = 0;
-                    netease_playlists(false, &pl, &pc);
+                    g_ne->playlists(false, &pl, &pc);
                     if (pl) {
                         for (int i = 0; i < pc; i++)
                             song_info_free(&pl[i]);
@@ -2089,10 +2094,10 @@ int run_app(int argc, char **argv) {
                         if (!name.empty()) {
                             std::thread([name, ctx, cur_pl]() {
                                 if (ctx == "rename") {
-                                    netease_playlist_rename(cur_pl.c_str(), name.c_str());
+                                    g_ne->playlist_rename(cur_pl.c_str(), name.c_str());
                                 } else {
                                     char nid[32] = {0};
-                                    if (netease_playlist_create(name.c_str(), nid, sizeof(nid)) == 0 && nid[0])
+                                    if (g_ne->playlist_create(name.c_str(), nid, sizeof(nid)) == 0 && nid[0])
                                         LOG_INFO("created playlist %s", nid);
                                 }
                             }).detach();
@@ -2130,7 +2135,7 @@ int run_app(int argc, char **argv) {
                         state.set_action_sheet(false, 0);
                         std::thread([id]() {
                             LOG_INFO("ACTION SHEET: delete playlist %s -> %d",
-                                     id.c_str(), netease_playlist_delete(id.c_str()));
+                                     id.c_str(), g_ne->playlist_delete(id.c_str()));
                         }).detach();
                         return true;
                     }
@@ -2330,7 +2335,7 @@ int run_app(int argc, char **argv) {
                                 std::thread([plid, id]() {
                                     LOG_INFO("ACTION SHEET: add %s to %s -> %d",
                                              id.c_str(), plid.c_str(),
-                                             netease_track_add(plid.c_str(), id.c_str()));
+                                             g_ne->track_add(plid.c_str(), id.c_str()));
                                 }).detach();
                             }
                         }
@@ -2352,7 +2357,7 @@ int run_app(int argc, char **argv) {
                         if (idx == 0) {
                             /* subscribe/unsubscribe */
                             std::thread([id, active]() {
-                                int rv = netease_subscribe_playlist(id.c_str(), !active);
+                                int rv = g_ne->subscribe_playlist(id.c_str(), !active);
                                 LOG_INFO("ACTION SHEET: subscribe %s -> %d", id.c_str(), rv);
                                 if (rv == 0)
                                     StateStore::instance().set_action_sheet_active(active ? 0 : 1);
@@ -2371,7 +2376,7 @@ int run_app(int argc, char **argv) {
                         if (idx == 0) {
                             /* like/unlike */
                             std::thread([id, active]() {
-                                int rv = netease_like_song(id.c_str(), !active);
+                                int rv = g_ne->like_song(id.c_str(), !active);
                                 LOG_INFO("ACTION SHEET: like %s -> %d", id.c_str(), rv);
                                 if (rv == 0)
                                     StateStore::instance().set_action_sheet_active(active ? 0 : 1);
@@ -2382,7 +2387,7 @@ int run_app(int argc, char **argv) {
                             state.set_action_sheet(true, 0);
                             std::thread([]() {
                                 SongInfo *pls = NULL; int pc = 0;
-                                if (netease_playlists(false, &pls, &pc) == 0 && pc > 0) {
+                                if (g_ne->playlists(false, &pls, &pc) == 0 && pc > 0) {
                                     std::vector<SongInfo> vec;
                                     for (int i = 0; i < pc; i++)
                                         vec.push_back(pls[i]);
@@ -2415,12 +2420,12 @@ int run_app(int argc, char **argv) {
                                 unsigned mask = 0;
                                 int br[NQ_LEVELS] = {0};
                                 std::vector<int> res(NQ_LEVELS, -1);
-                                if (netease_song_music_quality(id.c_str(), &mask, br) == 0) {
+                                if (g_ne->song_music_quality(id.c_str(), &mask, br) == 0) {
                                     static const unsigned bits[NQ_LEVELS] = {
                                         NQ_JYMASTER, NQ_SKY, NQ_JYEFFECT, NQ_HIRES,
                                         NQ_LOSSLESS, NQ_EXHIGH, NQ_HIGHER, NQ_STANDARD
                                     };
-                                    int vip = netease_vip_level();  /* 0 none,1 black,2 svip */
+                                    int vip = g_ne->vip_level();  /* 0 none,1 black,2 svip */
                                     if (vip < 0) vip = 0;
                                     /* purchased/owned check for VIP/paid
                                        tracks: prefer the purchased-track
@@ -2429,8 +2434,8 @@ int run_app(int argc, char **argv) {
                                        always downloadable. */
                                     int owned = 0;   /* 0 not-owned, 1 owned, -1 unknown */
                                     if (fee != 0) {
-                                        int o = netease_is_purchased(id.c_str());
-                                        if (o < 0) o = netease_song_owned(id.c_str(), "lossless");
+                                        int o = g_ne->is_purchased(id.c_str());
+                                        if (o < 0) o = g_ne->song_owned(id.c_str(), "lossless");
                                         owned = (o == 1) ? 1 : (o == 0 ? 0 : -1);
                                     }
                                     for (int i = 0; i < NQ_LEVELS; i++) {
@@ -2501,7 +2506,7 @@ int run_app(int argc, char **argv) {
                                 unsigned mask = 0;
                                 int br[NQ_LEVELS] = {0};
                                 if (nq_cache_get(id.c_str(), &mask, br) != 0)
-                                    netease_song_music_quality(id.c_str(), &mask, br);
+                                    g_ne->song_music_quality(id.c_str(), &mask, br);
                                 std::vector<int> res(NQ_LEVELS, -2);
                                 static const unsigned bits[NQ_LEVELS] = {
                                     NQ_JYMASTER, NQ_SKY, NQ_JYEFFECT, NQ_HIRES,
@@ -2515,12 +2520,12 @@ int run_app(int argc, char **argv) {
                                    jyeffect/lossless/hires need black-vinyl
                                    VIP, jymaster/sky need SVIP; paid tracks
                                    are hidden unless purchased. */
-                                int vip = netease_vip_level();
+                                int vip = g_ne->vip_level();
                                 if (vip < 0) vip = 0;
                                 int owned = 0;
                                 if (fee != 0) {
-                                    int o = netease_is_purchased(id.c_str());
-                                    if (o < 0) o = netease_song_owned(id.c_str(), "lossless");
+                                    int o = g_ne->is_purchased(id.c_str());
+                                    if (o < 0) o = g_ne->song_owned(id.c_str(), "lossless");
                                     owned = (o == 1) ? 1 : (o == 0 ? 0 : -1);
                                 }
                                 for (int i = 0; i < NQ_LEVELS; i++) {
@@ -2585,7 +2590,7 @@ int run_app(int argc, char **argv) {
                             state.set_action_sheet(true, 0);
                             std::thread([id]() {
                                 SongDetail d;
-                                if (netease_song_detail(id.c_str(), &d) != 0) {
+                                if (g_ne->song_detail(id.c_str(), &d) != 0) {
                                     StateStore::instance().set_song_detail(
                                         {"  \u83B7\u53D6\u5931\u8D25" });  /* 获取失败 */
                                     return;
@@ -2609,7 +2614,7 @@ int run_app(int argc, char **argv) {
                                     snprintf(buf, sizeof(buf), "%d/100", d.pop);
                                     lines.push_back("  \u70ED\u5EA6:  " + std::string(buf));  /* 热度 */
                                 }
-                                song_detail_free(&d);
+                                g_ne->song_detail_free(&d);
                                 StateStore::instance().set_song_detail(lines);
                             }).detach();
                         } else if (idx == 5 && in_own) {
@@ -2620,7 +2625,7 @@ int run_app(int argc, char **argv) {
                                 std::thread([cid, id]() {
                                     LOG_INFO("ACTION SHEET: remove %s from %s -> %d",
                                              id.c_str(), cid.c_str(),
-                                             netease_track_remove(cid.c_str(), id.c_str()));
+                                             g_ne->track_remove(cid.c_str(), id.c_str()));
                                 }).detach();
                             }
                         }
@@ -3225,7 +3230,7 @@ int run_app(int argc, char **argv) {
                     std::string _pl_id = song.id ? song.id : "";
                     std::thread([_pl_id]() {
                         SongInfo *songs = NULL; int sc = 0;
-                        int ret = netease_playlist_songs(_pl_id.c_str(), &songs, &sc);
+                        int ret = g_ne->playlist_songs(_pl_id.c_str(), &songs, &sc);
                         LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
                         if (ret == 0 && sc > 0) {
                             ld->songs = songs; ld->count = sc;
@@ -3354,7 +3359,7 @@ int run_app(int argc, char **argv) {
                         int active = -1;
                         if (is_pl) {
                             SongInfo *pls = NULL; int pc = 0;
-                            if (netease_playlists(true, &pls, &pc) == 0) {
+                            if (g_ne->playlists(true, &pls, &pc) == 0) {
                                 for (int i = 0; i < pc; i++) {
                                     if (pls[i].id && strcmp(pls[i].id, id.c_str()) == 0) {
                                         active = 1; break;
@@ -3370,7 +3375,7 @@ int run_app(int argc, char **argv) {
                             }
                         } else {
                             bool liked = false;
-                            if (netease_liked_check(id.c_str(), &liked) == 0)
+                            if (g_ne->liked_check(id.c_str(), &liked) == 0)
                                 active = liked ? 1 : 0;
                             else
                                 active = 0;  /* default: not liked */

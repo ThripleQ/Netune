@@ -306,6 +306,7 @@ set(PLUGIN_MUSIC_SOURCES
   src/plugins/music_sources/netease/netease_source.c
   src/plugins/music_sources/netease/netease_api.c
   src/plugins/music_sources/netease/netease_quality.c
+  src/plugins/music_sources/netease/netease_ext.c
 )
 
 set(UI_SOURCES

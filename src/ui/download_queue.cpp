@@ -1,7 +1,7 @@
 #include "ui/download_queue.h"
 
 extern "C" {
-#include "plugins/music_sources/netease/netease_api.h"
+#include "plugins/music_sources/netease/netease_ext.h"
 #include "plugins/music_sources/local/local_source.h"
 #include "core/event_bus.h"
 #include "infra/config_paths.h"
@@ -120,7 +120,7 @@ void DownloadQueue::worker_loop() {
         notify();   /* reflect the queued→downloading flip in the mirror */
 
         char used_lvl[32] = {0};
-        char *path = netease_download_song(
+        char *path = netease_ext()->download_song(
             cur_id.c_str(), cur.level.c_str(),
             cur.title.c_str(),
             cur.artist.empty() ? nullptr : cur.artist.c_str(),
