@@ -704,6 +704,64 @@ static void activate_netease_menu_item(int idx) {
         StateStore::instance().set_action_sheet_menu(2);
         StateStore::instance().set_action_sheet_ctx("create");
         StateStore::instance().set_action_sheet_input("");
+    } else if (type == 306) {
+        /* my purchased: submenu of purchased singles + digital albums */
+        if (!netease_is_logged_in()) { start_login(); }
+        else {
+            StateStore::instance().nav_push();
+            StateStore::instance().set_netease_menu({
+                {"<< \u8FD4\u56DE", -1, ""},
+                {"\u5DF2\u8D2D\u5355\u66F2", 307, ""},
+                {"\u5DF2\u8D2D\u6570\u5B57\u4E13\u8F91", 308, ""},
+            });
+            StateStore::instance().set_netease_selected(0);
+        }
+    } else if (type == 307) {
+        /* purchased single tracks */
+        StateStore::instance().nav_push();
+        StateStore::instance().set_loading(true);
+        std::thread([]() {
+            SongInfo *songs = NULL; int sc = 0;
+            int ret = netease_purchased_songs(&songs, &sc);
+            LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
+            if (ret == 0 && sc > 0) {
+                ld->songs = songs; ld->count = sc;
+            } else {
+                ld->songs = NULL; ld->count = 0;
+                free(songs);
+            }
+            if (event_bus_publish(EV_PLAYLIST_LOADED, ld, sizeof(*ld)) != 0) {
+                if (ld->songs) {
+                    for (int i = 0; i < ld->count; i++)
+                        song_info_free(&ld->songs[i]);
+                    free(ld->songs);
+                }
+                free(ld);
+            }
+        }).detach();
+    } else if (type == 308) {
+        /* purchased digital albums */
+        StateStore::instance().nav_push();
+        StateStore::instance().set_loading(true);
+        std::thread([]() {
+            SongInfo *songs = NULL; int sc = 0;
+            int ret = netease_purchased_albums(&songs, &sc);
+            LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
+            if (ret == 0 && sc > 0) {
+                ld->songs = songs; ld->count = sc;
+            } else {
+                ld->songs = NULL; ld->count = 0;
+                free(songs);
+            }
+            if (event_bus_publish(EV_PLAYLIST_LIST_LOADED, ld, sizeof(*ld)) != 0) {
+                if (ld->songs) {
+                    for (int i = 0; i < ld->count; i++)
+                        song_info_free(&ld->songs[i]);
+                    free(ld->songs);
+                }
+                free(ld);
+            }
+        }).detach();
     } else if (!pl_id.empty()) {
         /* entering a playlist's songs from a playlist list — push with
            playlist restore so Esc lands back on the playlist list */
@@ -712,10 +770,17 @@ static void activate_netease_menu_item(int idx) {
         StateStore::instance().set_detail_playlist_mine(
             !cur.playlist.empty() && cur.playlist[cur.selected_index].mine == 1);
         StateStore::instance().set_loading(true);
+        /* purchased digital albums are is_playlist=1 rows whose Enter opens
+           the album's tracks (album API) rather than a playlist's songs */
+        bool is_purchased_album =
+            !cur.playlist.empty() && cur.playlist[cur.selected_index].aux_label &&
+            strcmp(cur.playlist[cur.selected_index].aux_label, "已购专辑") == 0;
         std::string _pl_id = pl_id;
-        std::thread([_pl_id]() {
+        std::thread([_pl_id, is_purchased_album]() {
             SongInfo *songs = NULL; int sc = 0;
-            int ret = netease_playlist_songs(_pl_id.c_str(), &songs, &sc);
+            int ret = is_purchased_album
+                ? netease_album_songs(_pl_id.c_str(), &songs, &sc)
+                : netease_playlist_songs(_pl_id.c_str(), &songs, &sc);
             LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
             if (ret == 0 && sc > 0) {
                 ld->songs = songs; ld->count = sc;

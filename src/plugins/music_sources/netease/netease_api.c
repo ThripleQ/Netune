@@ -1238,6 +1238,103 @@ int netease_is_purchased(const char *song_id) {
     return g_purchased_loaded == 1 ? 0 : -1;
 }
 
+/* ── Purchased single-track list (api/single/mybought/song/list) ── */
+int netease_purchased_songs(SongInfo **out, int *count) {
+    *out = NULL; *count = 0;
+    char *j = run("%s song-purchased 100 0%s", CLI, STDERR_REDIRECT);
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *data = root ? jget_obj(root, "data") : NULL;
+    if (!data || !yyjson_is_obj(data)) { yyjson_doc_free(doc); return -1; }
+    yyjson_val *list = jget_arr(data, "list");
+    if (!list) { yyjson_doc_free(doc); return -1; }
+    size_t n = yyjson_arr_size(list);
+    if (n == 0) { yyjson_doc_free(doc); return -1; }
+    *out = (SongInfo*)calloc(n, sizeof(SongInfo));
+    int oi = 0;
+    yyjson_arr_iter iter = yyjson_arr_iter_with(list);
+    yyjson_val *v;
+    while ((v = yyjson_arr_iter_next(&iter)) && oi < (int)n) {
+        if (!yyjson_is_obj(v)) continue;
+        SongInfo *s = &(*out)[oi]; oi++;
+        memset(s, 0, sizeof(*s));
+        s->source = strdup("netease");
+        s->aux_label = strdup("");
+        long long sid = jget_sint64(v, "songId");
+        char idbuf[32]; snprintf(idbuf, sizeof idbuf, "%lld", sid);
+        s->id = strdup(idbuf);
+        const char *nm = jget_str(v, "name"); s->title = nm ? strdup(nm) : strdup("");
+        const char *an = jget_str(v, "artistName"); s->artist = an ? strdup(an) : strdup("");
+        const char *al = jget_str(v, "albumName");  s->album  = al ? strdup(al) : strdup("");
+        const char *pu = jget_str(v, "picUrl");     s->cover_url = pu ? strdup(pu) : strdup("");
+        /* vip/sq flags → aux_label so the UI can show entitlement */
+        int vip = (int)jget_int(v, "vip");
+        int sq  = (int)jget_int(v, "sq");
+        if (vip && sq)      s->aux_label = strdup("VIP·SQ");
+        else if (vip)       s->aux_label = strdup("VIP");
+        else if (sq)        s->aux_label = strdup("SQ");
+    }
+    *count = oi;
+    yyjson_doc_free(doc);
+    return oi > 0 ? 0 : -1;
+}
+
+/* ── Purchased digital-album list (api/digitalAlbum/purchased) ── */
+int netease_purchased_albums(SongInfo **out, int *count) {
+    *out = NULL; *count = 0;
+    char *j = run("%s album-purchased 100 0%s", CLI, STDERR_REDIRECT);
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *list = root ? jget_arr(root, "paidAlbums") : NULL;
+    if (!list) { yyjson_doc_free(doc); return -1; }
+    size_t n = yyjson_arr_size(list);
+    if (n == 0) { yyjson_doc_free(doc); return -1; }
+    *out = (SongInfo*)calloc(n, sizeof(SongInfo));
+    int oi = 0;
+    yyjson_arr_iter iter = yyjson_arr_iter_with(list);
+    yyjson_val *v;
+    while ((v = yyjson_arr_iter_next(&iter)) && oi < (int)n) {
+        if (!yyjson_is_obj(v)) continue;
+        SongInfo *s = &(*out)[oi]; oi++;
+        memset(s, 0, sizeof(*s));
+        s->source = strdup("netease");
+        s->aux_label = strdup("已购专辑");
+        s->is_playlist = 1;  /* Enter opens the album */
+        long long aid = jget_sint64(v, "albumId");
+        char idbuf[32]; snprintf(idbuf, sizeof idbuf, "%lld", aid);
+        s->id = strdup(idbuf);
+        const char *nm = jget_str(v, "albumName"); s->title = nm ? strdup(nm) : strdup("");
+        const char *pu = jget_str(v, "cover");     s->cover_url = pu ? strdup(pu) : strdup("");
+        /* artist from the nested artist.name */
+        yyjson_val *ar = jget_obj(v, "artist");
+        const char *an = ar ? jget_str(ar, "name") : NULL;
+        s->artist = an ? strdup(an) : strdup("");
+        s->album = strdup("");
+    }
+    *count = oi;
+    yyjson_doc_free(doc);
+    return oi > 0 ? 0 : -1;
+}
+
+/* ── Album tracks (weapi/v1/album/{id}) ───────────────── */
+int netease_album_songs(const char *album_id, SongInfo **out, int *count) {
+    *out = NULL; *count = 0;
+    if (!album_id || !*album_id) return -1;
+    char *esc = shell_escape(album_id);
+    char *j = run("%s album %s%s", CLI, esc, STDERR_REDIRECT);
+    free(esc);
+    if (!j) return -1;
+    int r = parselist(j, "songs", out, count);
+    free(j);
+    return r;
+}
+
 char* netease_download_song(const char *id, const char *level,
                             const char *title, char *used_level,
                             size_t used_sz) {

@@ -124,6 +124,20 @@ int  netease_purchased_refresh(void);
    loaded), -1 = list not loaded yet / unknown. */
 int  netease_is_purchased(const char *song_id);
 
+/* Purchased single-track list (api/single/mybought/song/list) as SongInfo
+   rows (songId→id, name→title, artistName→artist, albumName→album,
+   picUrl→cover_url). 0 = ok, -1 = failed. */
+int  netease_purchased_songs(SongInfo **out, int *count);
+
+/* Purchased digital-album list (api/digitalAlbum/purchased) as SongInfo
+   rows (albumId→id, albumName→title, artist.name→artist, cover→cover_url,
+   is_playlist=1 so Enter opens the album). 0 = ok, -1 = failed. */
+int  netease_purchased_albums(SongInfo **out, int *count);
+
+/* Tracks of an album (weapi/v1/album/{id}) as SongInfo rows. 0 = ok,
+   -1 = failed. */
+int  netease_album_songs(const char *album_id, SongInfo **out, int *count);
+
 /* Account VIP entitlement for download gating (vip-info). Mirrors the
    client: 0 = none, 1 = black-vinyl VIP, 2 = SVIP, -1 = error. */
 int  netease_vip_level(void);
