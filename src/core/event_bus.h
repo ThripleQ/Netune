@@ -61,6 +61,11 @@ typedef enum {
        (payload: none) */
     EV_LOCAL_REFRESH,
 
+    /* download queue state changed: enqueue / progress / completion.
+       Payload: none → mirror active tasks to StateStore; a C-string → also
+       set the app notice (download result). */
+    EV_DOWNLOAD_UPDATE,
+
     EV_COUNT  /* sentinel */
 } EventType;
 

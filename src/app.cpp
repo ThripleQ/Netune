@@ -56,6 +56,7 @@ extern "C" {
 }
 
 #include "ui/state_store.h"
+#include "ui/download_queue.h"
 #include "ui/keybindings.h"
 #include "ui/mpris.h"
 #include "ui/ui_util.h"
@@ -522,6 +523,17 @@ static void refresh_local_groups(void) {
         }
     }
     std::vector<SongGroup> groups;
+    /* the app's own downloads folder: its group gets a flag so the UI can
+       surface live download progress there */
+    const std::string dl_dir =
+        std::string(netune_data_root()) + PATH_SEP + "downloads";
+    auto is_dl_dir = [&](const std::string &d) {
+#ifdef _WIN32
+        return _stricmp(d.c_str(), dl_dir.c_str()) == 0;
+#else
+        return d == dl_dir;
+#endif
+    };
     if (!scan_dirs.empty()) {
         /* The local source's search matches titles/filenames, not dirs, so
            fetch everything (empty keyword = all songs) and group by the id
@@ -531,6 +543,7 @@ static void refresh_local_groups(void) {
         int rc = music_source_search("local", "", 0, 0, &all);
         for (auto &dir : scan_dirs) {
             SongGroup g;
+            g.is_downloads = is_dl_dir(dir);
             const char *slash_fwd = strrchr(dir.c_str(), '/');
             const char *slash_back = strrchr(dir.c_str(), '\\');
             const char *last_sep = (slash_back && (!slash_fwd || slash_back > slash_fwd))
@@ -1312,6 +1325,18 @@ static void ev_playlist_list_loaded(const BusEvent *ev, void *data) {
     StateStore::instance().set_active_panel(1);
 }
 
+/* ── Download queue update (backend → StateStore mirror) ──
+   Runs on the main thread via event_bus_poll. Snapshots the active tasks
+   into StateStore (the UI never reads across threads into the queue).
+   A payload is the completion notice (C-string); ev->data is freed by
+   event_bus_poll, do NOT free it here. */
+static void ev_download_update(const BusEvent *ev, void *data) {
+    (void)data;
+    StateStore::instance().set_downloads(DownloadQueue::instance().active());
+    if (ev->data && ev->data_size > 0)
+        StateStore::instance().set_app_notice((const char*)ev->data);
+}
+
 static void ev_volume_changed(const BusEvent *ev, void *data) {
     (void)data;
     if (ev->data_size == sizeof(int)) {
@@ -1627,6 +1652,8 @@ int run_app(int argc, char **argv) {
     g_thread_pool = threadpool_create(8);
     if (!g_thread_pool) LOG_WARN("Failed to create thread pool, cover art will not load");
 
+    DownloadQueue::instance().start();
+
     /* Default templates for themes/keybindings/layouts are created by
        ensure_default_data_tree() above — nothing else to do here. */
 
@@ -1641,6 +1668,7 @@ int run_app(int argc, char **argv) {
     event_bus_subscribe(EV_LOCAL_REFRESH,     [](const BusEvent *, void *) {
         refresh_local_groups();
     }, NULL);
+    event_bus_subscribe(EV_DOWNLOAD_UPDATE,   ev_download_update, NULL);
         event_bus_subscribe(EV_PLAYLIST_LOADED, ev_playlist_loaded, NULL);
     event_bus_subscribe(EV_MENU_LOADED, ev_menu_loaded, NULL);
     event_bus_subscribe(EV_PLAYLIST_LIST_LOADED, ev_playlist_list_loaded, NULL);
@@ -1759,7 +1787,7 @@ int run_app(int argc, char **argv) {
                The action sheet (Ctrl+X) also gets fast frames so its
                status query / state flips feel responsive. */
 #ifdef _WIN32
-            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open || st.action_sheet_quality_probing)
+            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open || st.action_sheet_quality_probing || !st.downloads.empty())
                       ? 33 : 200;
 #else
             /* marquee-scrolling selected row needs smooth frames even
@@ -1768,7 +1796,7 @@ int run_app(int argc, char **argv) {
             bool marquee_row = (st.active_panel == 1 &&
                                 !st.playlist.empty() &&
                                 !st.top_search_active);
-            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open || st.action_sheet_quality_probing || marquee_row)
+            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open || st.action_sheet_quality_probing || !st.downloads.empty() || marquee_row)
                       ? 16 : 200;
 #endif
             std::this_thread::sleep_for(std::chrono::milliseconds(ms));
@@ -2181,35 +2209,11 @@ int run_app(int argc, char **argv) {
                         }
                         std::string lvl = kLevels[qi];
                         std::string title = qitem.title ? qitem.title : qid;
+                        std::string artist = qitem.artist ? qitem.artist : "";
                         state.set_action_sheet(false, 0);
-                        std::thread([qid, title, lvl]() {
-                            char used_lvl[32] = {0};
-                            char *path = netease_download_song(qid.c_str(), lvl.c_str(),
-                                                               title.c_str(), used_lvl,
-                                                               sizeof(used_lvl));
-                            if (path) {
-                                LOG_INFO("DOWNLOAD ok: %s (%s)", path,
-                                         used_lvl[0] ? used_lvl : lvl.c_str());
-                                /* register the download dir into the local
-                                   source so the file shows up in 本地 */
-                                const char *root = netune_data_root();
-                                char dl_dir[1024];
-                                snprintf(dl_dir, sizeof(dl_dir), "%s" PATH_SEP "downloads", root);
-                                local_register_download_dir(dl_dir);
-                                /* refresh the local-music groups on the main
-                                   thread so the new file shows up right away */
-                                event_bus_publish(EV_LOCAL_REFRESH, NULL, 0);
-                                std::string msg = "\u5DF2\u4E0B\u8F7D: " + title;  /* 已下载: */
-                                if (used_lvl[0])
-                                    msg += " (" + std::string(used_lvl) + ")";
-                                StateStore::instance().set_app_notice(msg);
-                                free(path);
-                            } else {
-                                LOG_WARN("DOWNLOAD failed: %s", qid.c_str());
-                                StateStore::instance().set_app_notice(
-                                    "\u4E0B\u8F7D\u5931\u8D25: " + title);  /* 下载失败: */
-                            }
-                        }).detach();
+                        /* hand off to the serial download queue (worker thread
+                           runs the transfer; progress is published to the UI) */
+                        DownloadQueue::instance().enqueue(qid, title, artist, lvl);
                         return true;
                     }
                     const auto &item = as.playlist[as.selected_index];
@@ -3437,6 +3441,7 @@ int run_app(int argc, char **argv) {
     music_source_manager_shutdown();
     netease_search_cache_free();
     if (g_thread_pool) threadpool_destroy(g_thread_pool);
+    DownloadQueue::instance().stop();
     event_bus_shutdown();
     config_free(cfg);
     log_shutdown();

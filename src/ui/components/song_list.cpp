@@ -316,6 +316,50 @@ Element render_song_list(const AppState &s) {
             return list;
         }
 
+        /* ── pinned live-download rows (only inside the app's own
+           downloads group): currently-downloading + queued songs with
+           a spinner + percentage suffix and a progress bar. */
+        std::vector<Element> dl_els;
+        bool in_downloads = (s.music_mode == MusicMode::Local &&
+                             s.group_index >= 0 &&
+                             s.group_index < (int)s.groups.size() &&
+                             s.groups[s.group_index].is_downloads);
+        if (in_downloads) {
+            for (const auto &it : s.downloads) {
+                std::string label = it.title;
+                if (!it.artist.empty())
+                    label += std::string(" \u2014 ") + it.artist;
+                bool dling = (it.status == DlStatus::Downloading);
+                std::string pct;
+                if (dling) {
+                    int p = it.total > 0 ? (int)(it.done * 100 / it.total) : 0;
+                    if (p > 100) p = 100;
+                    char b[16];
+                    snprintf(b, sizeof b, "%d%%", p);
+                    pct = b;
+                }
+                Element head = hbox({
+                    text("  "),
+                    theme_fg(text(label)),
+                    filler(),
+                    /* suffix: spinner before percentage (both right-aligned) */
+                    theme_fg(text(" " + spinner_glyph())),
+                    dling ? theme_fg(text(" " + pct))
+                          : theme_fg(text(" \u6392\u961F")),  /* 排队 */
+                });
+                if (!dling) head = head | dim;
+                dl_els.push_back(head);
+                if (dling) {
+                    float g = it.total > 0
+                              ? (float)((double)it.done / it.total) : 0.0f;
+                    if (g > 1.0f) g = 1.0f;
+                    dl_els.push_back(hbox({text("   "),
+                                           gauge(g) | theme_accent | theme_progress_track,
+                                           text("   ")}));
+                }
+            }
+        }
+
         /* unfiltered list: manual viewport so mouse clicks can map to
            rows. Clamp the offset to keep the selection visible, then
            slice — content never exceeds the panel, so the frame
@@ -336,8 +380,10 @@ Element render_song_list(const AppState &s) {
             vis.push_back(els[i]);
         auto list = theme_border(theme_bg(vbox(std::move(vis)) | vscroll_indicator | yframe | flex | border));
         if (s.loading) {
-            return dbox({list, render_spinner(s) | center});
+            return dbox({vbox(std::move(dl_els)), list, render_spinner(s) | center});
         }
+        if (!dl_els.empty())
+            return vbox({vbox(std::move(dl_els)), list});
         return list;
     }
 

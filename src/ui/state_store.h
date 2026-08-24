@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -47,6 +48,24 @@ enum class LoopMode { None = 0, Track = 1, Playlist = 2, Shuffle = 3 };
 struct SongGroup {
     std::string name;
     std::vector<SongInfo> songs;
+    bool is_downloads = false;  /* the app's own downloads folder group */
+};
+
+/* ── Download task (shared with the UI) ──────────────
+   The DownloadQueue backend owns the authoritative deque under a mutex;
+   `AppState::downloads` is a main-thread mirror (synced via
+   EV_DOWNLOAD_UPDATE) containing only active items, so the UI never
+   reads across threads into the queue. */
+enum class DlStatus { Queued, Downloading, Done, Failed };
+
+struct DlItem {
+    std::string id;      /* netease song id (identity / download-picker gate) */
+    std::string title;
+    std::string artist;
+    std::string level;   /* requested quality level (standard…jymaster) */
+    DlStatus   status = DlStatus::Queued;
+    uint64_t   done   = 0;
+    uint64_t   total  = 0;   /* 0 until Content-Length is known */
 };
 
 /* ── Full application state ────────────────────────── */
@@ -136,6 +155,10 @@ struct AppState {
     std::vector<int> action_sheet_quality_br;
     int  action_sheet_quality_count = 8;
     bool action_sheet_quality_probing = false;
+
+    /* active download tasks as visible to the UI (mirror, main-thread only).
+       Empty when nothing is queued/downloading. */
+    std::vector<DlItem> downloads;
 
     /* current playlist context (for "remove from this playlist") */
     std::string current_playlist_id;
@@ -270,6 +293,9 @@ public:
                                      const std::vector<int> &br);
     void set_action_sheet_quality_probing(bool p);
     void set_current_playlist_id(const std::string &id);
+
+    /* download tasks (mirror updated on main thread from EV_DOWNLOAD_UPDATE) */
+    void set_downloads(const std::vector<DlItem> &items);
     void set_detail_playlist_mine(bool v);
     void set_song_detail(const std::vector<std::string> &lines);
 

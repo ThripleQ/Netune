@@ -312,6 +312,7 @@ set(UI_SOURCES
   src/ui/keybindings.cpp
   src/ui/theme.cpp
   src/ui/layout_engine.cpp
+  src/ui/download_queue.cpp
   src/ui/components/theme_util.cpp
   src/ui/components/top_bar.cpp
   src/ui/components/group_list.cpp
@@ -576,6 +577,18 @@ endif()
 
 add_custom_target(netease-cli-build ALL DEPENDS "${NETEASE_CLI_OUT}")
 add_dependencies(netune netease-cli-build)
+
+# Download-progress requires libcurl in the main binary (the netease C
+# backend already brings it in via find_package(CURL)). Link it only when
+# the target exists — the Go/prebuilt backend path won't have it, and the
+# download code then falls back to shelling out to `curl` without progress.
+if(TARGET CURL::libcurl)
+  target_link_libraries(netune PRIVATE CURL::libcurl)
+  target_compile_definitions(netune PRIVATE HAVE_LIBCURL)
+  message(STATUS "libcurl: linked into netune (download progress enabled)")
+else()
+  message(STATUS "libcurl: unavailable — download progress disabled")
+endif()
 
 # Install netune and netease-cli side by side so cli_path() finds the
 # helper next to the main executable. OPTIONAL: if the helper failed to

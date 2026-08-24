@@ -384,6 +384,10 @@ void StateStore::set_current_playlist_id(const std::string &id) {
     state_.current_playlist_id = id;
 }
 
+void StateStore::set_downloads(const std::vector<DlItem> &items) {
+    state_.downloads = items;
+}
+
 void StateStore::set_detail_playlist_mine(bool v) {
     state_.detail_playlist_mine = v;
 }
@@ -460,6 +464,7 @@ void StateStore::set_groups(const std::vector<SongGroup> &grps) {
     for (auto &g : grps) {
         SongGroup copy;
         copy.name = g.name;
+        copy.is_downloads = g.is_downloads;
         for (auto &s : g.songs) {
             SongInfo si = {};
             song_info_copy(&si, &s);

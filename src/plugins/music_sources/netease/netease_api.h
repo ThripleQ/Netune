@@ -73,14 +73,22 @@ int  netease_play_url(const char *song_id, char *url, size_t url_sz);
 int  netease_song_url(const char *song_id, const char *level,
                       char *url, size_t url_sz);
 
+/* Download progress callback (invoked from the libcurl worker thread).
+   `done`/`total` are bytes; total is 0 until Content-Length is known. */
+typedef void (*netease_download_progress)(void *ud, long long done,
+                                          long long total);
+
 /* Download a song (resolved at `level`, falling back down the quality
    ladder when unavailable) into the app download dir
-   (netune_data_root()/downloads). Returns a malloc'd full path to the
-   saved file, or NULL on failure. Caller frees. `used_level` (optional)
-   receives the quality actually used. */
+   (netune_data_root()/downloads). File is named "<title> <artist>.<ext>"
+   (artist omitted when empty). Returns a malloc'd full path to the saved
+   file, or NULL on failure. Caller frees. `used_level` (optional) receives
+   the quality actually used. `prog` (optional) is called with transfer
+   progress from the worker thread; `ud` is passed through. */
 char* netease_download_song(const char *song_id, const char *level,
-                            const char *title, char *used_level,
-                            size_t used_sz);
+                            const char *title, const char *artist,
+                            char *used_level, size_t used_sz,
+                            netease_download_progress prog, void *ud);
 
 /* Single-level entitlement probe (check-quality): *granted=1 only when the
    play endpoint would serve `level` (standard/higher/exhigh/lossless/hires)

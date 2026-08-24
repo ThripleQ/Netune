@@ -5,6 +5,13 @@
 using namespace ftxui;
 using namespace std::chrono;
 
+std::string spinner_glyph(void) {
+    auto now_ms = duration_cast<milliseconds>(
+        steady_clock::now().time_since_epoch()).count();
+    static const char *frames[] = {"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"};
+    return frames[(int)((now_ms / 16) % 10)];
+}
+
 Element render_spinner(const AppState &s) {
     static auto start = steady_clock::now();
     static bool was_loading = false;

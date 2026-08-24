@@ -147,6 +147,7 @@ static char *shell_escape(const char *s) {
 #endif
 }
 
+#ifndef HAVE_LIBCURL
 #ifndef _WIN32
 #define shell_escape_cmd shell_escape
 #else
@@ -175,6 +176,7 @@ static char *shell_escape_cmd(const char *s) {
     out[j] = '\0';
     return out;
 }
+#endif
 #endif
 
 /* ── CLI runner ─────────────────────────────────────
@@ -1335,9 +1337,25 @@ int netease_album_songs(const char *album_id, SongInfo **out, int *count) {
     return r;
 }
 
+#ifdef HAVE_LIBCURL
+#include <curl/curl.h>
+/* Progress relay: curl hands us a single pointer (clientp) per transfer,
+   which carries the netease callback + userdata we were given. */
+typedef struct { netease_download_progress prog; void *ud; } DlProgRelay;
+static int dl_xferinfo_cb(void *clientp, curl_off_t dltotal, curl_off_t dlnow,
+                          curl_off_t ultotal, curl_off_t ulnow) {
+    (void)ultotal; (void)ulnow;
+    DlProgRelay *r = (DlProgRelay *)clientp;
+    if (r && r->prog)
+        r->prog(r->ud, (long long)dlnow, (long long)dltotal);
+    return 0;
+}
+#endif
+
 char* netease_download_song(const char *id, const char *level,
-                            const char *title, char *used_level,
-                            size_t used_sz) {
+                            const char *title, const char *artist,
+                            char *used_level, size_t used_sz,
+                            netease_download_progress prog, void *ud) {
     if (!id) return NULL;
 
     /* Official download endpoint applies to the high tiers; the lower
@@ -1394,7 +1412,19 @@ char* netease_download_song(const char *id, const char *level,
         else if (strncasecmp(p, "wav", 3) == 0)  ext = "wav";
         else                                     ext = "mp3";
     }
-    const char *base = (title && title[0]) ? title : id;
+    /* Standard file name: "<title> <artist>". Artist appended with a space;
+       omitted when empty; the song id is the last-resort base. */
+    char base[1400];
+    base[0] = '\0';
+    if (title && title[0])
+        snprintf(base, sizeof(base), "%s", title);
+    else
+        snprintf(base, sizeof(base), "%s", id ? id : "song");
+    if (artist && artist[0]) {
+        size_t bl = strlen(base);
+        if (bl + 1 < sizeof(base))
+            snprintf(base + bl, sizeof(base) - bl, " %s", artist);
+    }
     char sane[256];
     size_t k = 0;
     for (size_t i = 0; base[i] && k < sizeof(sane) - 8; i++) {
@@ -1428,6 +1458,34 @@ char* netease_download_song(const char *id, const char *level,
        curl write below would fail). */
     netune_ensure_dir(path);
 
+#ifdef HAVE_LIBCURL
+    /* Progress hook relay: curl's clientp carries the callback + userdata,
+       so the download worker can report byte counts live. */
+    remove_utf8(path);
+    CURL *h = curl_easy_init();
+    if (!h) return NULL;
+    FILE *fp = fopen_utf8(path, "wb");
+    if (fp) {
+        DlProgRelay relay = { prog, ud };
+        curl_easy_setopt(h, CURLOPT_URL, dl_url);
+        curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_setopt(h, CURLOPT_MAXREDIRS, 8L);
+        curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 15L);
+        curl_easy_setopt(h, CURLOPT_TIMEOUT, 120L);
+        curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
+        curl_easy_setopt(h, CURLOPT_WRITEDATA, fp);
+        curl_easy_setopt(h, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(h, CURLOPT_XFERINFODATA, &relay);
+        curl_easy_setopt(h, CURLOPT_XFERINFOFUNCTION, dl_xferinfo_cb);
+        CURLcode rc = curl_easy_perform(h);
+        curl_easy_cleanup(h);
+        fclose(fp);
+        if (rc != CURLE_OK) { remove_utf8(path); return NULL; }
+        return strdup(path);
+    }
+    curl_easy_cleanup(h);
+    return NULL;
+#else
     remove_utf8(path);
     char *esc_url = shell_escape_cmd(dl_url);
     char *esc_path = shell_escape_cmd(path);
@@ -1438,6 +1496,7 @@ char* netease_download_song(const char *id, const char *level,
     int rc = system(cmd);
     if (rc != 0) { remove_utf8(path); return NULL; }
     return strdup(path);
+#endif
 }
 
 /* ── VIP status ─────────────────────────────────────── */

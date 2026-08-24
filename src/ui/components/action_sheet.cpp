@@ -1,5 +1,6 @@
 #include "ui/components/action_sheet.h"
 #include "ui/components/theme_util.h"
+#include "ui/components/spinner.h"
 #include "ui/theme.h"
 #include <string>
 #include <vector>
@@ -92,7 +93,15 @@ Element render_action_sheet(const AppState &s) {
            per-tier source table: -2 = no source (hidden), -1 = probing,
            1 = exists (shown with bitrate), 0 = exists but denied. While
            the source probe runs the list is replaced by a spinner. */
-        if (s.action_sheet_quality_probing) {
+        bool song_downloading = false;
+        for (const auto &d : s.downloads)
+            if (d.id == s.action_sheet_quality_id) { song_downloading = true; break; }
+        if (song_downloading) {
+            /* the song is already in the download queue — don't offer to
+               re-download it, just show a loading animation */
+            body.push_back(hbox({text(" " + spinner_glyph() + " "),
+                                 text("\u6B63\u5728\u4E0B\u8F7D...") | dim}));  /* 正在下载... */
+        } else if (s.action_sheet_quality_probing) {
             /* time-based spinner frames (independent of a stale start) */
             auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count();
