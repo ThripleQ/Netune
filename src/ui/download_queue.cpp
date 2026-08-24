@@ -167,5 +167,15 @@ void DownloadQueue::worker_loop() {
             event_bus_publish(EV_DOWNLOAD_UPDATE, (void*)msg.c_str(),
                               msg.size() + 1);
         }
+
+        /* Re-acquire the lock before the next iteration. The loop body
+           unlocks at line ~145 to run the download, so at this point lk
+           does NOT own the mutex. If we fall through to find_if()/wait()
+           without re-locking, the next cv_.wait(lk) (or a repeated
+           lk.unlock()) is called on an unlocked unique_lock and libstdc++
+           throws std::system_error("Operation not permitted") — uncaught,
+           terminating the worker (observed as SIGABRT after a download
+           finished). */
+        lk.lock();
     }
 }
