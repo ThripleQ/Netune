@@ -5,7 +5,7 @@
 
 - 日期：2026-08-24
 - 分支：`beta`（本地与远端已同步）
-- 交接范围：网易云音频缓存功能（已完成、已构建、已推送）
+- 交接范围：网易云音频缓存（已完成）+ UI 状态收敛 / 搜索缓存线程修复 / Netease 特化接口（已完成，CI 双平台通过）
 
 ---
 
@@ -114,6 +114,8 @@ b29ca14 feat(cache): track partial vs complete cache entries
 2. 改缓存行为时，保持 2.4 的不变量，特别是"播放线程唯一写者"和"probe 后才开录"。
 3. 测试用 `netune --manage` 看缓存状态，日志里 `Continuing partial cache` / `Streaming netease` 可区分命中与拉流。
 4. 若有重大行为变更，更新本文件 2.2 的决策表和 2.5 的提交历史。
+5. 改网易云相关功能时走 `netease_ext()` 接口（5.2/5.3），不要直接 include `netease_api.h`。
+6. 本地构建被 5.5 的 MSBuild 故障阻塞时，用 CI（push beta 触发）验证，别改代码绕。
 
 ---
 
@@ -156,3 +158,47 @@ b29ca14 feat(cache): track partial vs complete cache entries
 - `mpris.cpp` 独立线程 + 播放状态镜像，与 StateStore 双份，靠手工同步。
 - `Renderer` 里做了登录轮询/后台线程等业务逻辑（副作用），应只读 state。
 - `do_netease_search` 的 worker 是 `.detach()`，shutdown 时不可等待（事件会入队但无人 poll，进程退出由 OS 回收）。
+
+---
+
+## 5. Netease 特化接口（2026-08-24 补充）
+
+### 5.1 动机
+
+通用插件接口 `MusicSource`（`core/music_source.h`）只覆盖"所有源共有"的能力（search/detail/play_url/lyric/cover），覆盖不了网易云的登录/歌单增删改/下载/已购/音质/VIP。过去 `app.cpp` 直接 include `netease_api.h`（实现）硬编码 20+ 处 `netease_*()` 调用——UI 层触达音乐源实现，这是"UI 难改"的耦合根源之一。
+
+### 5.2 方案：通用接口 + 特化扩展（独立模块）
+
+特化接口**不挂进** `MusicSource`（避免接口膨胀/泄漏），作为独立模块：
+
+```
+src/plugins/music_sources/netease/netease_ext.h  ← 自包含：NeteaseExt 函数指针表 + 类型(NSSong/NSSearchResult/SongDetail/NQ_*) + netease_download_progress
+src/plugins/music_sources/netease/netease_ext.c  ← 填充表 + netease_ext() 单例（编译期 static const）
+```
+
+- `netease_api.h` 删掉类型/宏定义，改为 include `netease_ext.h`（**实现依赖接口**）。
+- 应用层（`app.cpp` / `download_queue.cpp` / `state_store.cpp`）只 include `netease_ext.h`，不再 include `netease_api.h`。
+- `app.cpp` 用文件级 `static const NeteaseExt *g_ne = netease_ext();`（**声明即初始化**，无 NULL 窗口）。
+
+**调用方式**：`g_ne->search(...)` / `netease_ext()->download_song(...)`。
+
+### 5.3 关键约定（改代码前必读）
+
+- `g_ne` 是主线程初始化的只读指针；worker 线程（`std::thread`）里读它安全（thread 构造有 happens-before），**但不要在 worker 里写**。
+- `netease_quality.h`（`nq_*` 独立模块）**不在** ext 表里，保持现状。
+- `download_url` **不在** ext 表里——它是 `netease_download_song` 的内部后端（lossless/hires/jymaster 档走官方下载端点，`netease_api.c:1383`），UI 层从不直接调。别再把它加回 ext。
+- 扩展新能力时优先加进 `NeteaseExt` 表；只有纯内部 helper 才留在 `netease_api.h` 不外露。
+- `g_ne` 的使用点全部在主线程事件回调 / worker（只读），已审查无数据竞争。
+
+### 5.4 验证
+
+- **CI 双平台通过**（Build #514，commit `72c2906`）：linux（ubuntu + 系统 FFmpeg）1m51s、windows（vcpkg + MSBuild）3m36s，Configure/Build/Upload 全成功。
+- 特化接口主体构建在本地通过过（`netease_ext.c` 链接成功）；最后的 `g_ne` 声明初始化 + 移除 `download_url` 两处微调未能本地构建（见 5.5）。
+
+### 5.5 本地构建环境故障（重要，接手者须知）
+
+**本地 Windows/MSVC 构建当前不可用**：`MSBuild.exe` 连 VCTargetsPath 探测都 `Access violation` 崩溃（CMake 配置阶段，尚未编译源码；全新 build 目录、干净 PATH、`MSBUILDDISABLENODEREUSE=1`、重启电脑均复现）。CI 的 windows-latest 用相同 MSBuild 路径却能构建成功 → 结论：**本机 VS 安装状态损坏，与代码无关**。
+
+- 修复计划：VS Installer 修复（`vs_installer.exe modify --installPath "C:\Program Files\Microsoft Visual Studio\18\Community" --passive --norestart`），无效再彻底重装（`uninstall` + `install --add Microsoft.VisualStudio.Workload.NativeDesktop`）。
+- 修复后验证：`netune` 构建通过 + `netune_test/` 回归（test_partial / test_stream / test_cache）。
+- 注意：排查中删除了 `build/_deps/ftxui-build` 与 `ftxui-subbuild`，重建时 FTXUI 会重新构建（正常，耗时略增）。
