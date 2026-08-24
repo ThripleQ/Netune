@@ -114,3 +114,45 @@ b29ca14 feat(cache): track partial vs complete cache entries
 2. 改缓存行为时，保持 2.4 的不变量，特别是"播放线程唯一写者"和"probe 后才开录"。
 3. 测试用 `netune --manage` 看缓存状态，日志里 `Continuing partial cache` / `Streaming netease` 可区分命中与拉流。
 4. 若有重大行为变更，更新本文件 2.2 的决策表和 2.5 的提交历史。
+
+---
+
+## 4. UI 层状态与并发（2026-08-24 补充）
+
+### 4.1 状态收敛：所有 UI 状态进 StateStore
+
+`StateStore`（`src/ui/state_store.h`）是 **UI 唯一真相源**。曾经散落在 `app.cpp` 文件级全局的 UI 状态已全部收编进 `AppState`：
+
+| 原全局变量 | 现 AppState 字段 |
+|---|---|
+| `g_lyric_pending_id` | `lyric_pending_id`（异步歌词拉取去重标志） |
+| `g_seek_accum` / `g_seek_target` / `g_last_seek_tp` | `seek_accum` / `seek_target` / `seek_last_ms`（150ms 防抖用 ms 整数） |
+| `g_resize_w` / `g_resize_h` | `last_resize_w` / `last_resize_h`（SIGWINCH vs Ctrl+/ 判别） |
+| `g_top_search_pushed` | `top_search_pushed`（搜索框 nav 入栈标志） |
+
+改 UI 时**不要新建文件级全局可变状态**——放进 `AppState` + 提供 setter，事件回调只做"搬运"。
+
+### 4.2 仍留全局的（有意为之）
+
+- `g_login_*`（unikey / qr 位图 / ready / stamp）：**跨线程**（QR 生成 worker 写 + `volatile` 同步，主线程读）。要动必须做独立 LoginFlow 带自己的同步，不能直接塞 StateStore。
+- `g_ns_cache`：网易云搜索结果缓存。**线程模型已修复**（见 4.3），保留为独立数据缓存合理。
+- `g_running` / `g_thread_pool` / `g_keybindings`：基础设施，非 UI 状态。
+
+### 4.3 搜索缓存线程模型（重要）
+
+`g_ns_cache`（`app.cpp` 内 `static std::map<std::string, std::vector<SongInfo>>`，LRU cap 32）：
+- **只有主线程访问**：搜索 worker（`std::thread(...).detach()`）**不碰缓存**——它只把结果打包成 `SearchLoadResult` 发 `EV_SEARCH_LOADED` 事件；主线程回调 `ev_search_loaded` 写缓存 + `set_playlist`。
+- 这是修复过的设计（原来是 worker 无锁写缓存 + 主线程读，数据竞争）。**别改回**在 worker 里写缓存的写法；若要动缓存，保持"单线程访问"或加锁。
+- 缓存命中路径：`do_netease_search` 开头查缓存 / `netease_search_apply_cache`。
+
+### 4.4 事件总线线程约定
+
+- `event_bus_publish` **只入队**（浅拷贝 payload，指针指向的数据跨线程传递、主线程释放），回调在 `event_bus_poll`（主线程 Renderer 内）执行。
+- 所以"worker 线程"只负责：拉数据 → 打包 payload → `publish`；**所有状态写入都在主线程回调里做**。跨线程共享数据（如歌词 `Lyrics*`、搜索结果数组）的所有权协议：worker 分配 → 主线程回调释放。
+
+### 4.5 遗留问题（已知，未处理）
+
+- `app.cpp` ~3500 行上帝文件：承载全部业务/渲染/输入/事件回调。后续按领域拆控制器（Login/Search/Playlist/Playback/Download）。
+- `mpris.cpp` 独立线程 + 播放状态镜像，与 StateStore 双份，靠手工同步。
+- `Renderer` 里做了登录轮询/后台线程等业务逻辑（副作用），应只读 state。
+- `do_netease_search` 的 worker 是 `.detach()`，shutdown 时不可等待（事件会入队但无人 poll，进程退出由 OS 回收）。

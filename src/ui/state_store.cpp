@@ -72,6 +72,18 @@ void StateStore::set_seek_target_progress(float p) {
     state_.seek_target_progress = p;
 }
 
+void StateStore::set_seek_accum(int v) {
+    state_.seek_accum = v;
+}
+
+void StateStore::set_seek_target(int v) {
+    state_.seek_target = v;
+}
+
+void StateStore::set_seek_last_ms(int64_t ms) {
+    state_.seek_last_ms = ms;
+}
+
 void StateStore::set_volume(int vol) {
     if (vol < 0) vol = 0;
     if (vol > 100) vol = 100;
@@ -448,6 +460,10 @@ void StateStore::set_top_right_query(const std::string &query) {
     state_.top_right_query = query;
 }
 
+void StateStore::set_top_search_pushed(bool v) {
+    state_.top_search_pushed = v;
+}
+
 void StateStore::set_selected_index(int idx) {
     state_.selected_index = idx;
     validate_selection();
@@ -605,6 +621,11 @@ void StateStore::set_screen_height(int rows) {
     state_.screen_height = rows;
 }
 
+void StateStore::set_last_resize(int w, int h) {
+    state_.last_resize_w = w;
+    state_.last_resize_h = h;
+}
+
 void StateStore::set_song_list_offset(int rows) {
     if (rows < 0) rows = 0;
     state_.song_list_offset = rows;
@@ -637,4 +658,8 @@ void StateStore::set_cover(const CoverData &cd) {
 
 void StateStore::set_cover_loading(bool v) {
     state_.cover_loading = v;
+}
+
+void StateStore::set_lyric_pending_id(const std::string &id) {
+    state_.lyric_pending_id = id;
 }

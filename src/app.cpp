@@ -209,16 +209,10 @@ static std::string event_to_key_name(const ftxui::Event &event) {
     return "";
 }
 
-/* ── Seek accumulation ────────────────────────────── */
-/* Press: accumulate. Release (>150ms idle): fire once. */
-static int g_seek_accum = 0;
-/* Baseline terminal size for disambiguating resize signals
-   (ftxui routes SIGWINCH as Event::Special({0}), the same bytes as a
-   real Ctrl+/ on some terminals). Seeded at startup so the FIRST
-   resize after launch is also recognized as a resize. */
-static int g_resize_w = -1, g_resize_h = -1;
-static int g_seek_target = -1;   /* seek destination (sec), -1 = none; cleared when progress reaches target */
-static std::chrono::steady_clock::time_point g_last_seek_tp;
+/* Seek accumulation, resize baseline, seek target/last-event time and
+   the top-search nav flag all live in StateStore now (see AppState:
+   seek_accum / seek_target / seek_last_ms / last_resize_* /
+   top_search_pushed) — they were file-level globals before. */
 
 static void on_signal(int sig) { (void)sig; g_running = false; }
 
@@ -353,10 +347,6 @@ static void ev_search_done(const BusEvent *ev, void *data) {
 #define NS_CACHE_MAX 32
 static std::map<std::string, std::vector<SongInfo>> g_ns_cache;
 
-/* True while the right search box has pushed a nav snapshot for its
-   results view; Esc (or a query edit that misses the cache) restores. */
-static bool g_top_search_pushed = false;
-
 /* Free all SongInfo strings in a cache vector (for eviction / shutdown) */
 static void ns_cache_vec_free(std::vector<SongInfo> &v) {
     for (auto &s : v) song_info_free(&s);
@@ -364,6 +354,15 @@ static void ns_cache_vec_free(std::vector<SongInfo> &v) {
 }
 
 struct LoadedSongs { SongInfo *songs; int count; };
+
+/* Payload for EV_SEARCH_LOADED: search results posted back to the main
+   thread. query + songs are heap-allocated; the main-thread callback
+   takes ownership (writes g_ns_cache there — never from the worker). */
+struct SearchLoadResult {
+    char      *query;
+    SongInfo  *songs;
+    int        count;
+};
 
 static void do_netease_search(const char *query, bool push_nav) {
     if (!query || !query[0]) return;
@@ -415,28 +414,23 @@ static void do_netease_search(const char *query, bool push_nav) {
             free(pls);
         }
 
-        /* Store in cache (transfer ownership), evict oldest if full.
-           The evicted vector's SongInfo strings must be freed. */
-        if (g_ns_cache.size() >= NS_CACHE_MAX) {
-            auto oldest = g_ns_cache.begin();
-            ns_cache_vec_free(oldest->second);
-            g_ns_cache.erase(oldest);
-        }
-        g_ns_cache[q] = std::move(vec);
-
-        /* Deep-copy from cache to the event payload — the cache retains
-           ownership of its strings. */
-        auto &cached = g_ns_cache[q];
-        int sc = (int)cached.size();
-        LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
-        SongInfo *songs = (SongInfo*)calloc((size_t)sc, sizeof(SongInfo));
-        for (int i = 0; i < sc; i++) {
-            song_info_copy(&songs[i], &cached[i]);
-        }
-        ld->songs = songs; ld->count = sc;
-        if (event_bus_publish(EV_PLAYLIST_LOADED, ld, sizeof(*ld)) != 0) {
+        /* Post the results to the main thread; g_ns_cache is written there
+           (never touched from this worker), so the map needs no locking. */
+        int sc = (int)vec.size();
+        SearchLoadResult *res = (SearchLoadResult*)malloc(sizeof(SearchLoadResult));
+        SongInfo *songs = (SongInfo*)calloc((size_t)(sc > 0 ? sc : 1),
+                                            sizeof(SongInfo));
+        for (int i = 0; i < sc; i++)
+            song_info_copy(&songs[i], &vec[i]);
+        res->query = strdup(q.c_str());
+        res->songs = songs;
+        res->count = sc;
+        for (auto &s : vec) song_info_free(&s);   /* payload owns the copies */
+        if (event_bus_publish(EV_SEARCH_LOADED, res, sizeof(*res)) != 0) {
             for (int i = 0; i < sc; i++) song_info_free(&songs[i]);
-            free(songs); free(ld);
+            free(songs);
+            free(res->query);
+            free(res);
             return;
         }
 
@@ -450,14 +444,15 @@ static void do_netease_search(const char *query, bool push_nav) {
    Pushes the nav stack once per search session so Esc can restore
    the pre-search view. Returns true when applied. */
 static bool netease_search_apply_cache(const std::string &q) {
+    auto &store = StateStore::instance();
     auto it = g_ns_cache.find(q);
     if (it == g_ns_cache.end()) return false;
-    if (!g_top_search_pushed) {
-        StateStore::instance().nav_push_restore_playlist();
-        g_top_search_pushed = true;
+    if (!store.state().top_search_pushed) {
+        store.nav_push_restore_playlist();
+        store.set_top_search_pushed(true);
     }
-    StateStore::instance().set_playlist(it->second, 0);
-    StateStore::instance().set_active_panel(1);
+    store.set_playlist(it->second, 0);
+    store.set_active_panel(1);
     return true;
 }
 
@@ -474,9 +469,9 @@ static void close_top_search(void) {
     if (!st.state().top_search_api) {
         st.set_top_right_query("");
     }
-    if (g_top_search_pushed) {
+    if (st.state().top_search_pushed) {
         st.nav_pop();
-        g_top_search_pushed = false;
+        st.set_top_search_pushed(false);
     }
     st.set_top_search_active(false);
 }
@@ -489,9 +484,9 @@ static void clear_search_state(void) {
     st.set_top_right_query("");
     st.set_top_search_active(false);
     st.set_top_search_api(false);
-    if (g_top_search_pushed) {
+    if (st.state().top_search_pushed) {
         st.nav_pop();
-        g_top_search_pushed = false;
+        st.set_top_search_pushed(false);
     }
 }
 
@@ -499,7 +494,7 @@ static void clear_search_state(void) {
    list is empty; otherwise fall back to the pre-search view so stale
    results don't linger. */
 static void restore_search_view(const std::string &q) {
-    if (!g_top_search_pushed) return;
+    if (!StateStore::instance().state().top_search_pushed) return;
     if (!q.empty() && netease_search_apply_cache(q)) return;
     /* cache miss or cleared query — restore the pre-search view */
     NavState snap;
@@ -972,8 +967,6 @@ static void lyric_load_worker(void *arg) {
 /* In-flight marker (UI thread only): song whose lyrics are being fetched.
    Prevents duplicate spawns from EV_TRACK_CHANGED + EV_PLAYBACK_START
    firing for the same song. */
-static char *g_lyric_pending_id = NULL;
-
 static void ev_lyric_loaded(const BusEvent *ev, void *data) {
     (void)data;
     if (ev->data_size != sizeof(LyricLoadResult)) return;
@@ -983,10 +976,7 @@ static void ev_lyric_loaded(const BusEvent *ev, void *data) {
     bool match = res->song_id && cur.id &&
                  strcmp(res->song_id, cur.id) == 0;
 
-    if (g_lyric_pending_id) {
-        free(g_lyric_pending_id);
-        g_lyric_pending_id = NULL;
-    }
+    store.set_lyric_pending_id("");
 
     if (match && res->lyrics) {
         Lyrics *old = store.state().lyrics;
@@ -1039,7 +1029,8 @@ static void ev_cover_loaded(const BusEvent *ev, void *data) {
 /* ── Event bus → StateStore bridge ────────────────── */
 static void ev_progress(const BusEvent *ev, void *data) {
     (void)data;
-    if (StateStore::instance().state().playback_state == PlaybackState::Stopped)
+    auto &store = StateStore::instance();
+    if (store.state().playback_state == PlaybackState::Stopped)
         return;
     if (ev->data_size == sizeof(int[3])) {
         int *p = (int*)ev->data;
@@ -1047,19 +1038,21 @@ static void ev_progress(const BusEvent *ev, void *data) {
         int tot = (p[2] > 0 && p[1] > 0) ? p[1] / p[2] : 0;
         int cur_ms = (p[2] > 0) ? (int)((long long)p[0] * 1000LL / p[2]) : 0;
         /* Clear seek target once progress is within 1s of the target (seek executed) */
-        int seek_dist = cur_ms / 1000 - g_seek_target;
-        if (g_seek_target >= 0 && seek_dist >= -1 && seek_dist <= 1) {
-            g_seek_target = -1;
-            StateStore::instance().set_seek_target_progress(0.0f);
+        int target = store.state().seek_target;
+        int seek_dist = cur_ms / 1000 - target;
+        if (target >= 0 && seek_dist >= -1 && seek_dist <= 1) {
+            store.set_seek_target(-1);
+            store.set_seek_target_progress(0.0f);
             /* Progress caught up — fall through to update */
+            target = -1;
         }
-        if (g_seek_target < 0) {
+        if (target < 0) {
             /* No pending seek: normal progress update.
                Skip when seek is pending but playback hasn't caught up
                yet — prevents stale EV_PROGRESS_UPDATE (sent before the
                playback thread processed CMD_SEEK) from overwriting the
                already-correct progress set by consume_seek(). */
-            StateStore::instance().set_progress_ms(prog, cur_ms, tot);
+            store.set_progress_ms(prog, cur_ms, tot);
         }
     }
 }
@@ -1199,7 +1192,7 @@ static void do_seek_to(int target) {
     if (target > cur.total_time_sec) target = cur.total_time_sec;
     if (target < 0) target = 0;
     event_bus_publish(EV_BUFFERING_UPDATE, &target, sizeof(target));
-    g_seek_target = target;
+    store.set_seek_target(target);
     store.set_seek_target_progress((float)target / cur.total_time_sec);
     /* Immediately sync progress so the gauge doesn't fall back
        to the old s.progress value when seek_target_progress is
@@ -1253,6 +1246,47 @@ static void ev_mpris_command(const BusEvent *ev, void *data) {
 /* ── Volume / Mute / Playlist event handlers ──────── */
 
 /* ── Async playlist loading helper ───────────────────── */
+/* Netease search results returned to the main thread. The g_ns_cache map
+   is written HERE (main thread only) — the search worker never touches it,
+   so no locking is needed. */
+static void ev_search_loaded(const BusEvent *ev, void *data) {
+    (void)data;
+    auto *res = (SearchLoadResult*)ev->data;
+    if (!res) return;
+    /* Note: ev->data is freed by event_bus_poll, do NOT free(res) */
+    std::string q = res->query ? res->query : "";
+    free(res->query);
+    if (res->count <= 0 || !res->songs) {
+        free(res->songs);
+        StateStore::instance().set_loading(false);
+        return;
+    }
+    std::vector<SongInfo> vec;
+    vec.reserve((size_t)res->count);
+    for (int i = 0; i < res->count; i++) {
+        SongInfo copy = {};
+        song_info_copy(&copy, &res->songs[i]);
+        vec.push_back(copy);
+        song_info_free(&res->songs[i]);
+    }
+    free(res->songs);
+
+    StateStore::instance().set_playlist(vec, 0);
+    StateStore::instance().set_active_panel(1);
+    StateStore::instance().set_loading(false);
+
+    /* write the result into the search cache (LRU, cap 32) — after
+       set_playlist so vec can be moved in without an extra deep copy */
+    if (!q.empty()) {
+        if (g_ns_cache.size() >= NS_CACHE_MAX) {
+            auto oldest = g_ns_cache.begin();
+            ns_cache_vec_free(oldest->second);
+            g_ns_cache.erase(oldest);
+        }
+        g_ns_cache[q] = std::move(vec);
+    }
+}
+
 static void ev_playlist_loaded(const BusEvent *ev, void *data) {
     (void)data;
     auto *ld = (LoadedSongs*)ev->data;
@@ -1397,14 +1431,13 @@ static void load_lyrics_for_current_song(void) {
         return;
     } else if (song.source && strcmp(song.source, "netease") == 0) {
         /* Netease: fetch via netease-cli in a background thread */
-        if (g_lyric_pending_id &&
-            strcmp(g_lyric_pending_id, song.id) == 0)
+        if (!store.state().lyric_pending_id.empty() &&
+            store.state().lyric_pending_id == song.id)
             return;  /* already loading this song's lyrics */
         char *dup = strdup(song.id);
         if (!dup || !g_thread_pool) { free(dup); return; }
         threadpool_submit(g_thread_pool, lyric_load_worker, dup);
-        free(g_lyric_pending_id);
-        g_lyric_pending_id = strdup(song.id);
+        store.set_lyric_pending_id(song.id);
         /* Cover is now loaded lazily when entering lyric mode */
         return;
     }
@@ -1729,6 +1762,7 @@ int run_app(int argc, char **argv) {
     }, NULL);
     event_bus_subscribe(EV_DOWNLOAD_UPDATE,   ev_download_update, NULL);
         event_bus_subscribe(EV_PLAYLIST_LOADED, ev_playlist_loaded, NULL);
+        event_bus_subscribe(EV_SEARCH_LOADED,   ev_search_loaded,   NULL);
     event_bus_subscribe(EV_MENU_LOADED, ev_menu_loaded, NULL);
     event_bus_subscribe(EV_PLAYLIST_LIST_LOADED, ev_playlist_list_loaded, NULL);
     event_bus_subscribe(EV_PLAYBACK_ERROR,    ev_playback_error, NULL);
@@ -1867,19 +1901,21 @@ int run_app(int argc, char **argv) {
 
     auto consume_seek = [&]() {
         auto now = std::chrono::steady_clock::now();
-        if (g_seek_accum == 0) return;
-        if (now - g_last_seek_tp < std::chrono::milliseconds(150))
-            return;
+        auto now_ms = (int64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+                          now.time_since_epoch()).count();
         const AppState &st = state.state();
+        if (st.seek_accum == 0) return;
+        if (now_ms - st.seek_last_ms < 150)
+            return;
         if (st.playback_state != PlaybackState::Stopped && st.total_time_sec > 0) {
-            int target = st.current_time_sec + g_seek_accum;
+            int target = st.current_time_sec + st.seek_accum;
             if (target > st.total_time_sec) target = st.total_time_sec;
             if (target < 0) target = 0;
             /* Skip seek if already at target — prevents rapid
                seek-to-0 loops when holding past the start */
             if (target != st.current_time_sec) {
                 event_bus_publish(EV_BUFFERING_UPDATE, &target, sizeof(target));
-                g_seek_target = target;
+                state.set_seek_target(target);
                 state.set_seek_target_progress((float)target / st.total_time_sec);
                 /* Immediately sync progress so the gauge doesn't fall back
                    to the old s.progress value when seek_target_progress is
@@ -1887,7 +1923,7 @@ int run_app(int argc, char **argv) {
                 state.set_progress((double)target / st.total_time_sec, target, st.total_time_sec);
             }
         }
-        g_seek_accum = 0;
+        state.set_seek_accum(0);
         state.set_seek_indicator(0);
     };
 
@@ -2019,9 +2055,9 @@ int run_app(int argc, char **argv) {
             if (event.input().size() == 1 &&
                 (unsigned char)event.input()[0] == 0x00) {
                 auto tsz = Terminal::Size();
-                if (tsz.dimx != g_resize_w || tsz.dimy != g_resize_h) {
-                    g_resize_w = tsz.dimx;
-                    g_resize_h = tsz.dimy;
+                if (tsz.dimx != state.state().last_resize_w ||
+                    tsz.dimy != state.state().last_resize_h) {
+                    state.set_last_resize(tsz.dimx, tsz.dimy);
                     return true;  /* swallow the resize signal */
                 }
             }
@@ -2704,9 +2740,9 @@ int run_app(int argc, char **argv) {
         }
 
         /* ── Non-seek key → discard pending seek ── */
-        if (g_seek_accum != 0 && event != ftxui::Event::ArrowLeft && event != ftxui::Event::ArrowRight) {
-            g_seek_accum = 0;
-            g_seek_target = -1;
+        if (state.state().seek_accum != 0 && event != ftxui::Event::ArrowLeft && event != ftxui::Event::ArrowRight) {
+            state.set_seek_accum(0);
+            state.set_seek_target(-1);
             state.set_seek_indicator(0);
             state.set_seek_target_progress(0.0f);
         }
@@ -2794,8 +2830,8 @@ int run_app(int argc, char **argv) {
                     !cur.top_right_query.empty()) {
                     if (!netease_search_apply_cache(cur.top_right_query)) {
                         do_netease_search(cur.top_right_query.c_str(),
-                                          !g_top_search_pushed);
-                        g_top_search_pushed = true;
+                                          !state.state().top_search_pushed);
+                        state.set_top_search_pushed(true);
                     }
                     StateStore::instance().set_top_search_active(false);
                     StateStore::instance().set_active_panel(1);
@@ -3248,17 +3284,25 @@ int run_app(int argc, char **argv) {
 
         case Action::SeekForward:
             if (cur.playback_state != PlaybackState::Stopped && cur.total_time_sec > 0) {
-                g_seek_accum += config_get_int(config_global(), "playback.seek_step_sec", 5);
-                g_last_seek_tp = std::chrono::steady_clock::now();
-                state.set_seek_indicator(g_seek_accum);
+                int accum = state.state().seek_accum +
+                            config_get_int(config_global(), "playback.seek_step_sec", 5);
+                state.set_seek_accum(accum);
+                state.set_seek_last_ms((int64_t)std::chrono::duration_cast<
+                    std::chrono::milliseconds>(std::chrono::steady_clock::now()
+                    .time_since_epoch()).count());
+                state.set_seek_indicator(accum);
             }
             return true;
 
         case Action::SeekBackward:
             if (cur.playback_state != PlaybackState::Stopped && cur.total_time_sec > 0) {
-                g_seek_accum -= config_get_int(config_global(), "playback.seek_step_sec", 5);
-                g_last_seek_tp = std::chrono::steady_clock::now();
-                state.set_seek_indicator(g_seek_accum);
+                int accum = state.state().seek_accum -
+                            config_get_int(config_global(), "playback.seek_step_sec", 5);
+                state.set_seek_accum(accum);
+                state.set_seek_last_ms((int64_t)std::chrono::duration_cast<
+                    std::chrono::milliseconds>(std::chrono::steady_clock::now()
+                    .time_since_epoch()).count());
+                state.set_seek_indicator(accum);
             }
             return true;
 
@@ -3372,8 +3416,7 @@ int run_app(int argc, char **argv) {
         /* seed the resize-detection baseline with the real size so the
            FIRST resize after launch is recognized (and not mistaken for
            Ctrl+/) */
-        g_resize_w = Terminal::Size().dimx;
-        g_resize_h = Terminal::Size().dimy;
+        state.set_last_resize(Terminal::Size().dimx, Terminal::Size().dimy);
         /* Raw-image cover overlay (kitty graphics protocol):
            - upload once per cover (fingerprinted inside term_gfx)
            - re-place IMMEDIATELY whenever the geometry changed (terminal

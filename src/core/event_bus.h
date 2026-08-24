@@ -70,6 +70,12 @@ typedef enum {
        set the app notice (download result). */
     EV_DOWNLOAD_UPDATE,
 
+    /* netease search results posted back to the main thread
+       (payload: SearchLoadResult { query, songs, count }) — the main
+       thread writes g_ns_cache, so the cache is never touched from the
+       search worker thread */
+    EV_SEARCH_LOADED,
+
     EV_COUNT  /* sentinel */
 } EventType;
 

@@ -82,6 +82,15 @@ struct AppState {
     int           total_time_sec = 0;
     int           seek_indicator = 0;  /* non-zero = pending seek delta (s) */
     float         seek_target_progress = 0.0f;  /* after seek fires, gauge stays here until progress catches up */
+    /* seek input accumulation (long-press on ←/→), consumed by the render
+       loop to fire the actual seek */
+    int           seek_accum = 0;
+    /* pending seek destination (sec), -1 = none; cleared once progress
+       catches up to it (see ev_progress) */
+    int           seek_target = -1;
+    /* steady-clock ms of the last seek-key event (150ms hold-vs-repeat
+       debounce in consume_seek) */
+    int64_t       seek_last_ms = 0;
 
     /* volume */
     int  volume = 80;
@@ -180,6 +189,9 @@ struct AppState {
     bool       lyric_mode  = false;     /* full-screen lyrics view */
     CoverData  cover       = {};        /* current song cover art */
     bool       cover_loading = false;   /* async download in progress */
+    /* async lyric fetch in flight: song_id being fetched, "" = none.
+       Guards against re-fetching the same song while one is running. */
+    std::string lyric_pending_id;
 
     /* loading state (for async operations like playlist load) */
     bool loading = false;
@@ -191,6 +203,10 @@ struct AppState {
     int  screen_height = 24;
     int  song_list_offset = 0;   /* manual viewport top row (no filter) */
     int  menu_list_offset = 0;
+    /* last seen terminal size — used to disambiguate a real resize
+       (SIGWINCH arrives as the same bytes as Ctrl+/) */
+    int  last_resize_w = -1;
+    int  last_resize_h = -1;
 
     /* top search row width: full terminal width, updated per-frame */
     int  top_row_width = 80;
@@ -208,6 +224,9 @@ struct AppState {
     bool        top_search_active = false;  /* editing the top search box */
     bool        top_search_api    = false;  /* box is in "Netease API search" mode (from the 搜索网易云 menu entry) vs. plain filter */
     std::string top_right_query;            /* filters playlist / netease API */
+    /* the top search box pushed a nav snapshot (so Esc restores the
+       pre-search view); parallel to nav_stack for the search box only */
+    bool        top_search_pushed = false;
 
     /* navigation stack for Esc-back */
     std::vector<NavState> nav_stack;
@@ -231,6 +250,9 @@ public:
     void set_progress_ms(double pos, int cur_ms, int total_sec);
     void set_seek_indicator(int delta);
     void set_seek_target_progress(float p);
+    void set_seek_accum(int v);
+    void set_seek_target(int v);
+    void set_seek_last_ms(int64_t ms);
 
     /* volume */
     void set_volume(int vol);
@@ -246,6 +268,7 @@ public:
     void set_screen_height(int rows);
     void set_song_list_offset(int rows);
     void set_menu_list_offset(int rows);
+    void set_last_resize(int w, int h);
     void set_playlist(const std::vector<SongInfo> &list, int index);
     void set_selected_index(int idx);
     void set_loop_mode(LoopMode mode);
@@ -281,6 +304,7 @@ public:
     void set_lyric_mode(bool mode);
     void set_cover(const CoverData &cd);
     void set_cover_loading(bool v);
+    void set_lyric_pending_id(const std::string &id);
 
     /* help screen */
     void set_show_help(bool show);
@@ -318,6 +342,7 @@ public:
     void set_top_search_active(bool active);
     void set_top_search_api(bool api);
     void set_top_right_query(const std::string &query);
+    void set_top_search_pushed(bool v);
 
     /* nav stack push/pop for Esc-back */
     void nav_push(void);
