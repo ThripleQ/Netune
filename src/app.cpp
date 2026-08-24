@@ -549,6 +549,8 @@ static void refresh_local_groups(void) {
             const char *last_sep = (slash_back && (!slash_fwd || slash_back > slash_fwd))
                                    ? slash_back : slash_fwd;
             g.name = last_sep ? last_sep + 1 : dir.c_str();
+            if (g.is_downloads)
+                g.name = "DOWNLOADS";  /* the app's own download folder, capitalised */
             if (rc == 0 && all.songs) {
                 size_t dlen = dir.size();
                 for (int j = 0; j < all.count; j++) {
@@ -2325,9 +2327,19 @@ int run_app(int argc, char **argv) {
                         std::string title = !as.action_sheet_quality_title.empty()
                             ? as.action_sheet_quality_title : qid;
                         std::string artist = as.action_sheet_quality_artist;
-                        state.set_action_sheet(false, 0);
-                        /* hand off to the serial download queue (worker thread
-                           runs the transfer; progress is published to the UI) */
+                        /* don't enqueue a duplicate of an active task for the
+                           same song+level (the sheet stays open after Enter,
+                           so a re-Enter on a downloading tier is possible) */
+                        for (const auto &d : as.downloads) {
+                            if (d.id == qid && d.level == lvl) {
+                                StateStore::instance().set_app_notice(
+                                    "\u5DF2\u5728\u4E0B\u8F7D\u961F\u5217");  /* 已在下载队列 */
+                                return true;
+                            }
+                        }
+                        /* Keep the picker open after starting the download so
+                           the user can queue more quality levels (and watch
+                           the per-level spinner in the sheet). */
                         DownloadQueue::instance().enqueue(qid, title, artist, lvl);
                         return true;
                     }
@@ -2662,8 +2674,16 @@ int run_app(int argc, char **argv) {
             if (m.y < 1 || m.y > st.screen_height - 3)
                 return true;  /* top/status bars */
             if (m.x >= 20) {
-                /* right panel: row = y-2 (top bar 1 + border 1) + offset */
+                /* right panel: row = y-2 (top bar 1 + border 1) + offset.
+                   Inside the DOWNLOADS group the leading download-task rows
+                   are informational — subtract them so clicks map to the
+                   file rows (matches song_list's merged view). */
                 int row = (m.y - 2) + st.song_list_offset;
+                bool in_dl = (st.music_mode == MusicMode::Local &&
+                              st.group_index >= 0 &&
+                              st.group_index < (int)st.groups.size() &&
+                              st.groups[st.group_index].is_downloads);
+                if (in_dl) row -= (int)st.downloads.size();
                 StateStore::instance().set_active_panel(1);
                 if (st.top_search_active)
                     StateStore::instance().set_top_search_active(false);
@@ -3321,8 +3341,13 @@ int run_app(int argc, char **argv) {
                 bool is_pl = item.is_playlist;
                 bool in_own = is_pl ? (item.mine == 1)
                                     : cur.detail_playlist_mine;
+                /* option counts must match action_sheet.cpp's render order:
+                   playlist: subscribe + (rename/delete if mine) → 1 / 3
+                   song:     like/add/download/play-quality/detail
+                            + (remove-if-own) → 5 / 6  (was 4/5 → "歌曲详情"
+                            at idx 4 was unreachable via j/k) */
                 StateStore::instance().set_action_sheet_opt_count(
-                    is_pl ? (in_own ? 3 : 1) : (in_own ? 5 : 4));
+                    is_pl ? (in_own ? 3 : 1) : (in_own ? 6 : 5));
                 std::string id = item.id ? item.id : "";
                 if (!id.empty()) {
                     std::thread([id, is_pl]() {

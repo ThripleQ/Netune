@@ -189,6 +189,13 @@ Element render_song_list(const AppState &s) {
            response, and its query is kept for memory) */
         const std::string filter_q = s.top_search_api ? "" : s.top_right_query;
 
+        /* the app's own DOWNLOADS group: its list is a merged view of the
+           live download tasks (newest first) + the downloaded files. */
+        bool in_downloads = (s.music_mode == MusicMode::Local &&
+                             s.group_index >= 0 &&
+                             s.group_index < (int)s.groups.size() &&
+                             s.groups[s.group_index].is_downloads);
+
         /* Spinner during async load (overlaid on top of list below) */
 
         /* Empty-list hints (netease mode) */
@@ -199,7 +206,7 @@ Element render_song_list(const AppState &s) {
         }
 
                                 /* Watermark: show netease logo when empty */
-        if (!s.loading && s.playlist.empty()) {
+        if (!s.loading && s.playlist.empty() && !in_downloads) {
             /* Netease logo: half-block chars (▀▄█), 46x18 (equiv 46x36 px).
                Fits standard 80x24 terminal. Lanczos + threshold 80.
                Leading spaces are part of the shape (circle outline).
@@ -312,47 +319,42 @@ Element render_song_list(const AppState &s) {
             return list;
         }
 
-        /* ── pinned live-download rows (only inside the app's own
-           downloads group): currently-downloading + queued songs with
-           a spinner + percentage suffix and a progress bar. */
-        std::vector<Element> dl_els;
-        bool in_downloads = (s.music_mode == MusicMode::Local &&
-                             s.group_index >= 0 &&
-                             s.group_index < (int)s.groups.size() &&
-                             s.groups[s.group_index].is_downloads);
+        /* ── DOWNLOADS group: unified list (tasks + files) ──
+           The app's own DOWNLOADS group renders its own list instead of
+           the generic one: live download tasks (downloading + queued) as
+           ordinary rows on top (newest first), then the downloaded files
+           below. Task rows are informational (not selectable); selection
+           covers the file rows only, so task_n is folded into the visual
+           row offset. */
+        int task_n = 0;
         if (in_downloads) {
-            for (const auto &it : s.downloads) {
+            /* newest download task first (s.downloads is enqueue order,
+               oldest first — iterate in reverse so the newest lands on top) */
+            for (auto rit = s.downloads.rbegin(); rit != s.downloads.rend(); ++rit) {
+                const auto &it = *rit;
                 std::string label = it.title;
                 if (!it.artist.empty())
                     label += std::string(" \u2014 ") + it.artist;
                 bool dling = (it.status == DlStatus::Downloading);
-                std::string pct;
+                std::string suffix;
                 if (dling) {
                     int p = it.total > 0 ? (int)(it.done * 100 / it.total) : 0;
                     if (p > 100) p = 100;
                     char b[16];
-                    snprintf(b, sizeof b, "%d%%", p);
-                    pct = b;
+                    snprintf(b, sizeof b, " %d%%", p);
+                    suffix = std::string(" ") + spinner_glyph() + b;
+                } else {
+                    suffix = " \u6392\u961F";  /* 排队 */
                 }
-                Element head = hbox({
+                Element line = hbox({
                     text("  "),
                     theme_fg(text(label)),
                     filler(),
-                    /* suffix: spinner before percentage (both right-aligned) */
-                    theme_fg(text(" " + spinner_glyph())),
-                    dling ? theme_fg(text(" " + pct))
-                          : theme_fg(text(" \u6392\u961F")),  /* 排队 */
+                    dling ? theme_fg(text(suffix))
+                          : (theme_fg(text(suffix)) | dim),
                 });
-                if (!dling) head = head | dim;
-                dl_els.push_back(head);
-                if (dling) {
-                    float g = it.total > 0
-                              ? (float)((double)it.done / it.total) : 0.0f;
-                    if (g > 1.0f) g = 1.0f;
-                    dl_els.push_back(hbox({text("   "),
-                                           gauge(g) | theme_accent | theme_progress_track,
-                                           text("   ")}));
-                }
+                els.insert(els.begin() + task_n, line);
+                task_n++;
             }
         }
 
@@ -363,7 +365,7 @@ Element render_song_list(const AppState &s) {
         const int h = s.screen_height - 5;  /* top 1 + status 2 + borders 2 */
         int n = (int)els.size();
         int off = s.song_list_offset;
-        int sel = s.selected_index;
+        int sel = task_n + s.selected_index;  /* visual row of the selected file */
         if (sel < 0) sel = 0;
         if (sel >= off + h) off = sel - h + 1;
         if (sel < off) off = sel;
@@ -376,10 +378,8 @@ Element render_song_list(const AppState &s) {
             vis.push_back(els[i]);
         auto list = theme_border(theme_bg(vbox(std::move(vis)) | vscroll_indicator | yframe | flex | border));
         if (s.loading) {
-            return dbox({vbox(std::move(dl_els)), list, render_spinner(s) | center});
+            return dbox({list, render_spinner(s) | center});
         }
-        if (!dl_els.empty())
-            return vbox({vbox(std::move(dl_els)), list});
         return list;
     }
 

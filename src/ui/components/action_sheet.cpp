@@ -92,16 +92,12 @@ Element render_action_sheet(const AppState &s) {
         /* download quality picker: high→low. Rows follow the track's
            per-tier source table: -2 = no source (hidden), -1 = probing,
            1 = exists (shown with bitrate), 0 = exists but denied. While
-           the source probe runs the list is replaced by a spinner. */
-        bool song_downloading = false;
-        for (const auto &d : s.downloads)
-            if (d.id == s.action_sheet_quality_id) { song_downloading = true; break; }
-        if (song_downloading) {
-            /* the song is already in the download queue — don't offer to
-               re-download it, just show a loading animation */
-            body.push_back(hbox({text(" " + spinner_glyph() + " "),
-                                 text("\u6B63\u5728\u4E0B\u8F7D...") | dim}));  /* 正在下载... */
-        } else if (s.action_sheet_quality_probing) {
+           the source probe runs the list is replaced by a spinner.
+           After a level is chosen the sheet stays open (no auto-close),
+           and the live download state for each tier (from s.downloads,
+           matched by song id + level) is shown on the row's right edge:
+           spinner + % while downloading, a queued marker while waiting. */
+        if (s.action_sheet_quality_probing) {
             /* time-based spinner frames (independent of a stale start) */
             auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -120,6 +116,10 @@ Element render_action_sheet(const AppState &s) {
             "\u6781\u9AD8",                   /* 极高 exhigh */
             "\u8F83\u9AD8",                   /* 较高 higher */
             "\u6807\u51C6"                    /* 标准 standard */
+        };
+        static const char *const kLevels[] = {
+            "jymaster", "sky", "jyeffect", "hires",
+            "lossless", "exhigh", "higher", "standard"
         };
         int count = s.action_sheet_quality_count > 0
                     ? s.action_sheet_quality_count : 8;
@@ -142,11 +142,29 @@ Element render_action_sheet(const AppState &s) {
                     label += std::string(bbuf);
                 }
             }
+            /* live download state for this tier (song + level match) */
+            std::string dl_tail;
+            for (const auto &d : s.downloads) {
+                if (d.id != s.action_sheet_quality_id) continue;
+                if (d.level != kLevels[i]) continue;
+                if (d.status == DlStatus::Downloading) {
+                    int p = d.total > 0 ? (int)(d.done * 100 / d.total) : 0;
+                    if (p > 100) p = 100;
+                    char pb[16];
+                    snprintf(pb, sizeof pb, " %d%%", p);
+                    dl_tail = std::string(" ") + spinner_glyph() + pb;
+                } else if (d.status == DlStatus::Queued) {
+                    dl_tail = " \u6392\u961F";  /* 排队 */
+                }
+                break;
+            }
             auto row = text(label);
             if ((int)i == s.action_sheet_selected)
                 row = hbox({theme_selection(text(" \u203A ")), row | bold}) | focus;
             else
                 row = hbox({text("   "), row});
+            if (!dl_tail.empty())
+                row = hbox({row, filler(), theme_fg(text(dl_tail))});
             if (st == 1) {
                 /* entitled/downloadable tier: success colour (green), clearly
                    distinct from the warning (yellow) used for gated tiers */
