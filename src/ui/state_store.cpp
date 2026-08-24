@@ -376,9 +376,13 @@ void StateStore::set_action_sheet_pls(const std::vector<SongInfo> &pls) {
 
 void StateStore::set_action_sheet_quality(const std::string &song_id,
                                           const std::vector<int> &ok) {
-    /* probe results arriving for a song we're no longer looking at are
-       stale — the UI checks action_sheet_quality_id before trusting them. */
-    if (!song_id.empty() && state_.action_sheet_quality_id.empty())
+    /* Adopt the NEW song id whenever a picker is opened (non-empty id), so
+       a probe for the previous song can never clobber the current picker.
+       This also resets the id between songs — without it the id stayed
+       pinned to the FIRST song ever probed, so every later song showed
+       that song's auth/source results and downloads targeted the wrong id
+       (downloaded audio was always the first purchased track). */
+    if (!song_id.empty())
         state_.action_sheet_quality_id = song_id;
     if (state_.action_sheet_quality_id != song_id) return;
     state_.action_sheet_quality_ok = ok;
@@ -386,7 +390,7 @@ void StateStore::set_action_sheet_quality(const std::string &song_id,
 
 void StateStore::set_action_sheet_quality_br(const std::string &song_id,
                                              const std::vector<int> &br) {
-    if (!song_id.empty() && state_.action_sheet_quality_id.empty())
+    if (!song_id.empty())
         state_.action_sheet_quality_id = song_id;
     if (state_.action_sheet_quality_id != song_id) return;
     state_.action_sheet_quality_br = br;

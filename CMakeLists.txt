@@ -584,6 +584,11 @@ add_dependencies(netune netease-cli-build)
 # backend already brings it in via find_package(CURL)). Link it only when
 # the target exists — the Go/prebuilt backend path won't have it, and the
 # download code then falls back to shelling out to `curl` without progress.
+# find_package explicitly: the libnetease FetchContent target may not have
+# created CURL::libcurl on every machine (observed on Linux with curl 8.x),
+# which silently dropped the progress callback and made downloads always
+# shell out (progress stuck at 0%).
+find_package(CURL QUIET)
 if(TARGET CURL::libcurl)
   target_link_libraries(netune PRIVATE CURL::libcurl)
   target_compile_definitions(netune PRIVATE HAVE_LIBCURL)

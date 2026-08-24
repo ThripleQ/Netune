@@ -165,14 +165,11 @@ Element render_action_sheet(const AppState &s) {
                 row = hbox({text("   "), row});
             if (!dl_tail.empty())
                 row = hbox({row, filler(), theme_fg(text(dl_tail))});
-            if (st == 1) {
-                /* entitled/downloadable tier: success colour (green), clearly
-                   distinct from the warning (yellow) used for gated tiers */
-                row = theme_success(row);
-            } else if (st == 0 || st == 2) {
-                /* no-entitlement tier (VIP/SVIP gated): tint the whole row
-                   background with the theme's warning colour */
-                row = theme_warning_bg(row);
+            if (st == 2) {
+                /* denied tier (no entitlement / server refuses): mark ONLY
+                   the failing tiers, and change the character colour
+                   (warning fg) — the row background stays the sheet's. */
+                row = theme_warning(row);
             }
             body.push_back(row);
         }
@@ -221,7 +218,8 @@ Element render_action_sheet(const AppState &s) {
             if (st == 1)
                 row = row | color(Color::RGB(th.accent.r, th.accent.g, th.accent.b));
             else if (st == 2)
-                row = theme_warning_bg(row);  /* no-entitlement tier */
+                row = theme_warning(row);  /* denied tier: fg colour only,
+                                              background stays the sheet's */
             /* st == 0 (playable, not current) stays in the default colour —
                no VIP marker colour any more. */
             body.push_back(row);
@@ -244,14 +242,17 @@ Element render_action_sheet(const AppState &s) {
         body.push_back(text("  Esc \u8FD4\u56DE ") | dim);  /* Esc 返回 */
     }
 
+    /* Theme-driven popup chrome: background/text/selection/frame all come
+       from the theme system (overlay_bg, fg, accent_bg, border) instead of
+       hardcoded RGB — following the help-screen pattern (border inside,
+       overlay bg applied outermost). */
     auto box = vbox({
-        text(" " + title + " ") | bold,
+        theme_accent(text(" " + title + " ") | bold),
         separator(),
-        vbox(std::move(body)),
-    }) | borderRounded
-      | (th.bg.has_color ? bgcolor(Color::RGB(th.bg.r, th.bg.g, th.bg.b))
-                         : bgcolor(Color::Default))
-      | color(Color::RGB(th.accent.r, th.accent.g, th.accent.b));
+        theme_fg(vbox(std::move(body))),
+    }) | borderRounded;
+    box = theme_border(box);
+    box = theme_overlay_bg(box);
 
     /* Cap the width to the song panel: an over-wide row (long titles)
        would otherwise overflow the panel, break the right alignment

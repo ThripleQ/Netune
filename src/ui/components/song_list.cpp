@@ -190,8 +190,12 @@ Element render_song_list(const AppState &s) {
         const std::string filter_q = s.top_search_api ? "" : s.top_right_query;
 
         /* the app's own DOWNLOADS group: its list is a merged view of the
-           live download tasks (newest first) + the downloaded files. */
+           live download tasks (newest first) + the downloaded files. Only
+           applies once the group is actually entered (active_panel==1) —
+           while merely hovering the left-panel entry the right panel must
+           keep its previous content (or the logo), not blank out. */
         bool in_downloads = (s.music_mode == MusicMode::Local &&
+                             s.active_panel == 1 &&
                              s.group_index >= 0 &&
                              s.group_index < (int)s.groups.size() &&
                              s.groups[s.group_index].is_downloads);

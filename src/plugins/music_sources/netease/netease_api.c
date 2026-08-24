@@ -1340,14 +1340,29 @@ int netease_album_songs(const char *album_id, SongInfo **out, int *count) {
 #ifdef HAVE_LIBCURL
 #include <curl/curl.h>
 /* Progress relay: curl hands us a single pointer (clientp) per transfer,
-   which carries the netease callback + userdata we were given. */
-typedef struct { netease_download_progress prog; void *ud; } DlProgRelay;
+   which carries the netease callback + userdata we were given. total_hdr
+   holds the Content-Length seen in the response headers — used as the
+   download total when curl reports dltotal=0 (some CDN responses are
+   chunked, so the XFERINFO total is unknown until the body is drained). */
+typedef struct { netease_download_progress prog; void *ud; long long total_hdr; } DlProgRelay;
+static size_t dl_header_cb(char *buffer, size_t size, size_t nitems, void *userdata) {
+    DlProgRelay *r = (DlProgRelay*)userdata;
+    size_t n = size * nitems;
+    if (r && n > 15 && strncasecmp(buffer, "Content-Length:", 15) == 0) {
+        long long v = atoll(buffer + 15);
+        if (v > 0) r->total_hdr = v;
+    }
+    return n;
+}
 static int dl_xferinfo_cb(void *clientp, curl_off_t dltotal, curl_off_t dlnow,
                           curl_off_t ultotal, curl_off_t ulnow) {
     (void)ultotal; (void)ulnow;
     DlProgRelay *r = (DlProgRelay *)clientp;
-    if (r && r->prog)
-        r->prog(r->ud, (long long)dlnow, (long long)dltotal);
+    if (r && r->prog) {
+        long long total = (long long)dltotal;
+        if (total <= 0 && r->total_hdr > 0) total = r->total_hdr;
+        r->prog(r->ud, (long long)dlnow, total);
+    }
     return 0;
 }
 #endif
@@ -1466,7 +1481,7 @@ char* netease_download_song(const char *id, const char *level,
     if (!h) return NULL;
     FILE *fp = fopen_utf8(path, "wb");
     if (fp) {
-        DlProgRelay relay = { prog, ud };
+        DlProgRelay relay = { prog, ud, 0 };
         curl_easy_setopt(h, CURLOPT_URL, dl_url);
         curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(h, CURLOPT_MAXREDIRS, 8L);
@@ -1474,6 +1489,8 @@ char* netease_download_song(const char *id, const char *level,
         curl_easy_setopt(h, CURLOPT_TIMEOUT, 120L);
         curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
         curl_easy_setopt(h, CURLOPT_WRITEDATA, fp);
+        curl_easy_setopt(h, CURLOPT_HEADERDATA, &relay);
+        curl_easy_setopt(h, CURLOPT_HEADERFUNCTION, dl_header_cb);
         curl_easy_setopt(h, CURLOPT_NOPROGRESS, 0L);
         curl_easy_setopt(h, CURLOPT_XFERINFODATA, &relay);
         curl_easy_setopt(h, CURLOPT_XFERINFOFUNCTION, dl_xferinfo_cb);

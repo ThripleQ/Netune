@@ -643,7 +643,7 @@ static void activate_netease_menu_item(int idx) {
             {"\u6211\u559C\u6B22\u7684\u97F3\u4E50", 302, ""},
             {"\u5237\u65B0\u767B\u5F55", 303, ""},
             {"\u9000\u51FA\u767B\u5F55", 304, ""},
-            {"+ \u65B0\u5EFA\u6B4C\u5355", 305, ""},
+            {"\u65B0\u5EFA\u6B4C\u5355", 305, ""},
         });
         StateStore::instance().set_netease_selected(0);
     } else if (type == 301) {
@@ -1138,6 +1138,19 @@ static bool play_from_playlist(int idx) {
     const auto &cur = store.state();
     if (idx < 0 || idx >= (int)cur.playlist.size()) return false;
     const auto &sel = cur.playlist[idx];
+    /* Enter on the currently-playing song must NOT restart it from 0 —
+       that read as "播放开始后回到开头继续播放" when the play command
+       re-arrived (e.g. re-pressing Enter on the same row while it was
+       already opening/playing). Same track + Playing → keep playing;
+       same track + Paused → resume. */
+    if (cur.current_song.id && sel.id &&
+        strcmp(cur.current_song.id, sel.id) == 0) {
+        store.set_selected_index(idx);
+        if (cur.playback_state == PlaybackState::Paused)
+            event_bus_publish(EV_PLAYBACK_RESUME, NULL, 0);
+        else if (cur.playback_state == PlaybackState::Playing)
+            return true;  /* already playing: no-op, don't restart */
+    }
     store.queue_snapshot();
     store.set_current_song(sel);
     event_bus_publish(EV_TRACK_CHANGED, NULL, 0);
@@ -2646,7 +2659,8 @@ int run_app(int argc, char **argv) {
                         StateStore::instance().set_selected_index(idx);
                     }
                 } else {
-                    /* left menu/groups panel */
+                    /* left menu/groups panel — hover-only, like the
+                       keyboard: the right panel fills only on Enter */
                     StateStore::instance().set_active_panel(0);
                     if (st.music_mode == MusicMode::Local) {
                         int n = (int)st.groups.size();
@@ -2654,7 +2668,7 @@ int run_app(int argc, char **argv) {
                             int idx = st.group_index + dir;
                             if (idx < -1) idx = -1;
                             if (idx >= n) idx = n - 1;
-                            StateStore::instance().set_group_index(idx);
+                            StateStore::instance().set_group_hover(idx);
                         }
                     } else {
                         int n = (int)st.netease_menu.size();
@@ -2675,11 +2689,12 @@ int run_app(int argc, char **argv) {
                 return true;  /* top/status bars */
             if (m.x >= 20) {
                 /* right panel: row = y-2 (top bar 1 + border 1) + offset.
-                   Inside the DOWNLOADS group the leading download-task rows
-                   are informational — subtract them so clicks map to the
-                   file rows (matches song_list's merged view). */
+                   Inside the DOWNLOADS group (only when actually entered)
+                   the leading download-task rows are informational —
+                   subtract them so clicks map to the file rows. */
                 int row = (m.y - 2) + st.song_list_offset;
-                bool in_dl = (st.music_mode == MusicMode::Local &&
+                bool in_dl = (st.active_panel == 1 &&
+                              st.music_mode == MusicMode::Local &&
                               st.group_index >= 0 &&
                               st.group_index < (int)st.groups.size() &&
                               st.groups[st.group_index].is_downloads);
@@ -2705,12 +2720,15 @@ int run_app(int argc, char **argv) {
                         if (st.group_index == -1)
                             component->OnEvent(ftxui::Event::Return);
                         else
-                            StateStore::instance().set_group_index(-1);
+                            StateStore::instance().set_group_hover(-1);
                     } else if (row - 1 < (int)st.groups.size()) {
+                        /* hover-only like the keyboard: a click moves the
+                           highlight; a second click on the same row (or
+                           Enter) loads the group's content. */
                         if (row - 1 == st.group_index)
                             component->OnEvent(ftxui::Event::Return);
                         else
-                            StateStore::instance().set_group_index(row - 1);
+                            StateStore::instance().set_group_hover(row - 1);
                     }
                 } else {
                     if (searching) return true;  /* filtered view: ignore */
@@ -3218,9 +3236,17 @@ int run_app(int argc, char **argv) {
                     StateStore::instance().set_detail_playlist_mine(song.mine == 1);
                     StateStore::instance().set_loading(true);
                     std::string _pl_id = song.id ? song.id : "";
-                    std::thread([_pl_id]() {
+                    /* purchased digital-album rows carry aux_label "已购专辑"
+                       and must open via the album API — the playlist API
+                       called with an album id returns unrelated songs. */
+                    bool is_purchased_album =
+                        song.aux_label &&
+                        strcmp(song.aux_label, "已购专辑") == 0;
+                    std::thread([_pl_id, is_purchased_album]() {
                         SongInfo *songs = NULL; int sc = 0;
-                        int ret = g_ne->playlist_songs(_pl_id.c_str(), &songs, &sc);
+                        int ret = is_purchased_album
+                            ? g_ne->album_songs(_pl_id.c_str(), &songs, &sc)
+                            : g_ne->playlist_songs(_pl_id.c_str(), &songs, &sc);
                         LoadedSongs *ld = (LoadedSongs*)malloc(sizeof(LoadedSongs));
                         if (ret == 0 && sc > 0) {
                             ld->songs = songs; ld->count = sc;
