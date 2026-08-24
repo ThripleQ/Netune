@@ -767,7 +767,7 @@ int run_config(void) {
         els.push_back(text("  ←/→ 或 1-4 切换分类   q 退出") | dim);
 
         return dbox({
-            theme_bg(vbox(std::move(els)) | flex | border),
+            vbox(std::move(els)) | flex | border,
             render_popup(),
         });
     };
