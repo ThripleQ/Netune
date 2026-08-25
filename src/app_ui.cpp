@@ -1,4 +1,4 @@
-﻿#include "app.h"
+﻿#include "app_ui.h"
 #include "app_bootstrap.h"
 /* FTXUI v6.0.0 headers rely on these but don't include them explicitly */
 #include <mutex>
@@ -77,7 +77,7 @@ extern "C" {
 }
 
 /* Netease 特化接口（netease_ext.h）。netease_ext() 返回编译期 static
-   const 表，声明即初始化，无 NULL 窗口；app.cpp 通过它调用网易云
+   const 表，声明即初始化，无 NULL 窗口；app_ui.cpp 通过它调用网易云
    能力，不直接依赖 netease_api.h 实现。 */
 static const NeteaseExt *g_ne = netease_ext();
 #include "ui/theme.h"

@@ -1,6 +1,6 @@
 #include <locale.h>
 #include <string.h>
-#include "app.h"
+#include "app_ui.h"
 #include "netune_config.h"
 
 #ifdef _WIN32

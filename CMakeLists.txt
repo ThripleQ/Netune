@@ -349,7 +349,7 @@ else()
 endif()
 
 set(ALL_SOURCES
-  src/app.cpp
+  src/app_ui.cpp
   src/app_bootstrap.cpp
   src/main.cpp
   src/netune_config.cpp
