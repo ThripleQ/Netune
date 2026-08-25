@@ -36,10 +36,12 @@ FFStream* ffstream_open_partial(const char *url, const char *prefix_path,
                                 int *duration_sec);
 
 /* Wait callback for ffstream_open_growing: invoked when the local file is
-   exhausted but may still be growing (a background downloader is appending
-   to it). Returns 1 = more data may be available (retry the read),
-   0 = the stream is finished (EOF), -1 = error. */
-typedef int (*ffstream_wait_fn)(void *opaque);
+   exhausted at byte position `pos` but may still be growing (a background
+   downloader is appending to it). The callback should block until data
+   past `pos` is available, or the stream finishes/fails. Returns:
+     1 = more data may be available (retry the read),
+     0 = the stream is finished (EOF), -1 = error. */
+typedef int (*ffstream_wait_fn)(void *opaque, int64_t pos);
 
 /* Open a local file that may still be growing (e.g. a .part being written
    by a background downloader). Reads block via `wait` when the file is
@@ -69,6 +71,16 @@ int ffstream_recorder_commit(FFStream *s, const char *final_path);
 /* Media extension (".mp3", ".flac", ...) of the opened stream, derived
    from the probed container. */
 const char *ffstream_media_ext(const FFStream *s);
+
+/* 1 = the stream was opened with ffstream_open_growing (a local file still
+   being appended by a background downloader). */
+int ffstream_growing(const FFStream *s);
+
+/* Average bitrate of the opened stream (bits/sec), or 0 if unknown.
+   For a growing file this is the probe-time estimate — the caller can
+   combine it with the current on-disk size to track the real duration as
+   the download progresses. */
+long ffstream_bitrate(const FFStream *s);
 
 /* Close and free. */
 void ffstream_close(FFStream *s);

@@ -438,9 +438,12 @@ static int growing_read(void *opaque, uint8_t *buf, int buf_size) {
         size_t n = fread(buf, 1, (size_t)buf_size, s->grow_file);
         if (n > 0) return (int)n;
         if (ferror(s->grow_file)) return AVERROR(EIO);
-        /* EOF — wait for the file to grow (background downloader) */
+        /* EOF — wait for the file to grow past the current read position
+           (background downloader) */
         if (s->growing && s->grow_wait) {
-            int w = s->grow_wait(s->grow_opaque);
+            long pos = ftell(s->grow_file);
+            if (pos < 0) return AVERROR(EIO);
+            int w = s->grow_wait(s->grow_opaque, (int64_t)pos);
             if (w > 0) {
                 /* stdio caches the EOF flag after a 0-byte fread; clear it
                    so the next fread re-reads the (now grown) file */
@@ -481,6 +484,16 @@ static int64_t growing_seek(void *opaque, int64_t offset, int whence) {
         if (stat_utf8(s->grow_path, &st) != 0) return -1;
         offset += st.st_size;
     }
+    /* clamp to the current on-disk size: a seek past the watermark would
+       put the read position in a file hole (beyond EOF) and the read side
+       would have to wait for the downloader to cover it. Landing on the
+       watermark keeps playback moving as the file grows — the downloader
+       always writes from 0, so data past the current watermark does not
+       exist yet. Also guard against negative offsets. */
+    if (offset < 0) offset = 0;
+    struct stat st;
+    if (stat_utf8(s->grow_path, &st) == 0 && offset > st.st_size)
+        offset = st.st_size;
     if (fseek(s->grow_file, (long)offset, SEEK_SET) != 0) return -1;
     return offset;
 }
@@ -562,8 +575,10 @@ int ffstream_seek(FFStream *s, int64_t timestamp_sec) {
     /* plain network recording: a seek breaks byte-continuity, so the .part
        is discarded. Partial-continuation mode keeps the cached prefix and
        lets tee_seek decide: seeks inside the prefix are served from disk
-       (backfill stays contiguous), seeks past it freeze the file. */
-    if (!s->rec_partial)
+       (backfill stays contiguous), seeks past it freeze the file. Growing
+       mode seeks are plain local-file seeks (clamped to the watermark in
+       growing_seek) and must not touch the recorder fields. */
+    if (!s->rec_partial && !s->growing)
         recorder_discard(s);
     int64_t ts = timestamp_sec * AV_TIME_BASE;
     if (av_seek_frame(s->fmt, -1, ts, AVSEEK_FLAG_BACKWARD) < 0)
@@ -614,6 +629,14 @@ const char *ffstream_media_ext(const FFStream *s) {
     if (strstr(n, "mp4") || strstr(n, "mov") || strstr(n, "m4a") ||
         strstr(n, "aac") || strstr(n, "adts")) return ".m4a";
     return ".mp3";
+}
+
+int ffstream_growing(const FFStream *s) {
+    return s && s->growing;
+}
+
+long ffstream_bitrate(const FFStream *s) {
+    return (s && s->fmt) ? s->fmt->bit_rate : 0;
 }
 
 void ffstream_close(FFStream *s) {

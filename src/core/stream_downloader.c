@@ -88,7 +88,15 @@ static void *dl_thread(void *arg) {
     curl_easy_setopt(h, CURLOPT_URL, dl->url);
     curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(h, CURLOPT_MAXREDIRS, 8L);
-    curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 15L);
+    /* keep the connect timeout modest: stream_downloader_destroy() joins
+       this thread, and a download stuck in connect can only be aborted via
+       the progress callback below once the transfer is running — a shorter
+       connect window bounds how long a track switch can stall */
+    curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 8L);
+    /* a transfer crawling below 1 B/s for 10 s is effectively dead — abort
+       it so playback surfaces an error instead of hanging on the watermark */
+    curl_easy_setopt(h, CURLOPT_LOW_SPEED_LIMIT, 1L);
+    curl_easy_setopt(h, CURLOPT_LOW_SPEED_TIME, 10L);
     curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, dl_write_cb);
     curl_easy_setopt(h, CURLOPT_WRITEDATA, dl);
@@ -136,7 +144,13 @@ StreamDownloader *stream_downloader_create(const char *url, const char *part_pat
         return NULL;
     }
     pthread_mutex_init(&dl->mutex, NULL);
-    pthread_cond_init(&dl->cond, NULL);
+    /* bind the condvar to the monotonic clock so timed waits are immune to
+       wall-clock jumps (see wait_watermark) */
+    pthread_condattr_t attr;
+    pthread_condattr_init(&attr);
+    pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
+    pthread_cond_init(&dl->cond, &attr);
+    pthread_condattr_destroy(&attr);
     return dl;
 }
 
@@ -181,6 +195,7 @@ int stream_downloader_wait_watermark(StreamDownloader *dl, int64_t min_bytes,
     int64_t start = now_mono_ms();
     int64_t last_wm = dl->watermark;
     for (;;) {
+        if (dl->stop) { pthread_mutex_unlock(&dl->mutex); return -1; }
         if (dl->failed) { pthread_mutex_unlock(&dl->mutex); return -1; }
         if (dl->done)   { pthread_mutex_unlock(&dl->mutex); return 1; }
         if (min_bytes >= 0 && dl->watermark >= min_bytes) {
@@ -195,8 +210,12 @@ int stream_downloader_wait_watermark(StreamDownloader *dl, int64_t min_bytes,
                 pthread_mutex_unlock(&dl->mutex); return 0;
             }
             int64_t remain = timeout_ms - elapsed;
+            /* the condvar is created with CLOCK_MONOTONIC (see create), so
+               the absolute deadline must use the monotonic clock too —
+               using CLOCK_REALTIME here would make a wall-clock jump (NTP)
+               stretch or shorten the wait */
             struct timespec ts;
-            clock_gettime(CLOCK_REALTIME, &ts);
+            clock_gettime(CLOCK_MONOTONIC, &ts);
             ts.tv_nsec += remain * 1000000;
             if (ts.tv_nsec >= 1000000000) {
                 ts.tv_sec += ts.tv_nsec / 1000000000;

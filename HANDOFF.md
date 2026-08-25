@@ -64,7 +64,10 @@ Netune 是一个终端音乐播放器：C11 + C++17，FTXUI 渲染 TUI，FFmpeg 
 - config：`cache.audio_limit_mb`（默认 2048）、`cache.audio_enabled`（默认 true；关闭时 find/commit 全部失效，但不清理已有缓存）。
 - 播放线程（`playback_coordinator.c`）是**旧录制模式**（`open_rec`/`open_partial` 回填）缓存的唯一写者：`g_rec_song/g_rec_level/g_rec_active` 线程局部语义，无锁。
 - **M1 增长文件模式**（未命中 → `stream_downloader` + `ffstream_open_growing`）：`.part` 的**唯一写者是下载线程**（`dl_write_cb`），播放线程只读水位线以下的字节。`g_downloader/g_part_path` 由播放线程持有（无锁，仅播放线程访问）。下载器销毁时 `.part` 留在磁盘，由 `cache_keep_partial`（切歌/停止）或 EOF 提交逻辑决定 rename 成完整/部分缓存。
-- 增长文件读端（`growing_read`）：EOF 时经 wait 回调阻塞等待下载推进；wait 返回"完成"后补一次排空读取再返回 `AVERROR_EOF`。**读回调 EOF 必须返回 `AVERROR_EOF`（负值）而非 0**，否则 FFmpeg 6.0 `avio_read` 绕过缓冲路径死循环（见 2.2）。
+- 增长文件读端（`growing_read`）：EOF 时经 wait 回调（**带当前读位置 pos**，精确等待 `watermark > pos`）阻塞等待下载推进；wait 返回"完成"后补一次排空读取再返回 `AVERROR_EOF`。**读回调 EOF 必须返回 `AVERROR_EOF`（负值）而非 0**，否则 FFmpeg 6.0 `avio_read` 绕过缓冲路径死循环（见 2.2）。
+- 增长文件 seek（`growing_seek`）：目标 **clamp 到当前磁盘大小**（超界落到水位，不产生文件空洞）；`ffstream_seek` 对 growing 模式不触碰 recorder 字段（`!rec_partial && !growing` 才 discard）。
+- 增长文件时长：probe 时文件未下完，`fmt->duration` 偏低；播放线程按 `(文件大小 × 8 / bitrate)` **动态刷新 total_frames**，进度条/seek 边界随下载增长。
+- 下载失败（`failed`）时解码侧返回 EIO → 播放线程发 **`EV_PLAYBACK_ERROR`**（而非静默 `EV_PLAYBACK_FINISH`），已下载字节转正部分缓存。
 - `ffstream_seek` 语义：非 partial 模式 → 删 .part（本次录制作废）；partial 模式 → 交给 `tee_seek` 按位置决定（前缀内读磁盘、前缀外冻结）。
 - 录制只在**探测完成之后**开始（probe 期 seek 不污染缓存文件）。
 - `ffstream_open_rec`（纯网络录制）在探测完成后**主动 `avio_seek(rec_pb, 0)` 归位再开录**：FFmpeg 只在 mpeg/mpegts 探测后自己归位，WAV 等格式会停在探测读过的位置（WAV 因 `probe_packets=32` 会丢掉开头 ~850KB）；seek 失败则跳过缓存（退化为纯网络播放，不写坏文件）。

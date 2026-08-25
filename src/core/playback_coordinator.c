@@ -271,18 +271,22 @@ static void cache_keep_partial(FFStream *ffstream) {
 }
 
 /* Wait callback for ffstream_open_growing: blocks until the background
-   downloader makes progress, finishes, or fails. Returns 1 = more data
-   (retry), 0 = finished (EOF), -1 = error. */
-static int wait_more_data(void *opaque) {
+   downloader has written past the read position `pos`, finishes, or fails.
+   Returns 1 = more data may be available (retry the read),
+   0 = the download finished (EOF), -1 = error. */
+static int wait_more_data(void *opaque, int64_t pos) {
     StreamDownloader *dl = (StreamDownloader*)opaque;
     if (stream_downloader_failed(dl)) return -1;
     if (stream_downloader_done(dl)) return 0;
-    /* wait for the downloader to make progress (or finish/fail); the 500ms
-       cap keeps a stalled download from blocking forever */
-    stream_downloader_wait_watermark(dl, -1, 500);
+    /* wait for the downloader to reach one byte past the read position;
+       the 500ms cap keeps a stalled download from blocking the playback
+       thread forever. A timeout here means "no progress yet" — the read is
+       retried (the downloader either advances later or fails, and the wait
+       loop below converges to EOF / error then). */
+    stream_downloader_wait_watermark(dl, pos + 1, 500);
     if (stream_downloader_failed(dl)) return -1;
     if (stream_downloader_done(dl)) return 0;
-    return 1;  /* progress made → retry the read */
+    return 1;  /* retry the read (new data arrived, or still waiting) */
 }
 
 static int open_stream(const char *path,
@@ -443,8 +447,12 @@ static int open_stream(const char *path,
                                                          15000);
                 if (w < 0 ||
                     (w == 0 && stream_downloader_watermark(dl) <= 0)) {
-                    /* failed, or timed out with zero bytes */
+                    /* failed, or timed out with zero bytes — remove any
+                       partial .part the downloader may have written (it is
+                       joined by destroy, so the file is no longer touched) */
+                    LOG_WARN("Downloader prefix wait failed for %s", path);
                     stream_downloader_destroy(dl);
+                    remove_utf8(part);
                     free(part);
                     free(level);
                     return -1;
@@ -456,6 +464,7 @@ static int open_stream(const char *path,
                 if (!*ffstream) {
                     LOG_WARN("FFmpeg growing open failed %s", path);
                     stream_downloader_destroy(dl);
+                    remove_utf8(part);   /* orphan .part: probe failed */
                     free(part);
                     free(level);
                     return -1;
@@ -747,8 +756,13 @@ static void* playback_thread(void *arg) {
             int frames = ffstream ? ffstream_decode(ffstream, pcm_buf, FRAMES_PER_CHUNK)
                                     : decoder_decode(decoder, pcm_buf, FRAMES_PER_CHUNK);
             if (frames <= 0) {
-                /* natural end-of-stream — finalize the recording as a
-                   cache entry (the whole stream has been received) */
+                /* end of stream — finalize the recording as a cache entry.
+                   In growing-file mode the decode only reports EOF after
+                   the downloader finished (see wait_more_data), so reaching
+                   this branch with a failed downloader means a mid-stream
+                   network error, not a clean finish: surface it as an
+                   error event instead of silently "finishing" the track. */
+                int playback_err = 0;
                 if (ffstream && g_rec_active) {
                     if (g_downloader) {
                         /* growing-file mode: the downloader is the writer */
@@ -770,7 +784,10 @@ static void* playback_thread(void *arg) {
                                 free(final);
                             }
                         } else {
-                            /* download failed/interrupted → keep partial */
+                            /* download failed/interrupted → keep the
+                               received bytes as a partial cache entry and
+                               report the failure */
+                            playback_err = stream_downloader_failed(g_downloader);
                             cache_keep_partial(ffstream);
                         }
                         stream_downloader_destroy(g_downloader);
@@ -790,7 +807,14 @@ static void* playback_thread(void *arg) {
                     g_rec_active = 0;
                 }
                 state = PS_STOPPED;
-                event_bus_publish(EV_PLAYBACK_FINISH, NULL, 0);
+                event_bus_publish(playback_err ? EV_PLAYBACK_ERROR
+                                               : EV_PLAYBACK_FINISH, NULL, 0);
+                /* release the stream resources now — holding them until the
+                   next command keeps the file handle + decoder memory alive
+                   while stopped */
+                if (ffstream) { ffstream_close(ffstream); ffstream = NULL; }
+                if (decoder)  { decoder_close(decoder);  decoder = NULL; }
+                audio_teardown(audio); audio = NULL;
                 break;
             }
 
@@ -843,6 +867,23 @@ static void* playback_thread(void *arg) {
             int64_t now_ms = (int64_t)current_frame * 1000 / samplerate;
             if (now_ms - last_progress_ms >= PROGRESS_INTERVAL_MS) {
                 last_progress_ms = now_ms;
+                /* Growing-file mode: the probe-time duration was estimated
+                   from the partially downloaded file and is shorter than the
+                   real track. Track the true length from (on-disk size /
+                   bitrate) so the progress bar and seek bounds grow with the
+                   download instead of overflowing at a wrong end. */
+                if (ffstream && g_downloader &&
+                    ffstream_growing(ffstream) && g_part_path) {
+                    long br = ffstream_bitrate(ffstream);
+                    struct stat st;
+                    if (br > 0 && stat_utf8(g_part_path, &st) == 0 &&
+                        st.st_size > 0) {
+                        int64_t frames = (int64_t)st.st_size * 8 * samplerate
+                                         / br;
+                        if (frames > total_frames)
+                            total_frames = (int)frames;
+                    }
+                }
                 /* Send exact frames for smooth progress bar */
                 int progress_data[3] = {
                     current_frame,          /* exact frame position */
