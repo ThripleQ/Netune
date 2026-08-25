@@ -76,6 +76,12 @@ const char *ffstream_media_ext(const FFStream *s);
    being appended by a background downloader). */
 int ffstream_growing(const FFStream *s);
 
+/* Seconds of audio currently available in a growing stream (derived from
+   the on-disk size and bitrate), or -1 when not growing / unknown. Seeks
+   on a growing stream are clamped to this value by growing_seek, so the
+   caller can clamp the UI seek target to it to keep progress in sync. */
+int ffstream_growing_avail_sec(const FFStream *s);
+
 /* Average bitrate of the opened stream (bits/sec), or 0 if unknown.
    For a growing file this is the probe-time estimate — the caller can
    combine it with the current on-disk size to track the real duration as

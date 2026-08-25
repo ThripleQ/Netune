@@ -507,9 +507,20 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
     int target = seek_sec * samplerate;
     if (target < 0) target = 0;
     if (target >= total_frames) target = total_frames - 1;
+    /* Growing-file mode: the stream is only seekable up to what the
+       background downloader has already written. Clamp the target to the
+       downloaded seconds first, or the read side blocks at the watermark
+       while the UI reports the (unreachable) requested position. */
+    if (ffstream && ffstream_growing(ffstream)) {
+        int avail = ffstream_growing_avail_sec(ffstream);
+        if (avail >= 0 && seek_sec > avail) {
+            LOG_WARN("Seek %ds clamped to downloaded %ds", seek_sec, avail);
+            target = avail * samplerate;
+        }
+    }
     int ok = 1;
     if (ffstream)
-        ok = (ffstream_seek(ffstream, seek_sec) == 0);
+        ok = (ffstream_seek(ffstream, target / samplerate) == 0);
     if (decoder)
         decoder_seek(decoder, target);
     if (ok)

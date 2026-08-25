@@ -635,8 +635,23 @@ int ffstream_growing(const FFStream *s) {
     return s && s->growing;
 }
 
+int ffstream_growing_avail_sec(const FFStream *s) {
+    if (!s || !s->growing || !s->grow_path) return -1;
+    long br = ffstream_bitrate(s);
+    if (br <= 0) return -1;
+    struct stat st;
+    if (stat_utf8(s->grow_path, &st) != 0 || st.st_size <= 0) return -1;
+    return (int)((int64_t)st.st_size * 8 / br);
+}
+
 long ffstream_bitrate(const FFStream *s) {
-    return (s && s->fmt) ? s->fmt->bit_rate : 0;
+    if (!s || !s->fmt) return 0;
+    /* Prefer the decoder context bitrate: it comes from the codec
+       parameters (accurate, e.g. 320000 for a 320k mp3). fmt->bit_rate is
+       estimated from the bytes read during probe — for a growing file that
+       prefix is tiny, so it is wildly wrong (e.g. ~3.2k). */
+    if (s->codec && s->codec->bit_rate > 0) return s->codec->bit_rate;
+    return s->fmt->bit_rate;
 }
 
 void ffstream_close(FFStream *s) {
