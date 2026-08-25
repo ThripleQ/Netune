@@ -12,8 +12,6 @@ static const Color kDefaultSpectrum = kDefaultAccent;
 static const Color kDefaultSuccess= Color::RGB(158, 206, 106);
 static const Color kDefaultWarning= Color::RGB(224, 175, 104);
 static const Color kDefaultError  = Color::RGB(247, 118, 142);
-/* lighten(kDefaultAccent, 0.65f) pre-computed: RGB(122*0.35+255*0.65, 162*0.35+255*0.65, 247*0.35+255*0.65) */
-static const Color kDefaultProgressTrack = Color::RGB(208, 222, 252);
 
 /* ── Helpers ────────────────────────────────────────── */
 static Color pick_fg(const Theme &t) {
@@ -23,9 +21,14 @@ static Color pick_accent(const Theme &t) {
     return t.accent.has_color ? Color::RGB(t.accent.r, t.accent.g, t.accent.b) : kDefaultAccent;
 }
 static Color pick_progress_track(const Theme &t) {
-    return t.progress_track.has_color
-        ? Color::RGB(t.progress_track.r, t.progress_track.g, t.progress_track.b)
-        : kDefaultProgressTrack;
+    /* The unfilled track is the FILLED part's (accent) colour lightened,
+       so it always reads as a lighter version of the progress — no need
+       for a fixed, independent track colour that can go out of sync. */
+    const ThemeColor &a = t.accent.has_color ? t.accent : ThemeColor{122, 162, 247, true};
+    return Color::RGB(
+        (int)(a.r + (255 - a.r) * 0.65f),
+        (int)(a.g + (255 - a.g) * 0.65f),
+        (int)(a.b + (255 - a.b) * 0.65f));
 }
 
 static Color pick_spectrum(const Theme &t) {
@@ -46,7 +49,6 @@ static Color pick_playlist(const Theme &t) {
 
 static Color pick_artist(const Theme &t) {
     if (t.artist.has_color) return Color::RGB(t.artist.r, t.artist.g, t.artist.b);
-    if (t.muted.has_color)  return Color::RGB(t.muted.r,  t.muted.g,  t.muted.b);
     return kDefaultMuted;
 }
 
@@ -65,11 +67,13 @@ Element theme_bg(Element e) {
 
 Element theme_overlay_bg(Element e) {
     auto &t = ThemeManager::instance().current();
-    ThemeColor c = t.overlay_bg.has_color ? t.overlay_bg
-                 : (t.bg.has_color ? t.bg : ThemeColor{});
+    const ThemeColor &c = t.overlay_bg;
     if (c.has_color)
         return e | bgcolor(Color::RGB(c.r, c.g, c.b));
-    return e;  /* both transparent → terminal background shows through */
+    /* overlay_bg none/unset: use the terminal's own background — clear the
+       area underneath (spaces, no color codes) so stale content does not
+       leak through, while the background stays the terminal's own. */
+    return clear_under(e);
 }
 
 Element theme_accent(Element e) {
@@ -105,6 +109,12 @@ Element theme_success(Element e) {
                                         : kDefaultSuccess);
 }
 
+Element theme_error(Element e) {
+    auto &t = ThemeManager::instance().current();
+    return e | color(t.error.has_color ? Color::RGB(t.error.r, t.error.g, t.error.b)
+                                      : kDefaultError);
+}
+
 Element theme_playlist(Element e) {
     return e | color(pick_playlist(ThemeManager::instance().current()));
 }
@@ -119,6 +129,15 @@ Element theme_border(Element e) {
     auto &t = ThemeManager::instance().current();
     if (t.border.has_color)
         return e | color(Color::RGB(t.border.r, t.border.g, t.border.b));
+    return e;
+}
+
+/* Popup / action-sheet border color (separate from the main border slot) */
+Element theme_popup_border(Element e) {
+    auto &t = ThemeManager::instance().current();
+    ThemeColor c = t.popup_border.has_color ? t.popup_border : t.border;
+    if (c.has_color)
+        return e | color(Color::RGB(c.r, c.g, c.b));
     return e;
 }
 
@@ -174,6 +193,25 @@ Element theme_playlist_sel_bg(Element e) {
     return e | bgcolor(Color::RGB(c.r, c.g, c.b));
 }
 
+/* Modal-open selection marker: a compact "> " colour block keeping the
+   row's dedicated colour (playlist / VIP) when the theme defines one. */
+Element theme_sel_marker(bool is_playlist, bool is_vip) {
+    const auto &th = ThemeManager::instance().current();
+    Element mark = text("> ") | bold;
+    if (is_playlist) {
+        mark = theme_playlist_sel_bg(mark);
+        mark = mark | color(theme_selection_text(
+            th.playlist.has_color ? th.playlist : th.accent));
+    } else if (is_vip) {
+        mark = theme_vip_sel_bg(mark);
+        mark = mark | color(theme_selection_text(
+            th.vip.has_color ? th.vip : th.warning));
+    } else {
+        mark = theme_selection(mark);
+    }
+    return mark;
+}
+
 /* Background warning: whole-row bg tinted with a darkened warning color so
    text stays readable (mirrors theme_vip_bg's dark-theme treatment). */
 Element theme_warning_bg(Element e) {
@@ -194,4 +232,26 @@ Element theme_selection(Element e) {
     e = e | bgcolor(sel_bg);
     e = e | color(pick_fg(t));
     return e;
+}
+
+/* Selection text color for a selected row. Uses YIQ perceived-luminance
+   of the row background to pick a high-contrast text color WITHOUT
+   inventing new hues: if the background is bright, text uses the theme's
+   bg (dark) color; if the background is dark, text uses the theme's fg
+   (light) color. Falls back to black/white when the needed theme slot is
+   unset (e.g. bg: none). */
+Color theme_selection_text(const ThemeColor &bg) {
+    auto &t = ThemeManager::instance().current();
+    bool bg_bright = false;
+    if (bg.has_color) {
+        /* YIQ perceived luminance (green weighs most, blue least) */
+        int yiq = (299 * (int)bg.r + 587 * (int)bg.g + 114 * (int)bg.b) / 1000;
+        bg_bright = yiq >= 128;
+    }
+    if (bg_bright) {
+        return t.bg.has_color ? Color::RGB(t.bg.r, t.bg.g, t.bg.b)
+                              : Color::RGB(0, 0, 0);
+    }
+    return t.fg.has_color ? Color::RGB(t.fg.r, t.fg.g, t.fg.b)
+                          : Color::RGB(255, 255, 255);
 }

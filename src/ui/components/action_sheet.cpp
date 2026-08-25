@@ -16,6 +16,7 @@ Element render_action_sheet(const AppState &s) {
     const auto &item = s.playlist.empty() ? SongInfo{} :
                        s.playlist[s.selected_index];
     bool is_playlist = item.is_playlist;
+    bool is_vip = (!is_playlist && item.fee == 1);
     std::string title = item.title ? item.title : "(nothing selected)";
     if (s.action_sheet_menu == 4)
         title = "\u4E0B\u8F7D\u97F3\u8D28: " + title;  /* 下载音质: <song> */
@@ -54,7 +55,7 @@ Element render_action_sheet(const AppState &s) {
         for (size_t i = 0; i < opts.size(); i++) {
             auto row = text(opts[i].label);
             if ((int)i == s.action_sheet_selected)
-                body.push_back(hbox({theme_selection(text(" \u203A ")), row | bold}) | focus);
+                body.push_back(hbox({theme_sel_marker(is_playlist, is_vip), row | bold}) | focus);
             else
                 body.push_back(hbox({text("   "), row}));
         }
@@ -68,7 +69,7 @@ Element render_action_sheet(const AppState &s) {
                 auto row = text(std::string("  ") +
                                 (s.action_sheet_pls[i].title ? s.action_sheet_pls[i].title : ""));
                 if ((int)i == s.action_sheet_selected)
-                    body.push_back(hbox({theme_selection(text(" \u203A ")), row | bold}) | focus);
+                    body.push_back(hbox({theme_sel_marker(true, false), row | bold}) | focus);
                 else
                     body.push_back(hbox({text("   "), row}));
             }
@@ -251,7 +252,7 @@ Element render_action_sheet(const AppState &s) {
         separator(),
         theme_fg(vbox(std::move(body))),
     }) | borderRounded;
-    box = theme_border(box);
+    box = theme_popup_border(box);
     box = theme_overlay_bg(box);
 
     /* Cap the width to the song panel: an over-wide row (long titles)

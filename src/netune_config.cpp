@@ -139,18 +139,19 @@ static const ColorSlot kSlots[] = {
     {"fg",             "文字",      &Theme::fg},
     {"accent",         "强调色",    &Theme::accent},
     {"accent_bg",      "选中背景",  &Theme::accent_bg},
-    {"muted",          "次要文字",  &Theme::muted},
     {"border",         "边框",      &Theme::border},
     {"success",        "成功",      &Theme::success},
     {"warning",        "警告",      &Theme::warning},
     {"error",          "错误",      &Theme::error},
     {"overlay_bg",     "弹窗背景",  &Theme::overlay_bg},
+    {"popup_border",   "小窗边框",  &Theme::popup_border},
     {"progress_track", "进度条轨道", &Theme::progress_track},
     {"spectrum",       "频谱",      &Theme::spectrum},
     {"vip",            "VIP 标记",  &Theme::vip},
     {"svip",           "SVIP 标记", &Theme::svip},
     {"playlist",       "歌单标记",  &Theme::playlist},
     {"logo",           "网易云Logo", &Theme::logo},
+    {"artist",         "艺人名字",  &Theme::artist},
 };
 
 /* ── Preset palette (16 colors) ─────────────────────── */
@@ -439,7 +440,6 @@ static const char *kThemeTemplate =
     "  fg: \"#c0caf5\"\n"
     "  accent: \"#7aa2f7\"\n"
     "  accent_bg: \"#33467c\"\n"
-    "  muted: \"#565f89\"\n"
     "  border: \"#292e42\"\n"
     "  success: \"#9ece6a\"\n"
     "  warning: \"#e0af68\"\n"
@@ -673,13 +673,13 @@ int run_config(void) {
                 std::string line = "  " + std::string(kActions[i].desc) + " = " +
                                    key_list_str(th.kb_map[i].second);
                 if (sel)
-                    body.push_back(hbox({text("> "), text(line) | bold}) | inverted);
+                    body.push_back(hbox({text("> "), text(line) | bold}) | inverted | focus);
                 else
                     body.push_back(text(line));
             }
             body.push_back(text(""));
             body.push_back(text("  Enter: 绑定  Backspace: 删除最后绑定  ESC: 返回") | dim);
-            els.push_back(vbox(std::move(body)) | flex | border);
+            els.push_back(vbox(std::move(body)) | frame | flex | border);
         } else if (th.mode == Mode::ThemeEdit || th.mode == Mode::ColorEdit) {
             /* theme color-slot editor sub-view */
             Elements body;
@@ -696,13 +696,13 @@ int run_config(void) {
                                    theme_color_to_hex(c);
                 Element row = hbox({swatch, text(line)});
                 if (sel)
-                    body.push_back(hbox({text("> "), row | bold}) | inverted);
+                    body.push_back(hbox({text("> "), row | bold}) | inverted | focus);
                 else
                     body.push_back(hbox({text("  "), row}));
             }
             body.push_back(text(""));
             body.push_back(text("  Enter: 编辑颜色(hex/色板)  ↑/↓: 选择  ESC: 保存返回") | dim);
-            els.push_back(vbox(std::move(body)) | flex | border);
+            els.push_back(vbox(std::move(body)) | frame | flex | border);
         } else if (th.cat == Cat::Main) {
             Elements body;
             body.push_back(text("  本地音乐目录 (music_sources.local.dirs)") | bold);
@@ -714,7 +714,7 @@ int run_config(void) {
                     bool sel = ((int)i == th.dir_sel);
                     std::string line = "  " + std::to_string(i + 1) + ". " + th.dirs[i];
                     if (sel)
-                        body.push_back(hbox({text("> "), text(line) | bold}) | inverted);
+                        body.push_back(hbox({text("> "), text(line) | bold}) | inverted | focus);
                     else
                         body.push_back(text(line));
                 }
@@ -722,7 +722,7 @@ int run_config(void) {
             body.push_back(text(""));
             body.push_back(text("  a 添加目录   d 删除选中   (修改立即保存, 重启 netune 生效)") | dim);
             body.push_back(text("  目录列表写入 config.json 的 music_sources.local.dirs") | dim);
-            els.push_back(vbox(std::move(body)) | flex | border);
+            els.push_back(vbox(std::move(body)) | frame | flex | border);
         } else {
             /* file list */
             Elements body;
@@ -742,11 +742,11 @@ int run_config(void) {
                                    std::string(name.size() < 26 ? 26 - name.size() : 1, ' ') +
                                    fmt_size(f.size);
                 if (sel)
-                    body.push_back(hbox({text("> "), text(line) | bold}) | inverted);
+                    body.push_back(hbox({text("> "), text(line) | bold}) | inverted | focus);
                 else
                     body.push_back(text(line));
             }
-            els.push_back(vbox(std::move(body)) | flex | border);
+            els.push_back(vbox(std::move(body)) | frame | flex | border);
         }
 
         /* notice */

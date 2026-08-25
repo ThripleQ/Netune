@@ -19,6 +19,13 @@
 
 #include "ui/state_store.h"  /* DlStatus / DlItem */
 
+/* Payload carried by EV_DOWNLOAD_UPDATE when a download completes:
+   the notice text plus its colour kind (1=success, 2=error). */
+struct DlNoticePayload {
+    char msg[600];
+    int  kind;
+};
+
 class DownloadQueue {
 public:
     static DownloadQueue& instance();

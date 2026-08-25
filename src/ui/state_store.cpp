@@ -53,6 +53,10 @@ void StateStore::set_current_quality(const std::string &lvl) {
     state_.current_quality = lvl;
 }
 
+void StateStore::set_current_bitrate(long bps) {
+    state_.current_bitrate = bps;
+}
+
 void StateStore::set_progress(double pos, int cur_sec, int total_sec) {
     set_progress_ms(pos, cur_sec * 1000, total_sec);
 }
@@ -324,8 +328,9 @@ void StateStore::set_qr_gfx_ready(int ready) {
     state_.qr_gfx_ready = ready;
 }
 
-void StateStore::set_app_notice(const std::string &msg) {
+void StateStore::set_app_notice(const std::string &msg, int kind) {
     state_.app_notice = msg;
+    state_.app_notice_kind = kind;
     state_.app_notice_ts = (long)time(NULL);
 }
 

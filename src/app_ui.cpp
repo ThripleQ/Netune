@@ -81,6 +81,7 @@ extern "C" {
    能力，不直接依赖 netease_api.h 实现。 */
 static const NeteaseExt *g_ne = netease_ext();
 #include "ui/theme.h"
+#include "ui/components/theme_util.h"
 #include "ui/layout_engine.h"
 
 using namespace ftxui;
@@ -1041,11 +1042,13 @@ static void ev_progress(const BusEvent *ev, void *data) {
     auto &store = StateStore::instance();
     if (store.state().playback_state == PlaybackState::Stopped)
         return;
-    if (ev->data_size == sizeof(int[3])) {
+    if (ev->data_size == sizeof(int[4])) {
         int *p = (int*)ev->data;
         double prog = (p[1] > 0) ? (double)p[0] / p[1] : 0.0;
         int tot = (p[2] > 0 && p[1] > 0) ? p[1] / p[2] : 0;
         int cur_ms = (p[2] > 0) ? (int)((long long)p[0] * 1000LL / p[2]) : 0;
+        /* 4th slot: stream bitrate (bits/sec) — refresh the status bar tag */
+        store.set_current_bitrate(p[3]);
         /* Clear seek target once progress is within 1s of the target (seek executed) */
         int target = store.state().seek_target;
         int seek_dist = cur_ms / 1000 - target;
@@ -1084,6 +1087,7 @@ static void ev_playback_stop(const BusEvent *ev, void *data) {
     StateStore::instance().set_playback_state(PlaybackState::Stopped);
     StateStore::instance().set_current_song(SongInfo{});
     StateStore::instance().set_current_quality("");
+    StateStore::instance().set_current_bitrate(0);
     StateStore::instance().set_progress(0, 0, 0);
     StateStore::instance().set_lyric_mode(false);
 }
@@ -1390,8 +1394,13 @@ static void ev_playlist_list_loaded(const BusEvent *ev, void *data) {
 static void ev_download_update(const BusEvent *ev, void *data) {
     (void)data;
     StateStore::instance().set_downloads(DownloadQueue::instance().active());
-    if (ev->data && ev->data_size > 0)
-        StateStore::instance().set_app_notice((const char*)ev->data);
+    if (ev->data && ev->data_size == sizeof(DlNoticePayload)) {
+        const DlNoticePayload *pl = (const DlNoticePayload*)ev->data;
+        StateStore::instance().set_app_notice(pl->msg, pl->kind);
+    } else if (ev->data && ev->data_size > 0) {
+        /* legacy bare-string payload (no colour kind) */
+        StateStore::instance().set_app_notice((const char*)ev->data, 0);
+    }
 }
 
 static void ev_volume_changed(const BusEvent *ev, void *data) {
@@ -1845,14 +1854,18 @@ int run_app(int argc, char **argv) {
             return dbox({main, render_action_sheet(s)});
         }
 
-        /* transient notice (download results): one dim line pinned to the
-           bottom of the screen, auto-cleared after 4 seconds */
+        /* transient notice (download results etc.): one line pinned to the
+           bottom of the screen, auto-cleared after 4 seconds. Colour follows
+           the notice kind: success / error / warning theme slots, else dim. */
         if (!s.app_notice.empty() &&
             (long)time(NULL) - s.app_notice_ts < 4) {
+            Element txt = text(" " + s.app_notice + " ") | bold;
+            if (s.app_notice_kind == 1)      txt = theme_success(txt);
+            else if (s.app_notice_kind == 2) txt = theme_error(txt);
+            else if (s.app_notice_kind == 3) txt = theme_warning(txt);
+            else                             txt = txt | dim;
             auto notice = vbox({filler(),
-                hbox({filler(),
-                      text(" " + s.app_notice + " ") | dim | bold,
-                      filler()})}) | size(HEIGHT, LESS_THAN, 2);
+                hbox({filler(), txt, filler()})}) | size(HEIGHT, LESS_THAN, 2);
             return dbox({main, notice});
         }
 
@@ -2038,7 +2051,7 @@ int run_app(int argc, char **argv) {
                             notice = "\u8BBE\u7F6E\u5168\u5C40\u97F3\u8D28\u5931\u8D25";  /* 设置全局音质失败 */
                         }
                         state.set_action_sheet(false, 0);
-                        StateStore::instance().set_app_notice(notice);
+                        StateStore::instance().set_app_notice(notice, 1);
                         return true;
                     }
                 }
@@ -2058,7 +2071,7 @@ int run_app(int argc, char **argv) {
                             (as.action_sheet_quality_ok[qi] == -2 ||
                              as.action_sheet_quality_ok[qi] == -1)) {
                             StateStore::instance().set_app_notice(
-                                "\u8BE5\u97F3\u8D28\u65E0\u6E90\u53EF\u7528");  /* 该音质无源可用 */
+                                "\u8BE5\u97F3\u8D28\u65E0\u6E90\u53EF\u7528", 3);  /* 该音质无源可用 */
                             return true;
                         }
                         /* the picker's target song is carried in
@@ -2081,7 +2094,7 @@ int run_app(int argc, char **argv) {
                            this song is the one currently playing */
                         quality_changed_refresh(qid.c_str());
                         state.set_action_sheet(false, 0);
-                        StateStore::instance().set_app_notice(notice);
+                        StateStore::instance().set_app_notice(notice, 1);
                         return true;
                     }
                     if (as.action_sheet_menu == 4) {
@@ -2122,12 +2135,12 @@ int run_app(int argc, char **argv) {
                             int qs = as.action_sheet_quality_ok[qi];
                             if (qs == 2) {
                                 StateStore::instance().set_app_notice(
-                                    "\u8BE5\u97F3\u8D28\u4E0D\u53EF\u4E0B\u8F7D");  /* 该音质不可下载 */
+                                    "\u8BE5\u97F3\u8D28\u4E0D\u53EF\u4E0B\u8F7D", 3);  /* 该音质不可下载 */
                                 return true;
                             }
                             if (qs == 0) {  /* legacy gated marker — defensive */
                                 StateStore::instance().set_app_notice(
-                                    "\u8BE5\u97F3\u8D28\u4E0D\u53EF\u4E0B\u8F7D");  /* 该音质不可下载 */
+                                    "\u8BE5\u97F3\u8D28\u4E0D\u53EF\u4E0B\u8F7D", 3);  /* 该音质不可下载 */
                                 return true;
                             }
                         }

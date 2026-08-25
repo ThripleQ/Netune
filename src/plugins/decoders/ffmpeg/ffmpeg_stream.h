@@ -77,16 +77,23 @@ const char *ffstream_media_ext(const FFStream *s);
 int ffstream_growing(const FFStream *s);
 
 /* Seconds of audio currently available in a growing stream (derived from
-   the on-disk size and bitrate), or -1 when not growing / unknown. Seeks
-   on a growing stream are clamped to this value by growing_seek, so the
-   caller can clamp the UI seek target to it to keep progress in sync. */
-int ffstream_growing_avail_sec(const FFStream *s);
+   the on-disk size and the caller-provided bitrate), or -1 when not
+   growing / unknown. Seeks on a growing stream are clamped to this value
+   by growing_seek, so the caller can clamp the UI seek target to it to
+   keep progress in sync. */
+int ffstream_growing_avail_sec(const FFStream *s, long bitrate);
 
 /* Average bitrate of the opened stream (bits/sec), or 0 if unknown.
    For a growing file this is the probe-time estimate — the caller can
    combine it with the current on-disk size to track the real duration as
    the download progresses. */
 long ffstream_bitrate(const FFStream *s);
+
+/* Growing-file only: the byte position the decoder has consumed so far
+   (read cursor of the local grow file). Lets the caller compute a measured
+   average bitrate (bytes consumed / playtime) that avoids the unreliable
+   probe-time estimate. Returns 0 when not growing / unknown. */
+int64_t ffstream_growing_bytes_read(const FFStream *s);
 
 /* Close and free. */
 void ffstream_close(FFStream *s);

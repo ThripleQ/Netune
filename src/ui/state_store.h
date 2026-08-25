@@ -76,6 +76,9 @@ struct AppState {
     /* effective quality tag for the now-playing netease track (resolved at
        track-change time; empty = unknown). Shown by status_bar. */
     std::string   current_quality;
+    /* average bitrate (bits/sec) of the now-playing track, fed from the
+       playback thread via EV_PROGRESS_UPDATE; 0 = unknown. */
+    long          current_bitrate = 0;
     double        progress = 0.0;
     int           current_time_sec = 0;
     int           current_time_ms  = 0;  /* ms precision for lyrics/karaoke */
@@ -184,6 +187,7 @@ struct AppState {
 
     /* transient one-line notice (download results etc.) */
     std::string app_notice;      /* empty = none */
+    int         app_notice_kind = 0; /* 0=info/dim 1=success 2=error 3=warning */
     long        app_notice_ts = 0; /* unix seconds when set (auto-clear) */
 
     /* spectrum */
@@ -251,6 +255,7 @@ public:
     void set_playback_state(PlaybackState s);
     void set_current_song(const SongInfo &song);
     void set_current_quality(const std::string &lvl);
+    void set_current_bitrate(long bps);
     void set_progress(double pos, int cur_sec, int total_sec);
     void set_progress_ms(double pos, int cur_ms, int total_sec);
     void set_seek_indicator(int delta);
@@ -284,7 +289,7 @@ public:
     void set_login_deadline(long unix_ts);
     void set_login_net_error(int on);
     void set_qr_gfx_ready(int ready);
-    void set_app_notice(const std::string &msg);
+    void set_app_notice(const std::string &msg, int kind = 0);
 
     /* playback queue */
     /* snapshot current playlist into the playback queue (call when a song

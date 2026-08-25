@@ -3,10 +3,12 @@
 #include "compat/utf8.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include <sys/stat.h>
 #include <libavcodec/version.h>
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
+#include <libavutil/log.h>
 #include <libavutil/dict.h>
 #include <libswresample/swresample.h>
 
@@ -52,6 +54,16 @@ struct FFStream {
 };
 
 static void prefetch_clear(FFStream *s);   /* defined below, used by tee_seek */
+
+/* Route FFmpeg's error diagnostics into Netune's log (stderr is captured
+   by the TUI and unreadable). Only ERROR/WARNING are forwarded. */
+static void ffmpeg_log_cb(void *avcl, int level, const char *fmt, va_list vl) {
+    (void)avcl;
+    if (level > AV_LOG_WARNING) return;
+    char msg[512];
+    vsnprintf(msg, sizeof msg, fmt, vl);
+    LOG_ERROR("libav: %s", msg);
+}
 
 /* ── Recorder (raw-stream tee) ─────────────────────── */
 static int tee_read(void *opaque, uint8_t *buf, int buf_size) {
@@ -336,6 +348,7 @@ fail:
 FFStream* ffstream_open_partial(const char *url, const char *prefix_path,
                                 int *sr, int *ch, int *dur) {
     av_log_set_level(AV_LOG_ERROR);
+    av_log_set_callback(ffmpeg_log_cb);
     FFStream *s = calloc(1, sizeof(FFStream));
     if (!s) return NULL;
 
@@ -635,13 +648,12 @@ int ffstream_growing(const FFStream *s) {
     return s && s->growing;
 }
 
-int ffstream_growing_avail_sec(const FFStream *s) {
+int ffstream_growing_avail_sec(const FFStream *s, long bitrate) {
     if (!s || !s->growing || !s->grow_path) return -1;
-    long br = ffstream_bitrate(s);
-    if (br <= 0) return -1;
+    if (bitrate <= 0) return -1;
     struct stat st;
     if (stat_utf8(s->grow_path, &st) != 0 || st.st_size <= 0) return -1;
-    return (int)((int64_t)st.st_size * 8 / br);
+    return (int)((int64_t)st.st_size * 8 / bitrate);
 }
 
 long ffstream_bitrate(const FFStream *s) {
@@ -652,6 +664,17 @@ long ffstream_bitrate(const FFStream *s) {
        prefix is tiny, so it is wildly wrong (e.g. ~3.2k). */
     if (s->codec && s->codec->bit_rate > 0) return s->codec->bit_rate;
     return s->fmt->bit_rate;
+}
+
+/* For a growing (still-downloading) file, return the byte position the
+   decoder has consumed so far (the read cursor of the local grow file),
+   so the caller can derive a MEASURED average bitrate (bytes / playtime)
+   that does not depend on the probe-time estimate. Returns 0 when not in
+   growing mode or the position is unknown. */
+int64_t ffstream_growing_bytes_read(const FFStream *s) {
+    if (!s || !s->growing || !s->grow_file) return 0;
+    long pos = ftell(s->grow_file);
+    return pos > 0 ? (int64_t)pos : 0;
 }
 
 void ffstream_close(FFStream *s) {

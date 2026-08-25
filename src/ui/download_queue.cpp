@@ -10,6 +10,7 @@ extern "C" {
 #include "ui/state_store.h"
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 
 #ifdef _WIN32
 #define DL_PATH_SEP "\\"
@@ -158,14 +159,20 @@ void DownloadQueue::worker_loop() {
             if (used_lvl[0]) msg += " (" + std::string(used_lvl) + ")";
             /* result notice rides the same update event; the main-thread
                bridge sets app_notice (StateStore is not thread-safe). */
-            event_bus_publish(EV_DOWNLOAD_UPDATE, (void*)msg.c_str(),
-                              msg.size() + 1);
+            DlNoticePayload pl;
+            memset(&pl, 0, sizeof pl);
+            strncpy(pl.msg, msg.c_str(), sizeof(pl.msg) - 1);
+            pl.kind = 1;  /* success */
+            event_bus_publish(EV_DOWNLOAD_UPDATE, &pl, sizeof pl);
             free(path);
         } else {
             LOG_WARN("DOWNLOAD failed: %s", cur_id.c_str());
             std::string msg = "\u4E0B\u8F7D\u5931\u8D25: " + cur.title; /* 下载失败: */
-            event_bus_publish(EV_DOWNLOAD_UPDATE, (void*)msg.c_str(),
-                              msg.size() + 1);
+            DlNoticePayload pl;
+            memset(&pl, 0, sizeof pl);
+            strncpy(pl.msg, msg.c_str(), sizeof(pl.msg) - 1);
+            pl.kind = 2;  /* error */
+            event_bus_publish(EV_DOWNLOAD_UPDATE, &pl, sizeof pl);
         }
 
         /* Re-acquire the lock before the next iteration. The loop body

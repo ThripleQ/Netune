@@ -231,8 +231,13 @@ static void audio_teardown(AudioOutput *audio) {
 static void cache_keep_partial(FFStream *ffstream) {
     if (!ffstream || !g_rec_active) return;
     /* growing-file mode: stop the downloader and keep the .part as a
-       partial cache entry (rename .part → final) */
+       partial cache entry (rename .part → final). If the downloader had
+       already finished writing the whole file, mark it complete so the
+       next play hits the local file directly instead of failing a
+       byte-range continuation on an already-complete file. */
     if (g_downloader) {
+        int done_clean = stream_downloader_done(g_downloader) &&
+                         !stream_downloader_failed(g_downloader);
         stream_downloader_destroy(g_downloader);
         g_downloader = NULL;
         if (g_part_path) {
@@ -243,7 +248,7 @@ static void cache_keep_partial(FFStream *ffstream) {
                 if (final) {
                     if (rename_utf8(g_part_path, final) == 0)
                         audio_cache_commit(g_rec_song, final,
-                                           g_rec_level, 0);  /* partial */
+                                           g_rec_level, done_clean);
                     free(final);
                 }
             } else {
@@ -396,6 +401,25 @@ static int open_stream(const char *path,
                                                   &dur_sec);
                 if (!*ffstream) {
                     LOG_WARN("FFmpeg partial stream open failed %s", path);
+                    /* the cache file may actually be complete (downloaded to
+                       the end but marked partial because playback stopped
+                       before EOF) — play it as a plain local file instead of
+                       failing the track */
+                    *decoder = decoder_open(cache_path);
+                    if (*decoder) {
+                        DecoderInfo info;
+                        decoder_get_info(*decoder, &info);
+                        *samplerate   = info.sample_rate;
+                        *channels     = info.channels;
+                        *total_frames = info.total_frames;
+                        audio_cache_touch(path);
+                        LOG_WARN("Falling back to local decode of cached %s",
+                                 cache_path);
+                        free(level);
+                        return 0;
+                    }
+                    LOG_ERROR("Cached file not playable locally either: %s",
+                              cache_path);
                     free(level);
                     return -1;
                 }
@@ -500,6 +524,28 @@ static int open_stream(const char *path,
     return 0;
 }
 
+/* Effective bitrate (bits/sec) for the current stream, computed ONCE per
+   call site and shared by everything that needs it:
+   - the progress event's bitrate tag (status bar),
+   - the growing-file total-length correction,
+   - the growing seek clamp.
+   Declared bitrate (codec/container metadata) is preferred; for a growing
+   stream with none, it is MEASURED from what has actually been consumed so
+   far (bytes read / playtime), because the probe-time estimate on a tiny
+   prefix is wildly wrong. Returns 0 when unknown. */
+static long effective_bitrate(FFStream *ffstream, int64_t current_frame,
+                              int samplerate) {
+    if (!ffstream) return 0;
+    long br = ffstream_bitrate(ffstream);
+    if (br > 0) return br;
+    if (!ffstream_growing(ffstream)) return 0;
+    int64_t read_b = ffstream_growing_bytes_read(ffstream);
+    int played_sec = samplerate > 0 ? (int)(current_frame / samplerate) : 0;
+    if (read_b > 0 && played_sec > 0)
+        return (long)(read_b * 8 / played_sec);
+    return 0;
+}
+
 /* Apply a seek (seconds) to the current stream, updating current_frame. */
 static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
                     int total_frames, int seek_sec, int *current_frame) {
@@ -512,7 +558,8 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
        downloaded seconds first, or the read side blocks at the watermark
        while the UI reports the (unreachable) requested position. */
     if (ffstream && ffstream_growing(ffstream)) {
-        int avail = ffstream_growing_avail_sec(ffstream);
+        long br = effective_bitrate(ffstream, *current_frame, samplerate);
+        int avail = ffstream_growing_avail_sec(ffstream, br);
         if (avail >= 0 && seek_sec > avail) {
             LOG_WARN("Seek %ds clamped to downloaded %ds", seek_sec, avail);
             target = avail * samplerate;
@@ -880,28 +927,34 @@ static void* playback_thread(void *arg) {
             int64_t now_ms = (int64_t)current_frame * 1000 / samplerate;
             if (now_ms - last_progress_ms >= PROGRESS_INTERVAL_MS) {
                 last_progress_ms = now_ms;
+                long br = effective_bitrate(ffstream, current_frame,
+                                            samplerate);
                 /* Growing-file mode: the probe-time duration was estimated
                    from the partially downloaded file and is shorter than the
                    real track. Track the true length from (on-disk size /
-                   bitrate) so the progress bar and seek bounds grow with the
-                   download instead of overflowing at a wrong end. */
+                   the effective bitrate — declared, or measured for streams
+                   without one) so the progress bar and seek bounds grow with
+                   the download instead of overflowing at a wrong end. */
                 if (ffstream && g_downloader &&
-                    ffstream_growing(ffstream) && g_part_path) {
-                    long br = ffstream_bitrate(ffstream);
+                    ffstream_growing(ffstream) && g_part_path && br > 0) {
                     struct stat st;
-                    if (br > 0 && stat_utf8(g_part_path, &st) == 0 &&
-                        st.st_size > 0) {
+                    if (stat_utf8(g_part_path, &st) == 0 && st.st_size > 0) {
                         int64_t frames = (int64_t)st.st_size * 8 * samplerate
                                          / br;
                         if (frames > total_frames)
                             total_frames = (int)frames;
                     }
                 }
-                /* Send exact frames for smooth progress bar */
-                int progress_data[3] = {
+                /* Send exact frames for smooth progress bar. The 4th slot
+                   carries the stream's average bitrate (bits/sec; 0 when
+                   unknown, e.g. local files decoded without ffstream) so the
+                   UI can show it on the status bar — the same effective
+                   bitrate shared with the growing correction above. */
+                int progress_data[4] = {
                     current_frame,          /* exact frame position */
                     total_frames,           /* total frames          */
-                    samplerate              /* for time calculation  */
+                    samplerate,             /* for time calculation  */
+                    (int)(br > 0 ? br : 0)  /* bitrate bits/sec       */
                 };
                 event_bus_publish(EV_PROGRESS_UPDATE,
                                   progress_data, sizeof(progress_data));

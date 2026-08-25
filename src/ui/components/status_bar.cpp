@@ -103,30 +103,49 @@ Element render_status_bar(const AppState &s) {
 
     /* info + title on one line; gauge on the next */
 
+    /* Bitrate tag (bits/sec → " [128k]" / " [1.77M]"), shown with the
+       quality tag on the right side of the status line. */
+    std::string br_str;
+    if (s.current_bitrate > 0) {
+        char bbuf[24];
+        if (s.current_bitrate >= 1000000)
+            snprintf(bbuf, sizeof bbuf, " [%.2fM]", s.current_bitrate / 1000000.0);
+        else
+            snprintf(bbuf, sizeof bbuf, " [%ldk]", s.current_bitrate / 1000);
+        br_str = bbuf;
+    }
+
+    /* Left block: state + loop + time + volume (fixed). Right side carries
+       the quality/bitrate tags and the song title (marquee when long). */
     std::string top_line;
     if (song_row.empty()) {
-        snprintf(buf, sizeof buf, " %s%s %s  %s  V:%d",
-                 state_str.c_str(), qual.c_str(), loop_str, time_str.c_str(), s.volume);
+        snprintf(buf, sizeof buf, " %s  %s  %s  V:%d",
+                 state_str.c_str(), loop_str, time_str.c_str(), s.volume);
         top_line = buf;
     } else {
-        snprintf(buf, sizeof buf, " %s%s %s  %s  V:%d  ",
-                 state_str.c_str(), qual.c_str(), loop_str, time_str.c_str(), s.volume);
+        snprintf(buf, sizeof buf, " %s  %s  %s  V:%d",
+                 state_str.c_str(), loop_str, time_str.c_str(), s.volume);
         top_line = buf;
         int prefix_w = string_width(top_line);
+        std::string right = qual + br_str + std::string("  ") + song_row;
         int avail = s.top_row_width - 1 - prefix_w;   /* one column margin */
-        int song_w = string_width(song_row);
-        if (song_w <= avail) {
-            /* fits — show the full title */
-            top_line += song_row;
+        int right_w = string_width(right);
+        if (right_w <= avail) {
+            /* fits — show the full right block */
+            top_line += right;
         } else {
-            /* too long — marquee: scroll 1 column per 4 frames, looping
-               with a small gap so the title re-enters from the right */
+            /* too long — marquee the song title (kept after the fixed
+               quality/bitrate tags) */
             const int GAP = 4;
             static int s_tick = 0;
             s_tick++;
+            std::string fixed = qual + br_str + std::string("  ");
             std::string loop_row = song_row + std::string(GAP, ' ');
+            int song_w = string_width(song_row);
+            int avail_title = avail - string_width(fixed);
+            if (avail_title <= 0) avail_title = 1;
             int off = (s_tick / 4) % (song_w + GAP);
-            top_line += window_at(loop_row, off, avail);
+            top_line += fixed + window_at(loop_row, off, avail_title);
         }
     }
 

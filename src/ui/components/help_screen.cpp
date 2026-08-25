@@ -57,17 +57,18 @@ static const ThemeSlotInfo kSlots[] = {
     {"正文文字",   "fg",             &Theme::fg},
     {"强调 / 标题", "accent",         &Theme::accent},
     {"选中行背景",  "accent_bg",      &Theme::accent_bg},
-    {"次要文字",   "muted",          &Theme::muted},
     {"边框",      "border",          &Theme::border},
     {"成功提示",   "success",        &Theme::success},
     {"警告色",    "warning",         &Theme::warning},
     {"错误提示",   "error",          &Theme::error},
     {"弹窗背景",   "overlay_bg",     &Theme::overlay_bg},
+    {"小窗边框",   "popup_border",   &Theme::popup_border},
     {"进度条轨道",  "progress_track", &Theme::progress_track},
     {"频谱",      "spectrum",        &Theme::spectrum},
     {"VIP 标记",  "vip",             &Theme::vip},
     {"歌单标记",   "playlist",        &Theme::playlist},
     {"网易云Logo", "logo",            &Theme::logo},
+    {"艺人名字",   "artist",          &Theme::artist},
 };
 
 /* ── Key name display (raw config strings → pretty names) ── */
@@ -165,7 +166,7 @@ Element render_help_screen(const AppState &s, const KeybindingManager &kb) {
     auto content = vbox(Elements{
         filler(),
         theme_accent(text(" Help ") | bold),
-        theme_border(body | border),
+        theme_popup_border(body | border),
         text(" 按 ? 或 Esc 关闭 ") | dim | center,
         filler(),
     });

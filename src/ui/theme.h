@@ -25,7 +25,6 @@ struct Theme {
     /* Extended semantic colors (optional, derived if unset) */
     ThemeColor progress_track;/* progress bar unfilled track */
     ThemeColor accent_bg;     /* selection background       */
-    ThemeColor muted;         /* dimmed/secondary text      */
     ThemeColor border;        /* border / divider lines     */
     ThemeColor success;       /* success / online indicator */
     ThemeColor warning;       /* warning / VIP badge        */
@@ -35,6 +34,7 @@ struct Theme {
     ThemeColor playlist;      /* playlist (▣) marker color  */
     ThemeColor logo;          /* netease logo watermark     */
     ThemeColor overlay_bg;    /* overlay/popup background   */
+    ThemeColor popup_border;  /* popup/action-sheet border  */
     ThemeColor spectrum;      /* spectrum visualization     */
     ThemeColor artist;        /* artist/secondary text color */
 };

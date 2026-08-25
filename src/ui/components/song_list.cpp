@@ -147,9 +147,13 @@ Element render_song_list(const AppState &s) {
                 if (song.title) content += song.title;
                 if (song.artist) content += std::string(" — ") + song.artist;
                 std::string row = build_info_row(content, avail_w, sel);
-                if (sel)
-                    els.push_back(theme_selection(text("> " + row) | focus));
-                else
+                if (sel) {
+                    if (s.action_sheet_open)
+                        els.push_back(hbox({theme_sel_marker(false, song.fee == 1),
+                                            theme_fg(text(row))}) | focus);
+                    else
+                        els.push_back(theme_selection(text("> " + row) | focus));
+                } else
                     els.push_back(theme_fg(text("  " + row)));
                 shown++;
             }
@@ -173,9 +177,13 @@ Element render_song_list(const AppState &s) {
                 if (song.title) label += prefix + song.title;
                 if (song.artist) { label += " \u2014 "; label += song.artist; }
                 label = fit_text(label, avail_w);
-                if (selected)
-                    els.push_back(theme_selection(text("> " + label) | focus));
-                else
+                if (selected) {
+                    if (s.action_sheet_open)
+                        els.push_back(hbox({theme_sel_marker(false, song.fee == 1),
+                                            theme_fg(text(label))}) | focus);
+                    else
+                        els.push_back(theme_selection(text("> " + label) | focus));
+                } else
                     els.push_back(theme_fg(text("  " + label)));
                 shown++;
             }
@@ -268,13 +276,15 @@ Element render_song_list(const AppState &s) {
             std::string tail = is_pl ? " \u6B4C\u5355" : (is_vip ? " VIP" : "");
 
             Element line = theme_fg(text(title));
+            int line_w = avail_w;
+            if (s.action_sheet_open) line_w -= 2;  /* "> " marker block width */
             bool scroll = (s.active_panel == 1 && sel && !s.top_search_active);
             if (scroll) {
                 std::string content = title;
                 if (song.artist && song.artist[0])
                     content += std::string(" \u2014 ") + song.artist;
                 content += tail;
-                line = text(build_info_row(content, avail_w, true));
+                line = text(build_info_row(content, line_w, true));
             } else {
                 if (song.artist && song.artist[0])
                     line = hbox({line, text(" \u2014 ") | theme_fg,
@@ -286,23 +296,36 @@ Element render_song_list(const AppState &s) {
 
             bool active_sel = (sel && s.active_panel == 1 && !s.top_search_active);
             std::string pad = active_sel ? "> " : "  ";
-            const auto &th = ThemeManager::instance().current();
-            if (active_sel) {
+            if (active_sel && s.action_sheet_open) {
+                /* A modal is open on top: keep the selection marker but
+                   collapse it to a small colour block at the ">" position
+                   instead of a full-row background — the full-row highlight
+                   would bleed into the popup's area through dbox's
+                   background blending. The block keeps the row's dedicated
+                   colour (playlist / VIP) when the theme defines one. */
+                els.push_back(hbox({theme_sel_marker(is_pl, is_vip), line}) | focus);
+            } else if (active_sel) {
                 /* selected: full marker background accent, or the
-                   generic selection color for plain rows */
+                   generic selection color for plain rows. The text color
+                   is the inverse of the row background so it stays
+                   readable on the highlight. */
                 if (is_pl) {
+                    const auto &th = ThemeManager::instance().current();
                     line = theme_playlist_sel_bg(line);
-                    line = line | color(Color::RGB(th.bg.r, th.bg.g, th.bg.b));
+                    line = line | color(theme_selection_text(
+                        th.playlist.has_color ? th.playlist : th.accent));
                 } else if (is_vip) {
+                    const auto &th = ThemeManager::instance().current();
                     line = theme_vip_sel_bg(line);
-                    line = line | color(Color::RGB(th.bg.r, th.bg.g, th.bg.b));
+                    line = line | color(theme_selection_text(
+                        th.vip.has_color ? th.vip : th.warning));
                 } else {
-                    Color sel_bg = th.accent_bg.has_color
-                        ? Color::RGB(th.accent_bg.r, th.accent_bg.g, th.accent_bg.b)
-                        : (th.accent.has_color
-                           ? Color::RGB(th.accent.r, th.accent.g, th.accent.b)
-                           : Color::RGB(80, 80, 80));
-                    line = line | bgcolor(sel_bg);
+                    const auto &th = ThemeManager::instance().current();
+                    ThemeColor bg = th.accent_bg.has_color ? th.accent_bg
+                                  : (th.accent.has_color ? th.accent
+                                                         : ThemeColor{80, 80, 80, true});
+                    line = line | color(theme_selection_text(bg));
+                    line = line | bgcolor(Color::RGB(bg.r, bg.g, bg.b));
                 }
                 els.push_back(hbox({text(pad) | bold, line}) | focus);
             } else if (sel) {

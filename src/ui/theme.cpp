@@ -101,10 +101,6 @@ void ThemeManager::derive_colors() {
     if (!theme_.accent_bg.has_color && theme_.accent.has_color)
         theme_.accent_bg = theme_.accent;
 
-    /* muted: dimmed foreground (60% fg + 40% bg) */
-    if (!theme_.muted.has_color && theme_.fg.has_color && theme_.bg.has_color)
-        theme_.muted = blend(theme_.fg, theme_.bg, 0.45f);
-
     /* border: darkened background or mid-tone */
     if (!theme_.border.has_color && theme_.bg.has_color)
         theme_.border = lighten(theme_.bg, 0.12f);
@@ -137,9 +133,9 @@ void ThemeManager::derive_colors() {
     if (!theme_.logo.has_color && theme_.accent.has_color)
         theme_.logo = theme_.accent;
 
-    /* overlay_bg: slightly lighter than bg */
-    if (!theme_.overlay_bg.has_color && theme_.bg.has_color)
-        theme_.overlay_bg = lighten(theme_.bg, 0.06f);
+    /* NOTE: overlay_bg is intentionally NOT auto-derived. Its absence or
+       explicit "none" means a transparent popup background (the terminal's
+       own background shows through). See theme_overlay_bg(). */
 
     /* progress_track: lighter version of accent */
     if (!theme_.progress_track.has_color && theme_.accent.has_color)
@@ -149,9 +145,14 @@ void ThemeManager::derive_colors() {
     if (!theme_.spectrum.has_color && theme_.accent.has_color)
         theme_.spectrum = theme_.accent;
 
-    /* artist: differentiated secondary text, defaults to muted */
-    if (!theme_.artist.has_color && theme_.muted.has_color)
-        theme_.artist = theme_.muted;
+    /* artist: differentiated secondary text; kept independent — no
+       derivation, so it never silently follows another slot */
+    if (!theme_.artist.has_color)
+        theme_.artist = theme_.fg;
+
+    /* popup_border: popup/action-sheet border, defaults to border */
+    if (!theme_.popup_border.has_color && theme_.border.has_color)
+        theme_.popup_border = theme_.border;
 }
 
 /* Resolve a theme name to a file path.
@@ -199,8 +200,9 @@ bool ThemeManager::load(const std::string &yaml_path) {
 
         bool in_colors = false;
         std::string hex_bg, hex_fg, hex_accent;
-        std::string hex_accent_bg, hex_muted, hex_border;
+        std::string hex_accent_bg, hex_border;
         std::string hex_success, hex_warning, hex_error, hex_overlay_bg, hex_spectrum;
+        std::string hex_popup_border;
         std::string hex_vip, hex_svip, hex_playlist, hex_logo;
         std::string hex_progress_track;
         std::string hex_artist;
@@ -221,12 +223,12 @@ bool ThemeManager::load(const std::string &yaml_path) {
                         else if (current_field == "fg")          hex_fg          = val;
                         else if (current_field == "accent")      hex_accent      = val;
                         else if (current_field == "accent_bg")   hex_accent_bg   = val;
-                        else if (current_field == "muted")       hex_muted       = val;
                         else if (current_field == "border")      hex_border      = val;
                         else if (current_field == "success")     hex_success     = val;
                         else if (current_field == "warning")     hex_warning     = val;
                         else if (current_field == "error")       hex_error       = val;
                         else if (current_field == "overlay_bg")  hex_overlay_bg  = val;
+                        else if (current_field == "popup_border") hex_popup_border = val;
                         else if (current_field == "progress_track") hex_progress_track = val;
                         else if (current_field == "spectrum")    hex_spectrum    = val;
                         else if (current_field == "vip")         hex_vip         = val;
@@ -256,12 +258,12 @@ bool ThemeManager::load(const std::string &yaml_path) {
         if (!hex_accent.empty())      theme_.accent      = theme_color_from_hex(hex_accent);
         /* Apply extended colors (if specified) */
         if (!hex_accent_bg.empty())   theme_.accent_bg   = theme_color_from_hex(hex_accent_bg);
-        if (!hex_muted.empty())       theme_.muted       = theme_color_from_hex(hex_muted);
         if (!hex_border.empty())      theme_.border      = theme_color_from_hex(hex_border);
         if (!hex_success.empty())     theme_.success     = theme_color_from_hex(hex_success);
         if (!hex_warning.empty())     theme_.warning     = theme_color_from_hex(hex_warning);
         if (!hex_error.empty())       theme_.error       = theme_color_from_hex(hex_error);
         if (!hex_overlay_bg.empty())  theme_.overlay_bg  = theme_color_from_hex(hex_overlay_bg);
+        if (!hex_popup_border.empty()) theme_.popup_border = theme_color_from_hex(hex_popup_border);
         if (!hex_progress_track.empty()) theme_.progress_track = theme_color_from_hex(hex_progress_track);
         if (!hex_spectrum.empty())    theme_.spectrum    = theme_color_from_hex(hex_spectrum);
         if (!hex_vip.empty())         theme_.vip         = theme_color_from_hex(hex_vip);
@@ -283,10 +285,10 @@ bool ThemeManager::load(const std::string &yaml_path) {
             derive_colors();
         }
 
-        LOG_INFO("Theme loaded: '%s'  bg=%s fg=%s accent=%s accent_bg=%s muted=%s border=%s progress_track=%s",
+        LOG_INFO("Theme loaded: '%s'  bg=%s fg=%s accent=%s accent_bg=%s border=%s progress_track=%s",
                  theme_.name.c_str(),
                  hex_bg.c_str(), hex_fg.c_str(), hex_accent.c_str(),
-                 hex_accent_bg.c_str(), hex_muted.c_str(), hex_border.c_str(),
+                 hex_accent_bg.c_str(), hex_border.c_str(),
                  hex_progress_track.c_str());
         return true;
     }

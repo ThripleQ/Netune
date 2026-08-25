@@ -76,7 +76,6 @@ static const char *DEFAULT_THEME_DEFAULT_YAML =
     "  fg: \"#c0caf5\"\n"
     "  accent: \"#7aa2f7\"\n"
     "  accent_bg: \"#33467c\"\n"
-    "  muted: \"#565f89\"\n"
     "  border: \"#292e42\"\n"
     "  success: \"#9ece6a\"\n"
     "  warning: \"#e0af68\"\n"
