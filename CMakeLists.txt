@@ -350,6 +350,7 @@ endif()
 
 set(ALL_SOURCES
   src/app.cpp
+  src/app_bootstrap.cpp
   src/main.cpp
   src/netune_config.cpp
   ${CORE_SOURCES}

@@ -1,4 +1,5 @@
 ﻿#include "app.h"
+#include "app_bootstrap.h"
 /* FTXUI v6.0.0 headers rely on these but don't include them explicitly */
 #include <mutex>
 #include <condition_variable>
@@ -1556,53 +1557,12 @@ int run_app(int argc, char **argv) {
         return 0;
     }
 
-    /* ── Log ────────────────────────────────────────── */
-    const char *log_path = netune_xdg_dir("XDG_CACHE_HOME", "netune.log");
-    netune_ensure_dir(log_path);
-    log_init(log_path);
-    LOG_INFO("Netune v2.0.0 starting");
-
-    /* Probe terminal cell size (before FTXUI takes over the terminal)
-       so the character cover renderer can keep aspect ratio on any font */
-    cover_cell_probe();
-
-    /* ── Ensure default data tree exists (XDG_CONFIG_HOME/netune/data/) ── */
-    /* Rebuilds config.json / themes / layouts / keybindings if missing.
-       No scanning, no fallback lookups elsewhere. */
-    netune_ensure_default_data_tree();
-
-    /* ── Config (under data/) ── */
-    char cfg_buf[2048];
-    snprintf(cfg_buf, sizeof(cfg_buf), "%s" PATH_SEP "config.json", netune_data_root());
-    Config *cfg = config_load(cfg_buf);
-    if (!cfg) LOG_WARN("No config loaded, using defaults");
-    config_set_global(cfg);
-
-    /* Backfill missing core sections (older configs / partial writes):
-       without music_sources the local source silently disables itself. */
-    if (cfg && !config_has(cfg, "music_sources")) {
-        LOG_WARN("config.json missing 'music_sources' — backfilling defaults");
-        config_set_str(cfg, "music_sources.local.enabled", "true");
-        config_set_str(cfg, "music_sources.netease.enabled", "true");
-        config_save(cfg);
-    }
-
-    /* ── Cache (XDG_CACHE_HOME) ─────────────────────── */
-    const char *cache_dir = netune_xdg_dir("XDG_CACHE_HOME", NULL);
-    netune_ensure_dir(cache_dir);
-    mkdir_utf8(cache_dir);
-    cache_init(cache_dir);
-    search_manager_init();
-
-    event_bus_init();
-
-    g_thread_pool = threadpool_create(8);
-    if (!g_thread_pool) LOG_WARN("Failed to create thread pool, cover art will not load");
-
-    DownloadQueue::instance().start();
+    /* One-time startup wiring (log / config / cache / event bus /
+       thread pool / download queue) lives in app_bootstrap. */
+    Config *cfg = app_bootstrap(&g_thread_pool);
 
     /* Default templates for themes/keybindings/layouts are created by
-       ensure_default_data_tree() above — nothing else to do here. */
+       the bootstrap — nothing else to do here. */
 
         event_bus_subscribe(EV_PROGRESS_UPDATE,   ev_progress, NULL);
     event_bus_subscribe(EV_PLAYBACK_START,    ev_playback_start, NULL);
