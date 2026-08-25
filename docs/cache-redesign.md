@@ -1,7 +1,8 @@
 # 缓存系统架构改造设计：异步预下载 + 本地播放
 
-> 状态：待审阅（设计阶段，未实施）
-> 关联文档：`HANDOFF.md`（现有架构约定）、`README.md`
+> 状态：**M1 已实施**（2026-08-25，commit `26460ec` + `5936998`，beta 分支）
+> —— 下载线程 + 本地增长文件播放已落地，含加固修复；M2–M5 未实施。
+> 关联文档：`HANDOFF.md`（现有架构约定，2.4 不变量已按 M1 更新）、`README.md`
 > 目标分支：`beta`
 
 ## 1. 背景与动机
@@ -34,8 +35,9 @@
 | 模块 | 职责 |
 |---|---|
 | `src/core/audio_cache.c/.h` | 缓存索引（`audio_cache.json`）+ LRU 容量管理；key = `song_id@quality` |
-| `src/plugins/decoders/ffmpeg/ffmpeg_stream.c/.h` | 三种开流：`ffstream_open`（纯网络）、`ffstream_open_rec`（网络+录 `.part`）、`ffstream_open_partial`（前缀续播+Range 回填+512KB 预取） |
-| `src/core/playback_coordinator.c` | 命中决策（完整→本地解码 / 部分→续播 / 未命中→录制）；EOF 提交完整缓存；切歌转正部分缓存 |
+| `src/core/stream_downloader.c/.h` | **M1 已实施**：后台下载线程。libcurl 把 URL 流写入 `.part`（唯一写者），维护水位线（watermark）+ done/failed/stop 状态，`wait_watermark` 供播放线程阻塞同步。销毁时 `.part` 留在磁盘，由调用方决定提交/保留/删除。 |
+| `src/plugins/decoders/ffmpeg/ffmpeg_stream.c/.h` | 四种开流：`ffstream_open`（纯网络/本地）、`ffstream_open_rec`（网络+录 `.part`）、`ffstream_open_partial`（前缀续播+Range 回填+512KB 预取）、`ffstream_open_growing`（**M1 已实施**：本地增长文件，读端阻塞等待下载推进）。 |
+| `src/core/playback_coordinator.c` | 命中决策（完整→本地解码 / 部分→续播 / 未命中→启动下载器 + growing 播放）；EOF 提交完整缓存；切歌转正部分缓存。**M1 加固**：下载失败发 `EV_PLAYBACK_ERROR`；`total_frames` 随下载按 `(size×8/bitrate)` 刷新；`growing_seek` 超界 clamp 到水位。 |
 | `src/plugins/music_sources/netease/netease_quality.c` | 音质解析（override > 全局 > 源表验证 > 降级），决定缓存 tag 的 `quality` |
 
 ### 2.3 现有架构约定（HANDOFF.md）
@@ -93,7 +95,9 @@ int64_t stream_downloader_watermark(stream_downloader_t *d);
 int stream_downloader_wait_watermark(stream_downloader_t *d,
                                      int64_t target, int timeout_ms);
 
-/* 请求下载器跳到 offset 重新开始（seek 到未下载区间时使用）。 */
+/* 请求下载器跳到 offset 重新开始（seek 到未下载区间时使用）。
+   ⚠️ M1 未实现（见 4.3 现状）：下载器无 seek 协调，seek 由 growing_seek
+    clamp 到水位兜底。M2 落地本接口 + 截断重拉。 */
 int stream_downloader_seek(stream_downloader_t *d, int64_t offset);
 
 /* 停止工作线程并释放。 */
@@ -165,6 +169,7 @@ loop:
 - seek 到已下载区间是纯本地操作，零延迟。
 - seek 到未下载区间时，下载器丢弃已下载内容重新拉取（与现有"seek 到前缀外走网络"语义一致，但现在是下载线程在做，播放线程不阻塞在网络 IO 上）。
 - 下载器 seek 与播放线程读之间存在竞态：播放线程必须等待水位 >= target 才能读，由 `wait_watermark` 保证。
+- **M1 现状（已实施）**：`stream_downloader` 的 `seek_target` 尚未实现（M2 内容）。当前 seek 走 `growing_seek`：目标 clamp 到当前磁盘大小（水位），seek 超界落在水位处继续播放，下载线程继续顺序下载——不截断、不重拉。行为上"seek 到未下载区间 = 播到已下载末尾继续等"，可接受但非目标方案（目标见下文连续性取舍）。
 - **连续性取舍（已调研）**：seek 到未下载区间有两个选择——"截断重拉"（丢弃 seek 点前缓存、从新起点连续写）与"多段缓存"（保留多段、文件中间出现空洞）。调研结论：**多段缓存是主流播放器的成熟方案**。ExoPlayer（YouTube 的 Android 播放器）的 `CacheSpan` 就是多段缓存：缓存按段（offset+len）管理，seek 到未缓存区间返回一个 hole span（空洞），调用方持写锁从网络拉数据填洞、`commitFile` 提交、`releaseHoleSpan` 释放，支持并行写非重叠空洞。mpv（C 生态）走另一条路：换掉 FFmpeg I/O，用自定义 stream 层 + 内存环形缓冲（`demuxer-max-bytes`/`cache-secs`），seek 出缓冲即丢弃重拉。两者都验证了"自定义 AVIOContext 处理空洞/网络流"是 FFmpeg 官方标准做法（`avio_reading.c` 示例）。**本设计采用多段缓存作为目标方案**（借鉴 CacheSpan 设计），M1-M3 先落地"下载线程 + 本地播放 + 截断重拉"保证正确性，M5 升级为多段缓存；具体映射见 §4.6。
 
 ### 4.4 缓存提交与生命周期
@@ -225,8 +230,8 @@ loop:
 
 | 里程碑 | 内容 | 验收 |
 |---|---|---|
-| M1 | 下载线程 + 本地播放（未命中场景：下载器写 .part，播放线程读本地） | 新歌可播放，下载进度领先播放，网络抖动不卡播放 |
-| M2 | 部分缓存续传（下载器 Range 续传）+ seek 协调 | 部分缓存续播正常，seek 已下载区间零延迟，未下载区间等水位 |
+| M1 | 下载线程 + 本地播放（未命中场景：下载器写 .part，播放线程读本地） | ✅ **已实施**（`26460ec` + `5936998`）。新歌可播放，下载进度领先播放；下载失败发 `EV_PLAYBACK_ERROR` 而非静默结束；时长随下载刷新。**待手动验证**：真实网易云端到端（HANDOFF 2.6） |
+| M2 | 部分缓存续传（下载器 Range 续传）+ seek 协调 | 部分缓存续播正常，seek 已下载区间零延迟，未下载区间等水位。**现状**：seek 由 `growing_seek` clamp 到水位兜底（无截断重拉），下载器 Range 续传未做 |
 | M3 | 断网恢复（下载器重试/暂停，已下载部分续播） | 断网后已下载部分播完，恢复后继续下载 |
 | M4 | 退役 `ffstream_open_rec` / `ffstream_open_partial` 的录制/预取路径 | 旧路径无调用方，代码删除 |
 | M5 | 多段缓存（段索引 + 空洞写锁 + 自定义 AVIOContext） | seek 到未下载区间保留已有缓存，空洞由下载线程填洞，FFmpeg 正常解码 |
@@ -270,6 +275,10 @@ loop:
 ## 10. 待确认问题
 
 1. **预下载策略**：整曲下载，还是"领先播放 N 秒/固定水位差"？前者缓存完整度最高，后者省流量。建议默认整曲下载（与"缓存"目标一致），可配置领先阈值。
+   - **M1 决策**：整曲下载（下载线程持续到 EOF 置 done）。未做"领先 N 秒"可配置项。
 2. **并发下载上限**：当前 `DownloadQueue` 是串行。播放缓存下载器与用户主动下载是否共享带宽/并发限制？建议播放缓存下载器优先级最高。
+   - **M1 决策**：独立线程，不与 `DownloadQueue` 共享带宽/并发（职责分离，互不引用）。未做优先级调度。
 3. **缓存淘汰**：LRU 容量策略是否调整（下载器可能快速填满配额）？建议保持现有 LRU，但下载器写入时遵守配额。
+   - **M1 现状**：保持 LRU；下载器**未**在写入时检查配额（配额在 commit/转正时由 `audio_cache_commit` prune 执行）。若长播多首未命中歌曲，配额可能被瞬时突破，M2+ 评估。
 4. **m4a 缓存**：已修复的"完整缓存 m4a 回退 FFmpeg"路径在下载器模型下是否保留？建议保留（下载器也可能下到 m4a）。
+   - **M1 现状**：保留（完整缓存命中 → `decoder_open` 失败 → FFmpeg 回退路径不变）。

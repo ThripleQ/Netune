@@ -80,6 +80,12 @@ Netune 是一个终端音乐播放器：C11 + C++17，FTXUI 渲染 TUI，FFmpeg 
 ### 2.5 提交历史（beta，最新在顶）
 
 ```
+5936998 fix(cache): harden M1 growing-file playback
+        —— M1 加固：失败发 EV_PLAYBACK_ERROR / total_frames 随下载刷新 /
+           growing_seek 超界 clamp / wait 回调带 pos 精确等待 / 超时保护
+26460ec feat(cache): M1 background downloader + growing-file playback
+        —— M1：stream_downloader（libcurl 下载线程）+ ffstream_open_growing
+           （增长文件解码），下载/播放解耦；docs/cache-redesign.md 入库
 b843bfc feat(play): serve seeks inside partial cache from disk
 d71b155 feat(play): resume partial cache with network backfill
 b29ca14 feat(cache): track partial vs complete cache entries
@@ -92,6 +98,13 @@ b29ca14 feat(cache): track partial vs complete cache entries
 
 ### 2.6 待验证清单（建议接手后实测）
 
+> ⚠️ **`netune_test/` 未入库**（2026-08-25 核实）：以下历史验证记录提到的
+> `netune_test/`（`test_partial` / `test_stream` / `test_cache` / `test_grow`）
+> 在 beta 分支的 git 历史中从未提交过，源码包里也没有该目录。它曾是本地
+> 独立测试工程（详见 5.5 的本地构建故障记录）。接手者如需跑测试，需先
+> 从原作者处取得该目录（或重建等价测试）；M1 相关行为（增长文件解码、
+> wait 回调）目前无自动化回归，靠 2.6 的手动清单兜底。
+>
 > 2026-08-24 已用自动化测试（`netune_test/`，本地 Range HTTP 服务器 + `ffstream_open_partial` 直接解码）验证：
 > - 场景 A（完整续播）：部分缓存（262KB 前缀）+ 完整播放 → 回填后缓存文件与源文件**逐字节一致**（7056044B），无缝无空洞；
 > - 场景 B（seek 越界）：播 3s 后 seek 到缓存外 → 缓存文件冻结（seek 后不再增长），解码继续；
