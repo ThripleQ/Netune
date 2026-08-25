@@ -262,6 +262,7 @@ set(INFRA_SOURCES
   src/infra/path.c
   src/infra/ring_buffer.c
   src/infra/thread_pool.c
+  src/infra/defaults.cpp
 )
 
 set(PLUGIN_DECODER_SOURCES
