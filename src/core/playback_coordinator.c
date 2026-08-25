@@ -417,6 +417,8 @@ static int open_stream(const char *path,
             }
             LOG_INFO("Streaming netease (download+play): %s", path);
             char *part = audio_cache_part_path(path);
+            if (part)
+                audio_cache_ensure_dir();   /* .part lives in the cache dir */
             if (!part) {
                 /* caching disabled → plain network stream (no downloader) */
                 int dur_sec = 0;

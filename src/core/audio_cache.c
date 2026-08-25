@@ -214,6 +214,8 @@ int audio_cache_enabled(void) { return audio_enabled(); }
 
 const char *audio_cache_dir(void) { return audio_dir(); }
 
+void audio_cache_ensure_dir(void) { ensure_audio_dir(); }
+
 int audio_cache_find(const char *song_id, const char *quality,
                      char *path_out, size_t sz, int *complete) {
     if (!song_id || !*song_id || !path_out || sz == 0) return -1;

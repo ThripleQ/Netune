@@ -74,6 +74,8 @@ static void *dl_thread(void *arg) {
     FILE *fp = fopen_utf8(dl->part_path, "wb");
     if (!fp) {
         curl_easy_cleanup(h);
+        LOG_ERROR("stream_downloader: cannot open .part %s (cache dir missing?)",
+                  dl->part_path);
         pthread_mutex_lock(&dl->mutex);
         dl->failed = 1;
         pthread_cond_broadcast(&dl->cond);

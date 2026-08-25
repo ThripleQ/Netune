@@ -22,6 +22,11 @@ int  audio_cache_enabled(void);
 /* cache directory (static buffer; parent dir created lazily) */
 const char *audio_cache_dir(void);
 
+/* Create the cache directory if it does not exist yet (mkdir -p). The
+   stream downloader opens a .part file inside it, which fails if the
+   directory is missing — call this before writing a new cache file. */
+void audio_cache_ensure_dir(void);
+
 /* Find a finished cache entry for song_id@quality.
    0 = hit: path_out filled with the full file path, *complete set to
    1 when the file covers the whole track (play directly) or 0 when it is
