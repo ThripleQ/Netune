@@ -35,6 +35,22 @@ FFStream* ffstream_open_partial(const char *url, const char *prefix_path,
                                 int *sample_rate, int *channels,
                                 int *duration_sec);
 
+/* Wait callback for ffstream_open_growing: invoked when the local file is
+   exhausted but may still be growing (a background downloader is appending
+   to it). Returns 1 = more data may be available (retry the read),
+   0 = the stream is finished (EOF), -1 = error. */
+typedef int (*ffstream_wait_fn)(void *opaque);
+
+/* Open a local file that may still be growing (e.g. a .part being written
+   by a background downloader). Reads block via `wait` when the file is
+   exhausted until more data arrives or the stream finishes, so FFmpeg
+   never sees a spurious EOF mid-download. The file is read-only here; the
+   downloader is the sole writer. Returns NULL on failure. */
+FFStream* ffstream_open_growing(const char *path, ffstream_wait_fn wait,
+                                void *wait_opaque,
+                                int *sample_rate, int *channels,
+                                int *duration_sec);
+
 /* Decode up to max_frames of PCM S16. Returns actual frames decoded (0=EOF). */
 int ffstream_decode(FFStream *s, int16_t *pcm, int max_frames);
 

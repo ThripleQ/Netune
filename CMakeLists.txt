@@ -252,6 +252,7 @@ set(CORE_SOURCES
   src/core/search_manager.c
   src/core/spectrum.c
   src/core/term_gfx.c
+  src/core/stream_downloader.c
 )
 
 set(INFRA_SOURCES

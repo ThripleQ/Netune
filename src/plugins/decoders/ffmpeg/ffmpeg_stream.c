@@ -40,6 +40,15 @@ struct FFStream {
     uint8_t     *rec_prefetch;
     size_t       rec_prefetch_cap, rec_prefetch_len, rec_prefetch_pos;
     int64_t      rec_pos;        /* logical stream position (for SEEK_CUR) */
+    /* growing-file mode: a local file being appended by a background
+       downloader. The file is read-only here; reads block (via grow_wait)
+       when the file is exhausted until more data arrives or the stream
+       finishes, so FFmpeg never sees a spurious EOF mid-download. */
+    FILE        *grow_file;
+    char        *grow_path;
+    ffstream_wait_fn grow_wait;
+    void        *grow_opaque;
+    int          growing;
 };
 
 static void prefetch_clear(FFStream *s);   /* defined below, used by tee_seek */
@@ -109,13 +118,23 @@ static int64_t tee_seek(void *opaque, int64_t offset, int whence) {
     int64_t target = offset;
     if (whence == SEEK_CUR) target += s->rec_pos;
 
-    /* seek within the cached prefix → serve from disk (no network) */
-    if (s->rec_part_read && target <= s->rec_part_size) {
+    /* seek within the cached prefix → serve from disk (no network).
+       The prefix handle may already be closed (the prefix was exhausted
+       during playback) — re-open it so seeks back into the cached region
+       keep working instead of falling through to a negative network seek. */
+    if (target <= s->rec_part_size) {
+        if (!s->rec_part_read) {
+            s->rec_part_read = fopen_utf8(s->rec_path, "rb");
+            if (!s->rec_part_read) return -1;
+        }
         if (fseek(s->rec_part_read, (long)target, SEEK_SET) != 0)
             return -1;
         s->rec_part_pos = target;
         s->rec_pos = target;
-        prefetch_clear(s);   /* cached bytes no longer line up with target */
+        /* keep the prefetch chunk: it holds the bytes right after the
+           prefix, so it still lines up once playback reaches the prefix
+           end — and rec_inner has already advanced past it, so dropping
+           it here would orphan those bytes. */
         return target;
     }
     /* beyond the prefix → delegate to the source. A seek past the prefix
@@ -147,6 +166,15 @@ static int64_t tee_seek(void *opaque, int64_t offset, int whence) {
 
 static void prefetch_clear(FFStream *s) {
     if (s->rec_prefetch) {
+        /* flush any unconsumed prefetch bytes to the cache file first.
+           prefetch_start has already advanced rec_inner past these bytes,
+           so dropping them without writing would leave a hole in the cache
+           file: the next network read would resume at rec_part_size +
+           PREFETCH_BYTES while the file only covers the prefix. */
+        if (s->rec_file && s->rec_prefetch_pos < s->rec_prefetch_len) {
+            size_t left = s->rec_prefetch_len - s->rec_prefetch_pos;
+            fwrite(s->rec_prefetch + s->rec_prefetch_pos, 1, left, s->rec_file);
+        }
         av_free(s->rec_prefetch);
         s->rec_prefetch = NULL;
         s->rec_prefetch_len = s->rec_prefetch_pos = 0;
@@ -399,6 +427,102 @@ fail:
     return NULL;
 }
 
+/* ── Growing-file mode (background downloader) ─────────
+   The local file is appended to by a downloader thread. Reads block at
+   the file tail (via grow_wait) until more data arrives or the stream
+   finishes, so FFmpeg never sees a spurious EOF mid-download. Seeks are
+   served from the file directly (local random access). */
+static int growing_read(void *opaque, uint8_t *buf, int buf_size) {
+    FFStream *s = (FFStream*)opaque;
+    for (;;) {
+        size_t n = fread(buf, 1, (size_t)buf_size, s->grow_file);
+        if (n > 0) return (int)n;
+        if (ferror(s->grow_file)) return AVERROR(EIO);
+        /* EOF — wait for the file to grow (background downloader) */
+        if (s->growing && s->grow_wait) {
+            int w = s->grow_wait(s->grow_opaque);
+            if (w > 0) {
+                /* stdio caches the EOF flag after a 0-byte fread; clear it
+                   so the next fread re-reads the (now grown) file */
+                clearerr(s->grow_file);
+                continue;
+            }
+            if (w < 0) return AVERROR(EIO); /* error */
+            /* finished — drain any bytes written between the EOF fread and
+               the completion signal before declaring EOF, so the final
+               chunk is never lost */
+            clearerr(s->grow_file);
+            n = fread(buf, 1, (size_t)buf_size, s->grow_file);
+            if (n > 0) return (int)n;
+            return AVERROR_EOF;
+        }
+        /* static file / no wait callback — plain EOF. Must return
+           AVERROR_EOF (negative), NOT 0: FFmpeg's avio_read treats a 0
+           return as "no data, retry" and loops forever in its bypass path. */
+        return AVERROR_EOF;
+    }
+}
+
+static int64_t growing_seek(void *opaque, int64_t offset, int whence) {
+    FFStream *s = (FFStream*)opaque;
+    if (whence == AVSEEK_SIZE) {
+        struct stat st;
+        if (stat_utf8(s->grow_path, &st) == 0) return st.st_size;
+        return -1;
+    }
+    if (whence == SEEK_CUR) {
+        long pos = ftell(s->grow_file);
+        if (pos < 0) return -1;
+        offset += pos;
+    } else if (whence == SEEK_END) {
+        /* the file is still growing — SEEK_END is unreliable, use the
+           current on-disk size so seeks land on the watermark */
+        struct stat st;
+        if (stat_utf8(s->grow_path, &st) != 0) return -1;
+        offset += st.st_size;
+    }
+    if (fseek(s->grow_file, (long)offset, SEEK_SET) != 0) return -1;
+    return offset;
+}
+
+FFStream* ffstream_open_growing(const char *path, ffstream_wait_fn wait,
+                                void *wait_opaque,
+                                int *sr, int *ch, int *dur) {
+    av_log_set_level(AV_LOG_ERROR);
+    FFStream *s = calloc(1, sizeof(FFStream));
+    if (!s) return NULL;
+
+    s->grow_file = fopen_utf8(path, "rb");
+    if (!s->grow_file) goto fail;
+    /* unbuffered: the file is appended to by another thread, so reads must
+       see freshly written bytes immediately (no stdio buffering) */
+    setvbuf(s->grow_file, NULL, _IONBF, 0);
+    s->grow_path = strdup(path);
+    if (!s->grow_path) goto fail;
+    s->grow_wait = wait;
+    s->grow_opaque = wait_opaque;
+    s->growing = 1;
+
+    uint8_t *buf = (uint8_t*)av_malloc(64 * 1024);
+    if (!buf) goto fail;
+    s->rec_pb = avio_alloc_context(buf, 64 * 1024, 0, s,
+                                   growing_read, NULL, growing_seek);
+    if (!s->rec_pb) { av_free(buf); goto fail; }
+
+    s->fmt = avformat_alloc_context();
+    if (!s->fmt) goto fail;
+    s->fmt->pb = s->rec_pb;
+    s->fmt->flags |= AVFMT_FLAG_CUSTOM_IO;   /* we manage rec_pb's lifetime */
+    s->fmt->max_analyze_duration = 10 * AV_TIME_BASE;
+    if (avformat_open_input(&s->fmt, path, NULL, NULL) < 0) goto fail;
+    if (setup_decoder(s, sr, ch, dur) < 0) goto fail;
+    return s;
+
+fail:
+    ffstream_close(s);
+    return NULL;
+}
+
 int ffstream_decode(FFStream *s, int16_t *pcm, int max_frames) {
     if (!s || s->eof) return 0;
 
@@ -501,5 +625,7 @@ void ffstream_close(FFStream *s) {
     avcodec_free_context(&s->codec);
     if (s->fmt) avformat_close_input(&s->fmt);
     recorder_close_io(s);
+    if (s->grow_file) { fclose(s->grow_file); s->grow_file = NULL; }
+    free(s->grow_path);
     free(s);
 }

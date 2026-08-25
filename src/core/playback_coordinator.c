@@ -4,22 +4,29 @@
 #include "core/music_source.h"
 #include "core/music_source_manager.h"
 #include "core/audio_cache.h"
+#include "core/stream_downloader.h"
 #include "plugins/decoders/ffmpeg/ffmpeg_stream.h"
 #include "plugins/music_sources/netease/netease_quality.h"
 #include "infra/config.h"
 #include "core/event_bus.h"
 #include "core/spectrum.h"
 #include "infra/log.h"
+#include "compat/utf8.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <sys/stat.h>
 
 
 /* ── Constants ──────────────────────────────────────── */
 #define FRAMES_PER_CHUNK 4096
 #define PROGRESS_INTERVAL_MS 16
+/* Minimum prefix a background downloader must fetch before the playback
+   thread opens the .part for FFmpeg probing (probe needs a few KB; 64KB
+   covers ID3 + first frames comfortably). */
+#define MIN_PREFIX_BYTES (64 * 1024)
 
 /* ── Commands ───────────────────────────────────────── */
 typedef enum {
@@ -125,6 +132,11 @@ static volatile bool   g_running = false;
 static char g_rec_song[128]  = {0};
 static char g_rec_level[32]  = {0};
 static int  g_rec_active     = 0;
+/* Background downloader for the current cache-miss stream (growing-file
+   mode). g_downloader non-NULL means a download is in flight; g_part_path
+   is the .part it writes, owned here. */
+static StreamDownloader *g_downloader = NULL;
+static char *g_part_path = NULL;
 
 /* ── Event bus handlers ────────────────────────────── */
 static void on_app_shutdown(const BusEvent *ev, void *ud) {
@@ -213,9 +225,37 @@ static void audio_teardown(AudioOutput *audio) {
 /* Called right before a stream is torn down at stop/switch (NOT at
    end-of-stream, which commits a complete cache): keep whatever contiguous
    bytes were received as a partial cache entry instead of discarding them,
-   so a half-heard track still starts instantly next time. */
+   so a half-heard track still starts instantly next time. Handles both the
+   growing-file mode (background downloader) and the legacy recorder mode
+   (partial-continuation backfill). */
 static void cache_keep_partial(FFStream *ffstream) {
     if (!ffstream || !g_rec_active) return;
+    /* growing-file mode: stop the downloader and keep the .part as a
+       partial cache entry (rename .part → final) */
+    if (g_downloader) {
+        stream_downloader_destroy(g_downloader);
+        g_downloader = NULL;
+        if (g_part_path) {
+            struct stat st;
+            if (stat_utf8(g_part_path, &st) == 0 && st.st_size > 0) {
+                char *final = audio_cache_final_path(
+                    g_rec_song, ffstream_media_ext(ffstream));
+                if (final) {
+                    if (rename_utf8(g_part_path, final) == 0)
+                        audio_cache_commit(g_rec_song, final,
+                                           g_rec_level, 0);  /* partial */
+                    free(final);
+                }
+            } else {
+                remove_utf8(g_part_path);
+            }
+            free(g_part_path);
+            g_part_path = NULL;
+        }
+        g_rec_active = 0;
+        return;
+    }
+    /* legacy recorder mode (partial-continuation backfill) */
     if (!ffstream_recording(ffstream)) {  /* seek'd or append unavailable */
         g_rec_active = 0;
         return;
@@ -228,6 +268,21 @@ static void cache_keep_partial(FFStream *ffstream) {
         free(final);
     }
     g_rec_active = 0;
+}
+
+/* Wait callback for ffstream_open_growing: blocks until the background
+   downloader makes progress, finishes, or fails. Returns 1 = more data
+   (retry), 0 = finished (EOF), -1 = error. */
+static int wait_more_data(void *opaque) {
+    StreamDownloader *dl = (StreamDownloader*)opaque;
+    if (stream_downloader_failed(dl)) return -1;
+    if (stream_downloader_done(dl)) return 0;
+    /* wait for the downloader to make progress (or finish/fail); the 500ms
+       cap keeps a stalled download from blocking forever */
+    stream_downloader_wait_watermark(dl, -1, 500);
+    if (stream_downloader_failed(dl)) return -1;
+    if (stream_downloader_done(dl)) return 0;
+    return 1;  /* progress made → retry the read */
 }
 
 static int open_stream(const char *path,
@@ -269,6 +324,13 @@ static int open_stream(const char *path,
            can (a) reuse a cached copy recorded at the same level and
            (b) tag the recording with the level it was cached at */
         g_rec_active = 0;
+        if (g_downloader) {   /* safety: cache_keep_partial should have
+                                 cleared this already */
+            stream_downloader_destroy(g_downloader);
+            g_downloader = NULL;
+        }
+        free(g_part_path);
+        g_part_path = NULL;
         snprintf(g_rec_song, sizeof(g_rec_song), "%s", path);
         g_rec_level[0] = '\0';
 
@@ -289,16 +351,29 @@ static int open_stream(const char *path,
             if (cache_complete) {
                 *decoder = decoder_open(cache_path);
                 if (!*decoder) {
-                    LOG_ERROR("Cannot open cached: %s", cache_path);
-                    free(level);
-                    return -1;
+                    /* no local decoder for this container (e.g. a cached
+                       m4a/aac stream) — play the cached file via FFmpeg
+                       instead of failing the whole track */
+                    LOG_WARN("No local decoder for cached %s, using FFmpeg",
+                             cache_path);
+                    int dur_sec = 0;
+                    *ffstream = ffstream_open(cache_path, samplerate,
+                                              channels, &dur_sec);
+                    if (!*ffstream) {
+                        LOG_ERROR("Cannot open cached: %s", cache_path);
+                        free(level);
+                        return -1;
+                    }
+                    *total_frames = (int64_t)dur_sec * (*samplerate);
+                    audio_cache_touch(path);
+                } else {
+                    DecoderInfo info;
+                    decoder_get_info(*decoder, &info);
+                    *samplerate   = info.sample_rate;
+                    *channels     = info.channels;
+                    *total_frames = info.total_frames;
+                    audio_cache_touch(path);
                 }
-                DecoderInfo info;
-                decoder_get_info(*decoder, &info);
-                *samplerate   = info.sample_rate;
-                *channels     = info.channels;
-                *total_frames = info.total_frames;
-                audio_cache_touch(path);
             } else {
                 /* partial prefix → play from the cache, then resume +
                    backfill the rest from the network (no audible seam) */
@@ -325,8 +400,9 @@ static int open_stream(const char *path,
                 audio_cache_touch(path);
             }
         } else {
-            /* 2. cache miss → stream from netease, recording raw bytes to a
-                  .part file that is committed on natural end-of-stream */
+            /* 2. cache miss → background downloader writes the .part while
+                  the playback thread reads it locally (download & playback
+                  decoupled: the download runs ahead independently) */
             char url[2048] = {0};
             MusicSource *src = music_source_get("netease");
             if (!src || !src->get_play_url ||
@@ -335,19 +411,60 @@ static int open_stream(const char *path,
                 free(level);
                 return 1;  /* unplayable — caller decides skip/error */
             }
-            LOG_INFO("Streaming netease: %s", path);
-            int dur_sec = 0;
+            LOG_INFO("Streaming netease (download+play): %s", path);
             char *part = audio_cache_part_path(path);
-            *ffstream = ffstream_open_rec(url, part, samplerate, channels,
-                                          &dur_sec);
-            free(part);
-            if (!*ffstream) {
-                LOG_WARN("FFmpeg stream open failed %s", path);
-                free(level);
-                return -1;
+            if (!part) {
+                /* caching disabled → plain network stream (no downloader) */
+                int dur_sec = 0;
+                *ffstream = ffstream_open_rec(url, NULL, samplerate,
+                                              channels, &dur_sec);
+                if (!*ffstream) {
+                    LOG_WARN("FFmpeg stream open failed %s", path);
+                    free(level);
+                    return -1;
+                }
+                *total_frames = (int64_t)dur_sec * (*samplerate);
+                g_rec_active = 0;
+            } else {
+                StreamDownloader *dl = stream_downloader_create(url, part);
+                if (!dl) {
+                    free(part);
+                    free(level);
+                    return -1;
+                }
+                if (stream_downloader_start(dl) != 0) {
+                    stream_downloader_destroy(dl);
+                    free(part);
+                    free(level);
+                    return -1;
+                }
+                /* wait for a usable prefix so FFmpeg's probe has data */
+                int w = stream_downloader_wait_watermark(dl, MIN_PREFIX_BYTES,
+                                                         15000);
+                if (w < 0 ||
+                    (w == 0 && stream_downloader_watermark(dl) <= 0)) {
+                    /* failed, or timed out with zero bytes */
+                    stream_downloader_destroy(dl);
+                    free(part);
+                    free(level);
+                    return -1;
+                }
+                int dur_sec = 0;
+                *ffstream = ffstream_open_growing(part, wait_more_data, dl,
+                                                  samplerate, channels,
+                                                  &dur_sec);
+                if (!*ffstream) {
+                    LOG_WARN("FFmpeg growing open failed %s", path);
+                    stream_downloader_destroy(dl);
+                    free(part);
+                    free(level);
+                    return -1;
+                }
+                *total_frames = (int64_t)dur_sec * (*samplerate);
+                g_rec_active = 1;
+                g_downloader = dl;
+                g_part_path = part;   /* ownership transferred */
             }
-            *total_frames = (int64_t)dur_sec * (*samplerate);
-            g_rec_active = ffstream_recording(*ffstream);
         }
         free(level);
     } else {
@@ -633,13 +750,42 @@ static void* playback_thread(void *arg) {
                 /* natural end-of-stream — finalize the recording as a
                    cache entry (the whole stream has been received) */
                 if (ffstream && g_rec_active) {
-                    char *final = audio_cache_final_path(
-                        g_rec_song, ffstream_media_ext(ffstream));
-                    if (final) {
-                        if (ffstream_recorder_commit(ffstream, final) == 0)
-                            audio_cache_commit(g_rec_song, final,
-                                               g_rec_level, 1);  /* complete */
-                        free(final);
+                    if (g_downloader) {
+                        /* growing-file mode: the downloader is the writer */
+                        if (stream_downloader_done(g_downloader) &&
+                            !stream_downloader_failed(g_downloader)) {
+                            /* download finished cleanly → commit complete */
+                            char *final = audio_cache_final_path(
+                                g_rec_song, ffstream_media_ext(ffstream));
+                            if (final) {
+                                if (g_part_path) {
+                                    if (rename_utf8(g_part_path, final) == 0)
+                                        audio_cache_commit(g_rec_song, final,
+                                                           g_rec_level, 1);
+                                    else
+                                        remove_utf8(g_part_path);
+                                    free(g_part_path);
+                                    g_part_path = NULL;
+                                }
+                                free(final);
+                            }
+                        } else {
+                            /* download failed/interrupted → keep partial */
+                            cache_keep_partial(ffstream);
+                        }
+                        stream_downloader_destroy(g_downloader);
+                        g_downloader = NULL;
+                    } else {
+                        /* legacy recorder mode (partial-continuation
+                           backfill commits the whole track) */
+                        char *final = audio_cache_final_path(
+                            g_rec_song, ffstream_media_ext(ffstream));
+                        if (final) {
+                            if (ffstream_recorder_commit(ffstream, final) == 0)
+                                audio_cache_commit(g_rec_song, final,
+                                                   g_rec_level, 1);
+                            free(final);
+                        }
                     }
                     g_rec_active = 0;
                 }
