@@ -140,6 +140,7 @@ static void load_locked(void) {
                         (size_t)g_cap * sizeof(*g_entries));
             }
             AucEntry *e = &g_entries[g_count];
+            cache_seglist_init(&e->segs);   /* must init before add */
             e->id = strdup(id);
             e->file = strdup(file);
             yyjson_val *s = yyjson_obj_get(v, "size");
@@ -253,6 +254,7 @@ static void prune_locked(void) {
         snprintf(p, sizeof(p), "%s" PATH_SEP "%s",
                  audio_dir(), g_entries[oldest].file);
         remove_utf8(p);
+        cache_seglist_free(&g_entries[oldest].segs);
         free(g_entries[oldest].id);
         free(g_entries[oldest].file);
         free(g_entries[oldest].quality);
@@ -328,6 +330,7 @@ int audio_cache_commit(const char *song_id, const char *final_path,
         snprintf(oldp, sizeof(oldp), "%s" PATH_SEP "%s",
                  audio_dir(), g_entries[idx].file);
         if (strcmp(oldp, final_path) != 0) remove_utf8(oldp);
+        cache_seglist_free(&g_entries[idx].segs);   /* replace the regions */
         free(g_entries[idx].file);
         free(g_entries[idx].quality);
         g_entries[idx].file = strdup(dir_basename(final_path));
@@ -394,6 +397,7 @@ void audio_cache_remove(const char *song_id) {
         snprintf(p, sizeof(p), "%s" PATH_SEP "%s",
                  audio_dir(), g_entries[idx].file);
         remove_utf8(p);
+        cache_seglist_free(&g_entries[idx].segs);
         free(g_entries[idx].id);
         free(g_entries[idx].file);
         free(g_entries[idx].quality);
@@ -413,6 +417,7 @@ int audio_cache_clear(void) {
         snprintf(p, sizeof(p), "%s" PATH_SEP "%s",
                  audio_dir(), g_entries[i].file);
         if (remove_utf8(p) == 0) removed++;
+        cache_seglist_free(&g_entries[i].segs);
         free(g_entries[i].id);
         free(g_entries[i].file);
         free(g_entries[i].quality);
@@ -493,6 +498,7 @@ int audio_cache_reconcile(void) {
             }
         }
         if (drop) {
+            cache_seglist_free(&e->segs);
             free(e->id);
             free(e->file);
             free(e->quality);

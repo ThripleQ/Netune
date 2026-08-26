@@ -331,6 +331,7 @@ static void cache_keep_partial(FFStream *ffstream) {
             free(g_part_path);
             g_part_path = NULL;
         }
+        cache_seglist_free(&segs);
         g_rec_active = 0;
         return;
     }
@@ -346,6 +347,7 @@ static void cache_keep_partial(FFStream *ffstream) {
             CacheSegList empty;
             cache_seglist_init(&empty);
             audio_cache_commit(g_rec_song, final, g_rec_level, 0, &empty);
+            cache_seglist_free(&empty);
         }
         free(final);
     }
@@ -445,6 +447,7 @@ static int open_stream(const char *path,
     if (*decoder)  { decoder_close(*decoder); *decoder = NULL; }
     audio_teardown(*audio); *audio = NULL;
     /* fresh stream: no retained cache regions carried across */
+    cache_seglist_free(&g_segs);   /* release the previous track's list */
     cache_seglist_init(&g_segs);
     g_reuse_cache = 0;
 
@@ -515,11 +518,13 @@ static int open_stream(const char *path,
                                               channels, &dur_sec);
                     if (!*ffstream) {
                         LOG_ERROR("Cannot open cached: %s", cache_path);
+                        cache_seglist_free(&cache_segs);
                         free(level);
                         return -1;
                     }
                     *total_frames = (int64_t)dur_sec * (*samplerate);
                     audio_cache_touch(path);
+                    cache_seglist_free(&cache_segs);
                 } else {
                     DecoderInfo info;
                     decoder_get_info(*decoder, &info);
@@ -527,6 +532,7 @@ static int open_stream(const char *path,
                     *channels     = info.channels;
                     *total_frames = info.total_frames;
                     audio_cache_touch(path);
+                    cache_seglist_free(&cache_segs);
                 }
             } else {
                 /* partial cache (any shape: prefix only, prefix+tail, ...) →
@@ -540,6 +546,7 @@ static int open_stream(const char *path,
                 if (!src || !src->get_play_url ||
                     src->get_play_url(path, 0, url, sizeof(url)) != 0 || !url[0]) {
                     LOG_WARN("No play URL for %s", path);
+                    cache_seglist_free(&cache_segs);
                     free(level);
                     return 1;  /* unplayable — caller decides skip/error */
                 }
@@ -560,9 +567,11 @@ static int open_stream(const char *path,
                     if (open_cached_local(cache_path, decoder, samplerate,
                                           channels, total_frames) == 0) {
                         audio_cache_touch(path);
+                        cache_seglist_free(&cache_segs);
                         free(level);
                         return 0;
                     }
+                    cache_seglist_free(&cache_segs);
                     free(level);
                     return 1;
                 }
@@ -576,9 +585,11 @@ static int open_stream(const char *path,
                     if (open_cached_local(cache_path, decoder, samplerate,
                                           channels, total_frames) == 0) {
                         audio_cache_touch(path);
+                        cache_seglist_free(&cache_segs);
                         free(level);
                         return 0;
                     }
+                    cache_seglist_free(&cache_segs);
                     free(level);
                     return 1;
                 }
@@ -593,9 +604,11 @@ static int open_stream(const char *path,
                     if (open_cached_local(cache_path, decoder, samplerate,
                                           channels, total_frames) == 0) {
                         audio_cache_touch(path);
+                        cache_seglist_free(&cache_segs);
                         free(level);
                         return 0;
                     }
+                    cache_seglist_free(&cache_segs);
                     free(level);
                     return -1;
                 }
@@ -605,11 +618,12 @@ static int open_stream(const char *path,
                 g_part_path = strdup(cache_path);
                 g_reuse_cache = 1;
                 g_segs = cache_segs;   /* retained on-disk valid regions */
+                cache_segs.segs = NULL;  /* ownership moved to g_segs */
                 snprintf(g_stream_url, sizeof g_stream_url, "%s", url);
                 ffstream_set_growing_total(
                     *ffstream, stream_downloader_total_size(dl));
                 ffstream_set_growing_regions(
-                    *ffstream, cache_segs.segs, cache_segs.count);
+                    *ffstream, g_segs.segs, g_segs.count);
                 audio_cache_touch(path);
                 free(level);
                 return 0;
@@ -623,6 +637,7 @@ static int open_stream(const char *path,
             if (!src || !src->get_play_url ||
                 src->get_play_url(path, 0, url, sizeof(url)) != 0 || !url[0]) {
                 LOG_WARN("No play URL for %s", path);
+                cache_seglist_free(&cache_segs);
                 free(level);
                 return 1;  /* unplayable — caller decides skip/error */
             }
@@ -642,6 +657,7 @@ static int open_stream(const char *path,
                                               channels, &dur_sec);
                 if (!*ffstream) {
                     LOG_WARN("FFmpeg stream open failed %s", path);
+                    cache_seglist_free(&cache_segs);
                     free(level);
                     return -1;
                 }
@@ -651,12 +667,14 @@ static int open_stream(const char *path,
                 StreamDownloader *dl = stream_downloader_create(url, part);
                 if (!dl) {
                     free(part);
+                    cache_seglist_free(&cache_segs);
                     free(level);
                     return -1;
                 }
                 if (stream_downloader_start(dl) != 0) {
                     stream_downloader_destroy(dl);
                     free(part);
+                    cache_seglist_free(&cache_segs);
                     free(level);
                     return -1;
                 }
@@ -672,6 +690,7 @@ static int open_stream(const char *path,
                     stream_downloader_destroy(dl);
                     remove_utf8(part);
                     free(part);
+                    cache_seglist_free(&cache_segs);
                     free(level);
                     return -1;
                 }
@@ -684,6 +703,7 @@ static int open_stream(const char *path,
                     stream_downloader_destroy(dl);
                     remove_utf8(part);   /* orphan .part: probe failed */
                     free(part);
+                    cache_seglist_free(&cache_segs);
                     free(level);
                     return -1;
                 }
@@ -697,6 +717,7 @@ static int open_stream(const char *path,
                 ffstream_set_growing_total(*ffstream,
                                            stream_downloader_total_size(dl));
             }
+            cache_seglist_free(&cache_segs);
         }
         free(level);
     } else {

@@ -3,16 +3,28 @@
  * Insertion walks the list to find the merge window and coalesces the new
  * [start, start+len) range with every overlapping or immediately-adjacent
  * segment, keeping the list minimal and sorted. Linear scan is fine: the
- * list is tiny (CACHE_SEG_MAX) and merges are rare.
+ * list stays small in practice (a seek storm is the pathological case) and
+ * merges are rare. The backing array grows dynamically, so the segment
+ * count has no fixed cap — a full list is never silently truncated.
  */
 #include "core/cache_segments.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 void cache_seglist_init(CacheSegList *l) {
     if (!l) return;
-    memset(l, 0, sizeof(*l));
+    l->segs = (CacheSeg*)malloc(CACHE_SEG_INIT_CAP * sizeof(CacheSeg));
+    l->cap = l->segs ? CACHE_SEG_INIT_CAP : 0;
     l->count = 0;
+}
+
+void cache_seglist_free(CacheSegList *l) {
+    if (!l) return;
+    free(l->segs);
+    l->segs = NULL;
+    l->count = 0;
+    l->cap = 0;
 }
 
 int cache_seglist_add(CacheSegList *l, int64_t start, int64_t len) {
@@ -42,8 +54,16 @@ int cache_seglist_add(CacheSegList *l, int64_t start, int64_t len) {
                 (size_t)(l->count - j) * sizeof(CacheSeg));
         l->count -= (drop - 1);
     } else {
-        if (l->count == CACHE_SEG_MAX) return l->count;  /* full: drop the
-                                                             insert (rare) */
+        /* fresh insertion: grow the backing array first, so the insert can
+           never be dropped for lack of capacity (no segment loss) */
+        if (l->count == l->cap) {
+            int ncap = l->cap ? l->cap * 2 : CACHE_SEG_INIT_CAP;
+            CacheSeg *ns = (CacheSeg*)realloc(l->segs,
+                                              (size_t)ncap * sizeof(CacheSeg));
+            if (!ns) return l->count;  /* OOM: keep existing list intact */
+            l->segs = ns;
+            l->cap = ncap;
+        }
         memmove(&l->segs[i + 1], &l->segs[i],
                 (size_t)(l->count - i) * sizeof(CacheSeg));
         l->count++;

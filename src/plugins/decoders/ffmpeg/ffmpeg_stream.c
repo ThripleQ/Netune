@@ -52,8 +52,8 @@ struct FFStream {
     void        *grow_opaque;
     int          growing;
     int64_t      grow_total;  /* declared total size (0 = unknown) */
-    CacheSeg     grow_segs[CACHE_SEG_MAX]; /* holey cache: valid regions */
-    int          grow_seg_count;           /* 0 = no holey mode */
+    CacheSeg    *grow_segs;   /* heap array: holey cache valid regions */
+    int          grow_seg_count; /* 0 = no holey mode */
 };
 
 static void prefetch_clear(FFStream *s);   /* defined below, used by tee_seek */
@@ -728,10 +728,17 @@ void ffstream_set_growing_regions(FFStream *s, const CacheSeg *segs,
                                   int seg_count) {
     if (!s || !s->growing) return;
     if (!segs || seg_count <= 0) {
+        free(s->grow_segs);
+        s->grow_segs = NULL;
         s->grow_seg_count = 0;
         return;
     }
-    if (seg_count > CACHE_SEG_MAX) seg_count = CACHE_SEG_MAX;
+    /* keep a private copy (the caller's list may be freed after open);
+       no fixed cap — the caller already guarantees the list is minimal */
+    CacheSeg *ns = (CacheSeg*)realloc(s->grow_segs,
+                                      (size_t)seg_count * sizeof(CacheSeg));
+    if (!ns) return;   /* OOM: keep the previous regions (or none) */
+    s->grow_segs = ns;
     s->grow_seg_count = seg_count;
     for (int i = 0; i < seg_count; i++) s->grow_segs[i] = segs[i];
 }
@@ -776,5 +783,6 @@ void ffstream_close(FFStream *s) {
     recorder_close_io(s);
     if (s->grow_file) { fclose(s->grow_file); s->grow_file = NULL; }
     free(s->grow_path);
+    free(s->grow_segs);
     free(s);
 }
