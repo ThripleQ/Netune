@@ -29,11 +29,6 @@
    thread opens the .part for FFmpeg probing (probe needs a few KB; 64KB
    covers ID3 + first frames comfortably). */
 #define MIN_PREFIX_BYTES (64 * 1024)
-/* Maximum time the playback thread blocks waiting for the new-quality
-   downloader to cover the resume position during an in-place quality
-   switch (CMD_RELOAD). Bounded so a slow link degrades to resuming at the
-   current download watermark instead of stalling playback. */
-#define RELOAD_RESUME_WAIT_MS 10000
 
 /* ── Commands ───────────────────────────────────────── */
 typedef enum {
@@ -144,16 +139,8 @@ static int  g_rec_active     = 0;
    is the .part it writes, owned here. */
 static StreamDownloader *g_downloader = NULL;
 static char *g_part_path = NULL;
-/* Optional parallel resume downloader (quality-switch speedup): fetches
-   [g_resume_at..end] via HTTP Range in parallel with g_downloader, writing
-   at offset g_resume_at in the same .part, so the player can resume at the
-   target position without waiting for the sequential download to reach it.
-   Only the playback thread touches these. */
-static StreamDownloader *g_resume_dl = NULL;
-static int64_t           g_resume_at = 0;
-static int               g_resume_active = 0;
-/* URL of the current netease stream — kept so do_seek can start the resume
-   downloader with the same source. */
+/* URL of the current netease stream — kept so do_seek can restart the
+   downloader at a new byte offset with the same source. */
 static char              g_stream_url[2048] = {0};
 /* Holey-cache replay state (M5): the current stream re-fetches an existing
    cache file in place. g_segs holds the valid byte regions of that file
@@ -247,17 +234,6 @@ static void audio_teardown(AudioOutput *audio) {
    ffstream/decoder/audio + samplerate/channels/total_frames.
    Returns: 0 = ready, 1 = no play URL (caller should skip), -1 = failed. */
 
-/* Stop and drop the optional parallel resume downloader. Called whenever
-   the growing stream is torn down (stop/switch/EOF/cleanup). */
-static void resume_cleanup(void) {
-    if (g_resume_dl) {
-        stream_downloader_destroy(g_resume_dl);
-        g_resume_dl = NULL;
-    }
-    g_resume_at = 0;
-    g_resume_active = 0;
-}
-
 /* Called right before a stream is torn down at stop/switch (NOT at
    end-of-stream, which commits a complete cache): keep whatever contiguous
    bytes were received as a partial cache entry instead of discarding them,
@@ -277,17 +253,12 @@ static void cache_keep_partial(FFStream *ffstream) {
         int64_t keep = stream_downloader_watermark(g_downloader);
         int64_t seq_start = stream_downloader_start_byte(g_downloader);
         /* Build the segment list to persist: everything the sequential
-           downloader wrote [seq_start, seq_start+keep), the parallel resume
-           downloader's region [g_resume_at, g_resume_at+wm), plus whatever
+           downloader wrote [seq_start, seq_start+keep), plus whatever
            valid regions were already on disk (g_segs, when replaying in
            place). */
         CacheSegList segs;
         cache_seglist_init(&segs);
         if (keep > 0) cache_seglist_add(&segs, seq_start, keep);
-        if (g_resume_active && g_resume_dl) {
-            int64_t rw = stream_downloader_watermark(g_resume_dl);
-            if (rw > 0) cache_seglist_add(&segs, g_resume_at, rw);
-        }
         if (g_reuse_cache) {
             for (int k = 0; k < g_segs.count; k++)
                 cache_seglist_add(&segs, g_segs.segs[k].start,
@@ -305,7 +276,6 @@ static void cache_keep_partial(FFStream *ffstream) {
         }
         stream_downloader_destroy(g_downloader);
         g_downloader = NULL;
-        resume_cleanup();   /* stop the parallel resume downloader too */
         if (g_part_path) {
             struct stat st;
             if (keep > 0 && stat_utf8(g_part_path, &st) == 0 &&
@@ -360,22 +330,6 @@ static void cache_keep_partial(FFStream *ffstream) {
    0 = the download finished (EOF), -1 = error. */
 static int wait_more_data(void *opaque, int64_t pos) {
     (void)opaque;
-    /* Once the sequential downloader has covered the resume offset, the
-       parallel Range downloader (which fetches the same bytes from the same
-       URL) is fully redundant — have it stop to save bandwidth. The stop is
-       non-blocking; the actual join/free happens later in resume_cleanup(),
-       by which time its thread has exited, so playback is never stalled. */
-    if (g_resume_active && g_resume_dl && g_downloader &&
-        stream_downloader_watermark(g_downloader) >= g_resume_at) {
-        LOG_INFO("Sequential download covered resume offset %lld — "
-                 "retiring the Range downloader",
-                 (long long)g_resume_at);
-        stream_downloader_stop(g_resume_dl);
-    }
-    /* Route the wait to whichever downloader covers `pos`: the sequential
-       one for positions below the resume offset, the parallel resume
-       downloader for positions at/above it (the region the player resumes
-       into after a quality switch). */
     StreamDownloader *dl = g_downloader;
     int64_t need = pos + 1;
     /* Retained regions of a holey cache are on disk and immediately
@@ -394,15 +348,6 @@ static int wait_more_data(void *opaque, int64_t pos) {
         } else {
             return -1;
         }
-    }
-    /* Route to the resume downloader only while it is alive and covers
-       `pos`; a failed or already-stopped resume downloader falls back to
-       the sequential one, which still downloads the whole file. */
-    if (g_resume_active && g_resume_dl && pos >= g_resume_at &&
-        !stream_downloader_failed(g_resume_dl) &&
-        !stream_downloader_stopped(g_resume_dl)) {
-        dl = g_resume_dl;
-        need = pos - g_resume_at + 1;
     }
     if (stream_downloader_failed(dl)) return -1;
     /* wait for the downloader to reach one byte past the read position;
@@ -483,7 +428,6 @@ static int open_stream(const char *path,
             stream_downloader_destroy(g_downloader);
             g_downloader = NULL;
         }
-        resume_cleanup();
         free(g_part_path);
         g_part_path = NULL;
         snprintf(g_rec_song, sizeof(g_rec_song), "%s", path);
@@ -642,11 +586,9 @@ static int open_stream(const char *path,
                 return 1;  /* unplayable — caller decides skip/error */
             }
             LOG_INFO("Streaming netease (download+play): %s", path);
-            /* remember the source URL so do_seek can start a parallel
-               resume downloader at the switch target; no resume downloader
-               carries across streams */
+            /* remember the source URL so do_seek can restart the downloader
+               at the switch target; no downloader carries across streams */
             snprintf(g_stream_url, sizeof g_stream_url, "%s", url);
-            resume_cleanup();
             char *part = audio_cache_part_path(path);
             if (part)
                 audio_cache_ensure_dir();   /* .part lives in the cache dir */
@@ -819,7 +761,6 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
                 if (stream_downloader_watermark(g_downloader) > 0)
                     cache_seglist_add(&g_segs, seq_start,
                                       stream_downloader_watermark(g_downloader));
-                resume_cleanup();   /* stop any parallel resume downloader */
                 stream_downloader_destroy(g_downloader);
                 g_downloader = NULL;
                 StreamDownloader *nd = stream_downloader_create_resume(
@@ -827,13 +768,18 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
                 int restarted = 0;
                 if (nd && stream_downloader_start(nd) == 0) {
                     g_downloader = nd;
-                    int w = stream_downloader_wait_watermark(
-                        nd, 1, RELOAD_RESUME_WAIT_MS);
-                    restarted = (w == 1);
-                    if (!restarted)
-                        LOG_WARN("Seek resume wait (%ds) not satisfied — "
-                                 "resuming at the download watermark",
-                                 seek_sec);
+                    restarted = 1;   /* downloader is live; reads wait for it */
+                    /* Brief initial wait so the first read at the target
+                       isn't a total stall. Deliberately short (not a multi-
+                       second block): on a slow link it just times out and
+                       playback blocks inside wait_more_data's own 500ms per-
+                       read poll, keeping the playback thread responsive
+                       during repeated seeks. */
+                    int w = stream_downloader_wait_watermark(nd, 1, 500);
+                    if (w != 1)
+                        LOG_WARN("Seek resume data wait (500ms) not "
+                                 "satisfied — playback will wait for the "
+                                 "downloader to cover %d s", seek_sec);
                 } else if (nd) {
                     stream_downloader_destroy(nd);
                 }
@@ -1118,11 +1064,6 @@ static void* playback_thread(void *arg) {
                 int playback_err = 0;
                 if (ffstream && g_rec_active) {
                     if (g_downloader) {
-                        /* stop the parallel resume downloader first so its
-                           file handle is closed before the .part is renamed
-                           (the resume region is redundant once the sequential
-                           download has finished the whole file) */
-                        resume_cleanup();
                         /* growing-file mode: the downloader is the writer */
                         if (stream_downloader_done(g_downloader) &&
                             !stream_downloader_failed(g_downloader)) {
@@ -1259,13 +1200,16 @@ static void* playback_thread(void *arg) {
                     ffstream_growing(ffstream) && g_part_path && br > 0) {
                     /* Prefer the declared total (Content-Length) so the
                        progress bar shows the true track length from the
-                       start; fall back to the on-disk size while growing. */
+                       start; fall back to the continuous playable bytes
+                       while growing. The raw on-disk size is deliberately
+                       NOT used here: a restarted downloader fseeks past
+                       holes, inflating the file size, and it never shrinks,
+                       so a progress-bar total derived from it would overshoot
+                       and stay wrong. growing_avail_bytes() is the true
+                       contiguous download and converges as the file fills. */
                     int64_t total_bytes = stream_downloader_total_size(g_downloader);
-                    if (total_bytes <= 0) {
-                        struct stat st;
-                        if (stat_utf8(g_part_path, &st) == 0)
-                            total_bytes = st.st_size;
-                    }
+                    if (total_bytes <= 0)
+                        total_bytes = growing_avail_bytes();
                     if (total_bytes > 0) {
                         int64_t frames = total_bytes * 8 * samplerate / br;
                         if (frames > total_frames)

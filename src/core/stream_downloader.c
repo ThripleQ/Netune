@@ -10,11 +10,30 @@
 #include <time.h>
 
 #ifdef _WIN32
-#include <windows.h>   /* GetTickCount64 for the monotonic clock */
+#include <windows.h>   /* GetTickCount64 + DeviceIoControl */
+#include <winioctl.h>  /* FSCTL_SET_SPARSE */
+#include <io.h>        /* _fileno/_get_osfhandle for the sparse flag */
 #endif
 
 #ifdef HAVE_LIBCURL
 #include <curl/curl.h>
+#endif
+
+#ifdef _WIN32
+/* Mark the just-opened .part file as sparse. A downloader that restarts
+   at a later byte offset (seek mode) fseeks past a hole and writes at the
+   far end; on NTFS a non-sparse file materializes the whole gap as real
+   zero blocks, so the "cache size" accounting (file size) inflates even
+   though no audio ever touched the gap. FSCTL_SET_SPARSE makes holes cost
+   nothing until actually written. */
+static void mark_part_sparse(FILE *fp) {
+    int fd = _fileno(fp);
+    if (fd < 0) return;
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    DWORD dummy = 0;
+    DeviceIoControl(h, FSCTL_SET_SPARSE, NULL, 0, NULL, 0, &dummy, NULL);
+}
 #endif
 
 struct StreamDownloader {
@@ -148,6 +167,9 @@ static void *dl_thread(void *arg) {
     /* unbuffered: the playback thread reads this file concurrently and must
        see freshly written bytes immediately (no stdio buffering) */
     setvbuf(fp, NULL, _IONBF, 0);
+#ifdef _WIN32
+    mark_part_sparse(fp);   /* holes in the .part cost no disk until written */
+#endif
     dl->fp = fp;
 
     curl_easy_setopt(h, CURLOPT_URL, dl->url);
