@@ -23,6 +23,16 @@ typedef struct StreamDownloader StreamDownloader;
    (its parent directory must exist). Returns NULL on failure. */
 StreamDownloader *stream_downloader_create(const char *url, const char *part_path);
 
+/* Create a resume downloader that fetches url via HTTP Range
+   (bytes=start_byte-) and writes at offset start_byte of part_path. The
+   file must already exist (e.g. created by a sequential downloader) and is
+   opened without truncating. Used to fetch the resume region of a quality
+   switch in parallel with the sequential download. Returns NULL on
+   failure (including start_byte <= 0). */
+StreamDownloader *stream_downloader_create_resume(const char *url,
+                                                  const char *part_path,
+                                                  int64_t start_byte);
+
 /* Start the download thread. 0 = ok, -1 = failure. */
 int stream_downloader_start(StreamDownloader *dl);
 

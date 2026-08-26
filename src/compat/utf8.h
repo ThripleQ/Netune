@@ -45,6 +45,7 @@
 #endif
 #include <windows.h>
 #include <io.h>
+#include <fcntl.h>
 #include <direct.h>
 #include <wchar.h>
 #include <sys/stat.h>
@@ -164,11 +165,26 @@ static inline int rename_utf8(const char *oldpath, const char *newpath)
     return _wrename(wold, wnew);
 }
 
+/* ── truncate_utf8 ──────────────────────────────────── */
+static inline int truncate_utf8(const char *path, long long size)
+{
+    if (!path || size < 0) return -1;
+    wchar_t wpath[32768];
+    if (utf8_to_wide(path, wpath, 32768) == 0) return -1;
+    int fd = _wopen(wpath, _O_WRONLY | _O_BINARY);
+    if (fd < 0) return -1;
+    int rc = _chsize_s(fd, size);
+    _close(fd);
+    return rc;
+}
+
 #elif defined(__MINGW32__)
 
 /* MinGW-w64: CRT uses UTF-8 directly, no conversion needed.
    Provide transparent aliases for API compatibility. */
 #include <direct.h>   /* _mkdir */
+#include <fcntl.h>    /* _O_WRONLY / _O_BINARY */
+#include <io.h>       /* _open / _chsize */
 #ifndef F_OK
 #define F_OK 0
 #endif
@@ -191,6 +207,16 @@ static inline int rename_utf8(const char *oldpath, const char *newpath)
 #define stat_utf8    stat
 #define remove_utf8  remove
 #define rename_utf8  rename
+
+static inline int truncate_utf8(const char *path, long long size)
+{
+    if (!path || size < 0) return -1;
+    int fd = _open(path, _O_WRONLY | _O_BINARY);
+    if (fd < 0) return -1;
+    int rc = _chsize(fd, (long)size);
+    _close(fd);
+    return rc;
+}
 
 #else /* POSIX */
 
@@ -219,5 +245,11 @@ static inline int rename_utf8(const char *oldpath, const char *newpath)
 #define stat_utf8    stat
 #define remove_utf8  remove
 #define rename_utf8  rename
+
+static inline int truncate_utf8(const char *path, long long size)
+{
+    if (!path || size < 0) return -1;
+    return truncate(path, (off_t)size);
+}
 
 #endif

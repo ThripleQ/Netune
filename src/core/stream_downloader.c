@@ -19,8 +19,9 @@ struct StreamDownloader {
     pthread_mutex_t mutex;
     pthread_cond_t  cond;
     FILE        *fp;          /* write handle, owned by the download thread */
-    int64_t      watermark;   /* bytes written so far */
+    int64_t      watermark;   /* bytes written so far (relative to start_byte) */
     int64_t      total;       /* total size from Content-Length (0 = unknown) */
+    int64_t      start_byte;  /* 0 = sequential from 0; >0 = resume at offset */
     int          started;
     int          done;        /* download reached EOF cleanly */
     int          failed;      /* network error / aborted */
@@ -76,7 +77,20 @@ static void *dl_thread(void *arg) {
         pthread_mutex_unlock(&dl->mutex);
         return NULL;
     }
-    FILE *fp = fopen_utf8(dl->part_path, "wb");
+    /* Sequential downloader: "wb" (truncate/create). Resume downloader
+       (start_byte > 0): "r+b" — the .part was already created by the
+       sequential downloader — and seek to start_byte so the Range bytes
+       land at the right offset. */
+    FILE *fp;
+    if (dl->start_byte > 0) {
+        fp = fopen_utf8(dl->part_path, "r+b");
+        if (fp && fseek(fp, (long)dl->start_byte, SEEK_SET) != 0) {
+            fclose(fp);
+            fp = NULL;
+        }
+    } else {
+        fp = fopen_utf8(dl->part_path, "wb");
+    }
     if (!fp) {
         curl_easy_cleanup(h);
         LOG_ERROR("stream_downloader: cannot open .part %s (cache dir missing?)",
@@ -93,6 +107,11 @@ static void *dl_thread(void *arg) {
     dl->fp = fp;
 
     curl_easy_setopt(h, CURLOPT_URL, dl->url);
+    if (dl->start_byte > 0) {
+        char range[32];
+        snprintf(range, sizeof range, "%lld-", (long long)dl->start_byte);
+        curl_easy_setopt(h, CURLOPT_RANGE, range);
+    }
     curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(h, CURLOPT_MAXREDIRS, 8L);
     /* keep the connect timeout modest: stream_downloader_destroy() joins
@@ -158,6 +177,15 @@ StreamDownloader *stream_downloader_create(const char *url, const char *part_pat
     pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
     pthread_cond_init(&dl->cond, &attr);
     pthread_condattr_destroy(&attr);
+    return dl;
+}
+
+StreamDownloader *stream_downloader_create_resume(const char *url,
+                                                  const char *part_path,
+                                                  int64_t start_byte) {
+    if (start_byte <= 0) return NULL;
+    StreamDownloader *dl = stream_downloader_create(url, part_path);
+    if (dl) dl->start_byte = start_byte;
     return dl;
 }
 
