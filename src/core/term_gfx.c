@@ -11,6 +11,11 @@ int term_gfx_active(void) { return 0; }
 void term_gfx_upload(const CoverData *cd) { (void)cd; }
 void term_gfx_place(int cols, int rows) { (void)cols; (void)rows; }
 void term_gfx_clear(void) {}
+void term_gfx_upload_id(uint64_t id, const CoverData *cd) { (void)id; (void)cd; }
+void term_gfx_place_id(uint64_t id, int row0, int col0, int cols, int rows) { (void)id; (void)row0; (void)col0; (void)cols; (void)rows; }
+void term_gfx_delete_id(uint64_t id) { (void)id; }
+void term_gfx_clear_ids(void) {}
+int term_gfx_id_placed(uint64_t id) { (void)id; return 0; }
 #else
 
 /* ── Protocol state ─────────────────────────────────── */
@@ -32,6 +37,44 @@ static unsigned long g_img_id = 0;
    (image id, placement id) pair atomically replaces the previous
    placement instead of stacking a new one on top */
 #define TERM_GFX_PLACEMENT_ID 1
+
+/* ── Multi-image bookkeeping ─────────────────────────────
+   Song-list covers each live under an explicit caller-assigned id. We
+   track, per id, the uploaded fingerprint (to skip re-transfers) and the
+   last placement (to detect moves cheaply). A small fixed table is
+   enough: only the visible rows' covers are alive at once. */
+#define TERM_GFX_MAX_IMGS 64
+
+typedef struct {
+    uint64_t id;          /* 0 = free slot */
+    uint64_t stamp;       /* uploaded CoverData.stamp */
+    int      w, h;        /* uploaded dimensions      */
+    int      placed;      /* 1 = a placement is currently live */
+    int      p_row, p_col, p_cols, p_rows;  /* last placement rect */
+} TermGfxImg;
+
+static TermGfxImg g_imgs[TERM_GFX_MAX_IMGS];
+
+static TermGfxImg *img_find(uint64_t id) {
+    for (int i = 0; i < TERM_GFX_MAX_IMGS; i++)
+        if (g_imgs[i].id == id) return &g_imgs[i];
+    return NULL;
+}
+
+static TermGfxImg *img_slot(void) {
+    for (int i = 0; i < TERM_GFX_MAX_IMGS; i++)
+        if (g_imgs[i].id == 0) return &g_imgs[i];
+    return NULL;
+}
+
+/* ── Raw escape output ───────────────────────────────── */
+static void esc_write(const char *s) { fwrite(s, 1, strlen(s), stdout); }
+
+static void kitty_delete_img(uint64_t id) {
+    char seq[96];
+    snprintf(seq, sizeof(seq), "\x1b_Ga=d,d=i,i=%lu\x1b\\", id);
+    esc_write(seq);
+}
 
 /* ── Base64 (RFC 4648) ──────────────────────────────── */
 static const char B64[] =
@@ -65,9 +108,6 @@ static void b64_encode(const uint8_t *src, size_t n, char *out) {
     }
     out[o] = '\0';
 }
-
-/* ── Raw escape output ───────────────────────────────── */
-static void esc_write(const char *s) { fwrite(s, 1, strlen(s), stdout); }
 
 /* ── Detection ───────────────────────────────────────── */
 TermGfxMode term_gfx_detect(void) {
@@ -191,6 +231,104 @@ void term_gfx_clear(void) {
     esc_write("\x1b_Ga=d,d=A\x1b\\");
     g_uploaded_stamp = 0;
     g_uploaded_w = g_uploaded_h = 0;
+    /* d=A also removed every multi-image placement AND data. Reset the
+       table so the next update_list_covers() pass re-uploads + re-places
+       instead of skipping via its stale "already placed / already
+       uploaded" bookkeeping. */
+    for (int i = 0; i < TERM_GFX_MAX_IMGS; i++) {
+        g_imgs[i].stamp = 0;
+        g_imgs[i].w = g_imgs[i].h = 0;
+        g_imgs[i].placed = 0;
+    }
+}
+
+/* ── Multi-image management ─────────────────────────── */
+
+/* Upload the cover pixels under an explicit caller id. The upload uses
+   the caller's id directly (no g_img_id indirection), so it coexists
+   with the single-image cover/QR paths. When the same id is re-uploaded
+   with an unchanged fingerprint it is a no-op. */
+void term_gfx_upload_id(uint64_t id, const CoverData *cd) {
+    if (!term_gfx_active() || id == 0 || !cd || !cd->pixels) return;
+    TermGfxImg *img = img_find(id);
+    if (!img) {
+        img = img_slot();
+        if (!img) return;   /* table full: skip (visible rows are limited) */
+        img->id = id;
+    }
+    if (img->stamp == cd->stamp && img->w == cd->width &&
+        img->h == cd->height)
+        return;  /* unchanged: keep uploaded data */
+
+    /* replacing a different cover under this id: drop the old data +
+       placements first */
+    if (img->stamp != 0 || img->w != 0)
+        kitty_delete_img(id);
+
+    kitty_upload_raw(cd->pixels, cd->width, cd->height, id);
+    img->stamp = cd->stamp;
+    img->w = cd->width;
+    img->h = cd->height;
+    img->placed = 0;
+    LOG_DEBUG("term_gfx: uploaded id=%lu %dx%d", id, cd->width, cd->height);
+}
+
+/* Place the id image at an absolute position. Replacing the previous
+   placement of the same id (same image+placement id pair) atomically
+   moves it; stale placements are dropped first so a move never leaves a
+   ghost. */
+void term_gfx_place_id(uint64_t id, int row0, int col0, int cols, int rows) {
+    if (!term_gfx_active() || id == 0 || cols <= 0 || rows <= 0) return;
+    TermGfxImg *img = img_find(id);
+    if (!img || img->stamp == 0) return;   /* not uploaded yet */
+    if (img->placed && img->p_row == row0 && img->p_col == col0 &&
+        img->p_cols == cols && img->p_rows == rows)
+        return;  /* already there */
+
+    kitty_delete_img(id);
+    char seq[160];
+    snprintf(seq, sizeof(seq),
+             "\x1b_Ga=p,i=%lu,p=%d,q=2,c=%d,r=%d,C=1\x1b\\",
+             id, TERM_GFX_PLACEMENT_ID, cols, rows);
+    /* Move the cursor to the top-left cell of the image first */
+    printf("\x1b[%d;%dH", row0, col0);
+    fflush(stdout);
+    esc_write(seq);
+    img->placed = 1;
+    img->p_row = row0; img->p_col = col0;
+    img->p_cols = cols; img->p_rows = rows;
+}
+
+/* Delete an id's image: free its data + placements and reset its slot. */
+void term_gfx_delete_id(uint64_t id) {
+    if (!term_gfx_active() || id == 0) return;
+    TermGfxImg *img = img_find(id);
+    if (!img) return;
+    kitty_delete_img(id);
+    img->id = 0;
+    img->stamp = 0;
+    img->w = img->h = 0;
+    img->placed = 0;
+}
+
+/* Delete every multi-image slot. The single-image cover/QR data (which
+   uses a separate id space) is untouched. */
+void term_gfx_clear_ids(void) {
+    if (!term_gfx_active()) return;
+    for (int i = 0; i < TERM_GFX_MAX_IMGS; i++) {
+        if (g_imgs[i].id != 0) {
+            kitty_delete_img(g_imgs[i].id);
+            g_imgs[i].id = 0;
+            g_imgs[i].stamp = 0;
+            g_imgs[i].w = g_imgs[i].h = 0;
+            g_imgs[i].placed = 0;
+        }
+    }
+}
+
+int term_gfx_id_placed(uint64_t id) {
+    TermGfxImg *img = img_find(id);
+    return img ? img->placed : 0;
 }
 
 #endif /* _WIN32 */

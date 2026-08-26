@@ -11,6 +11,7 @@
   #define POPEN  popen
   #define PCLOSE pclose
 #endif
+#include <pthread.h>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
@@ -54,6 +55,10 @@ static void cover_scale(const uint8_t *src, int sw, int sh, int ch,
 
 /* unique id source for CoverData.stamp */
 static uint64_t g_cover_seq = 0;
+/* cover_load can be called from several worker threads (the lyric cover
+   via threadpool and the song-list cache via its own worker); the stamp
+   counter must not be incremented concurrently. */
+static pthread_mutex_t g_seq_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* ── Run a program and capture stdout ────────────── */
 static char *popen_read(const char *cmd, size_t *out_size) {
@@ -187,7 +192,9 @@ int cover_load(const char *url, CoverData *out) {
     out->width    = dw;
     out->height   = dh;
     out->channels = 3;
+    pthread_mutex_lock(&g_seq_mutex);
     out->stamp    = ++g_cover_seq;
+    pthread_mutex_unlock(&g_seq_mutex);
     return 0;
 }
 

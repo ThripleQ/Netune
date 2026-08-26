@@ -54,6 +54,11 @@ typedef enum {
     /* cover art */
     EV_COVER_LOADED,
 
+    /* a cover requested via cover_cache (song list) finished loading.
+       Payload: CoverCacheResult {id, CoverData cd}; the main thread
+       calls cover_cache_store() to move the pixels into the cache. */
+    EV_COVER_CACHE_LOADED,
+
     /* system */
     EV_APP_STARTUP,
     EV_APP_SHUTDOWN,

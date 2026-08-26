@@ -49,6 +49,35 @@ void term_gfx_place(int cols, int rows);
 /* Delete all placed images (e.g. when leaving lyric mode). */
 void term_gfx_clear(void);
 
+/* ── Multi-image management (song-list covers) ─────────
+   The single-image API above (upload/place/clear) drives the lyric-mode
+   cover and the QR code. The song list needs MANY covers alive at once,
+   each tracked by an explicit image id assigned by the caller (a stable
+   hash of the cover URL). Images are managed independently: uploading or
+   placing one never touches the others, and deleting one frees only its
+   own data + placements. All ids must be non-zero (0 is reserved). */
+
+/* Upload cover pixels under an explicit image id. No-op if the id is
+   already uploaded with identical (stamp, w, h). Safe to call every
+   frame. */
+void term_gfx_upload_id(uint64_t id, const CoverData *cd);
+
+/* Place the id image at an ABSOLUTE terminal position (1-based row/col,
+   top-left cell of the image) spanning cols×rows cells. Replaces any
+   previous placement of the same id; other images are untouched. */
+void term_gfx_place_id(uint64_t id, int row0, int col0, int cols, int rows);
+
+/* Delete the id image: frees its data and removes its placements. */
+void term_gfx_delete_id(uint64_t id);
+
+/* Delete every image managed through the multi-image API (leaves the
+   single-image cover/QR data alone). */
+void term_gfx_clear_ids(void);
+
+/* Last-seen placement of an id, to detect repositioning cheaply.
+   Returns 0 if the id has no placement. */
+int term_gfx_id_placed(uint64_t id);
+
 #ifdef __cplusplus
 }
 #endif

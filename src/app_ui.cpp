@@ -50,6 +50,7 @@ extern "C" {
 #include "core/search_manager.h"
 #include "core/cache_manager.h"
 #include "core/term_gfx.h"
+#include "core/cover_cache.h"
 #include "stb_image.h"
 #include "plugins/music_sources/local/local_source.h"
 #include "plugins/music_sources/netease/netease_source.h"
@@ -1036,6 +1037,81 @@ static void ev_cover_loaded(const BusEvent *ev, void *data) {
     }
 }
 
+/* ── Song-list cover cache event (from cover_cache worker) ── */
+static void ev_cover_cache_loaded(const BusEvent *ev, void *data) {
+    (void)data;
+    if (ev->data && ev->data_size == sizeof(CoverCacheResult))
+        cover_cache_store((const CoverCacheResult*)ev->data);
+}
+
+/* ── Song-list cover overlay (image terminals) ──────────
+   Places a real image over each visible row's cover placeholder. Called
+   every frame from the main loop; uploads are fingerprinted (no re-send),
+   placements are repositioned only on change, and rows scrolled out of
+   view have their images deleted. Coordinates mirror render_song_list:
+   the list content starts at 1-based row 3 (top bar 1 + border top 1 +
+   1) and 1-based column 23 (left panel 20 + separator 1 + border left
+   1 + 1); each song spans LIST_COVER_ROWS rows starting at visual row
+   idx*2. */
+static void update_list_covers(const AppState &st) {
+    bool list_shown = !st.lyric_mode && st.login_state == 0 && !st.show_help &&
+                      !st.search_active &&
+                      !st.action_sheet_open &&
+                      /* filtered / API-search views auto-scroll with FTXUI
+                         and are not offset-mapped; skip image overlay there */
+                      !st.top_search_active &&
+                      (st.top_search_api || st.top_right_query.empty()) &&
+                      !(st.music_mode == MusicMode::Local &&
+                        st.group_index >= 0 &&
+                        st.group_index < (int)st.groups.size() &&
+                        st.groups[st.group_index].is_downloads);
+    static std::vector<uint64_t> live;
+    if (!list_shown || st.playlist.empty()) {
+        if (!live.empty()) {
+            term_gfx_clear_ids();
+            live.clear();
+        }
+        return;
+    }
+    const int rows_song = 2;                  /* LIST_COVER_ROWS */
+    const int cols = song_list_cover_cols();
+    /* The right panel starts one row below the top bar (border top) and
+       one column right of the left panel + separator + border left.
+       Verified against the actual FTXUI render: top bar = row 1,
+       border top = row 2, so the first song row is row 3; left panel 20
+       + separator 1 + border left 1 = column 23. */
+    const int content_col = 20 + 1 + 1 + 1;   /* left panel + sep + border */
+    const int content_row = 3;                /* top bar + border top + 1 */
+    const int off = st.song_list_offset;
+    const int h = st.screen_height - 5;
+
+    std::vector<uint64_t> want;
+    want.reserve((size_t)(h / rows_song) + 2);
+    int first = off / rows_song;
+    int last = (off + h) / rows_song;
+    if (last >= (int)st.playlist.size()) last = (int)st.playlist.size();
+    if (first < 0) first = 0;
+    for (int idx = first; idx < last; idx++) {
+        const auto &song = st.playlist[(size_t)idx];
+        if (!song.cover_url || !song.cover_url[0]) continue;
+        uint64_t id = cover_cache_request(song.cover_url);
+        if (id == 0) continue;
+        want.push_back(id);
+        const CoverData *cd = cover_cache_get(id);
+        if (!cd) continue;   /* still loading — place on a later frame */
+        int row0 = content_row + (idx * rows_song - off);
+        term_gfx_upload_id(id, cd);
+        term_gfx_place_id(id, row0, content_col, cols, rows_song);
+    }
+
+    /* delete images that scrolled out of view */
+    for (uint64_t id : live) {
+        if (std::find(want.begin(), want.end(), id) == want.end())
+            term_gfx_delete_id(id);
+    }
+    live.swap(want);
+}
+
 /* ── Event bus → StateStore bridge ────────────────── */
 static void ev_progress(const BusEvent *ev, void *data) {
     (void)data;
@@ -1600,6 +1676,7 @@ int run_app(int argc, char **argv) {
     event_bus_subscribe(EV_SEARCH_ERROR, ev_search_error, NULL);
     event_bus_subscribe(EV_SEARCH_DONE, ev_search_done, NULL);
     event_bus_subscribe(EV_COVER_LOADED, ev_cover_loaded, NULL);
+    event_bus_subscribe(EV_COVER_CACHE_LOADED, ev_cover_cache_loaded, NULL);
     event_bus_subscribe(EV_LYRIC_LOADED, ev_lyric_loaded, NULL);
     event_bus_subscribe(EV_SPECTRUM_UPDATE, ev_spectrum, NULL);
 
@@ -2515,6 +2592,10 @@ int run_app(int argc, char **argv) {
                               st.group_index < (int)st.groups.size() &&
                               st.groups[st.group_index].is_downloads);
                 if (in_dl) row -= (int)st.downloads.size();
+                /* image terminals render each song over two rows — a click
+                   on either row selects the song */
+                if (term_gfx_active() && !in_dl)
+                    row /= 2;
                 StateStore::instance().set_active_panel(1);
                 if (st.top_search_active)
                     StateStore::instance().set_top_search_active(false);
@@ -3376,6 +3457,11 @@ int run_app(int argc, char **argv) {
                     qr_lrows = -1;
                     qr_lstamp = 0;
                 }
+
+                /* Song-list cover overlay: real images over each visible
+                   row's placeholder (mutually exclusive with the lyric
+                   cover and the QR image above). */
+                update_list_covers(st);
             }
             fflush(stdout);
         }
@@ -3391,6 +3477,7 @@ int run_app(int argc, char **argv) {
     playback_coordinator_shutdown();
     music_source_manager_shutdown();
     netease_search_cache_free();
+    cover_cache_clear();
     if (g_thread_pool) threadpool_destroy(g_thread_pool);
     DownloadQueue::instance().stop();
     event_bus_shutdown();

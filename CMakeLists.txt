@@ -241,6 +241,7 @@ endif()
 # ── Sources ───────────────────────────────────────────
 set(CORE_SOURCES
   src/core/cover.c
+  src/core/cover_cache.c
   src/core/event_bus.c
   src/core/music_source.c
   src/core/music_source_manager.c

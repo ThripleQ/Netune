@@ -3,6 +3,7 @@
 #include "ui/components/spinner.h"
 #include "ui/state_store.h"
 #include "ui/ui_util.h"
+#include "core/term_gfx.h"
 #include "compat/wcwidth_compat.h"
 #include <ftxui/screen/string.hpp>
 #include <string>
@@ -13,6 +14,20 @@ using namespace ftxui;
 
 #define MARQUEE_SPEED_MS 130   /* ms per column scrolled */
 #define MARQUEE_PAUSE_MS 750   /* ms hold at each end */
+
+/* ── Cover-art list rows (kitty-graphics terminals) ──
+   In a native-image terminal each song occupies LIST_COVER_ROWS rows:
+   a square cover placeholder on the left (the real image is overlaid by
+   the frame hook in app.cpp) with the title and artist stacked to its
+   right. The placeholder width keeps the image square: a 2-row tall
+   cover needs cols = 2 * cell_h / cell_w to match the cell aspect. */
+#define LIST_COVER_ROWS 2
+int song_list_cover_cols(void) {
+    int c = LIST_COVER_ROWS * cover_cell_height() / cover_cell_width();
+    if (c < 4) c = 4;
+    return c;
+}
+#define list_cover_cols() song_list_cover_cols()
 
 /* ── Truncate or marquee-scroll text within width ─── */
 static std::string fit_text(const std::string &text, int width) {
@@ -275,6 +290,46 @@ Element render_song_list(const AppState &s) {
             bool is_vip = (!is_pl && song.fee == 1);
             std::string tail = is_pl ? " \u6B4C\u5355" : (is_vip ? " VIP" : "");
 
+            /* ── Image-terminal cover rows ────────────────
+               Each song spans LIST_COVER_ROWS rows: the square cover
+               placeholder column on the left (image overlaid by the frame
+               hook in app.cpp), then title / artist stacked to its right.
+               Selected rows get a leading ▶ marker and accent text; no
+               full-row background — the highlight would fight the overlaid
+               artwork. */
+            if (term_gfx_active() && !in_downloads && !s.action_sheet_open) {
+                bool active_sel = (sel && s.active_panel == 1 && !s.top_search_active);
+                std::string pad = active_sel ? "\u25B6 " : "  ";
+                std::string cover_ph((size_t)list_cover_cols(), ' ');
+                int txt_w = avail_w - list_cover_cols() - 2;
+                if (txt_w < 5) txt_w = 5;
+                Element cover_el = text(cover_ph);
+                std::string t1 = fit_text(title, txt_w);
+                std::string a1 = (song.artist && song.artist[0])
+                               ? song.artist : "";
+                if (!a1.empty()) a1 = fit_text(a1, txt_w);
+                std::string line1 = t1;
+                if (!a1.empty() && (int)string_width(t1) < txt_w - 4)
+                    line1 += std::string(" \u2014 ") + a1;
+                Element title_el = text(line1);
+                Element artist_el = theme_artist(text(a1));
+                if (active_sel) {
+                    title_el = title_el | bold | theme_accent;
+                    artist_el = artist_el | theme_accent;
+                }
+                /* first row: title (+ tail badge) */
+                Element r1 = hbox({cover_el, text(pad), title_el});
+                if (!tail.empty())
+                    r1 = hbox({r1, text(tail) | (is_pl ? theme_playlist
+                                                       : theme_vip)});
+                els.push_back(r1 | focus);
+                /* second row: artist (dim, indented under the title) */
+                Element r2 = hbox({text(std::string((size_t)list_cover_cols(), ' ')),
+                                   text("  "), artist_el});
+                els.push_back(r2);
+                continue;
+            }
+
             Element line = theme_fg(text(title));
             int line_w = avail_w;
             if (s.action_sheet_open) line_w -= 2;  /* "> " marker block width */
@@ -392,9 +447,12 @@ Element render_song_list(const AppState &s) {
         const int h = s.screen_height - 5;  /* top 1 + status 2 + borders 2 */
         int n = (int)els.size();
         int off = s.song_list_offset;
-        int sel = task_n + s.selected_index;  /* visual row of the selected file */
+        /* visual row of the selected file (each song = LIST_COVER_ROWS
+           rows in image terminals, 1 elsewhere) */
+        int rows_song = term_gfx_active() ? LIST_COVER_ROWS : 1;
+        int sel = task_n + s.selected_index * rows_song;
         if (sel < 0) sel = 0;
-        if (sel >= off + h) off = sel - h + 1;
+        if (sel >= off + h) off = sel - h + rows_song;
         if (sel < off) off = sel;
         if (off > n - h) off = n - h;
         if (off < 0) off = 0;
