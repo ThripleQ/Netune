@@ -213,6 +213,9 @@ static void *dl_thread(void *arg) {
     } else {
         dl->done = 1;
         dl->failed = (rc != CURLE_OK);
+        if (rc != CURLE_OK)
+            LOG_ERROR("dl_thread curl failed (%d): %s", rc,
+                      curl_easy_strerror(rc));
     }
     pthread_cond_broadcast(&dl->cond);
     pthread_mutex_unlock(&dl->mutex);

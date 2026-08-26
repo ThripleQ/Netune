@@ -352,8 +352,16 @@ static void cache_keep_partial(FFStream *ffstream) {
    Returns 1 = more data may be available (retry the read),
    0 = the download finished (EOF), -1 = error. */
 static int wait_more_data(void *opaque, int64_t pos, int want) {
-    StreamDownloader *dl = (StreamDownloader*)opaque;
-    if (!dl) dl = g_downloader;   /* legacy: allow global fallback */
+    /* Always consult the CURRENT downloader via the global: the opaque
+       captured at ffstream_open_growing time is the downloader that
+       existed then, but do_seek REPLACES the downloader (restart at the
+       seek target) — the opaque then points at a destroyed (freed) object,
+       so dereferencing it would be a use-after-free. g_downloader is kept
+       in sync with every create/destroy, so it is the only safe reference.
+       The ffstream_open_growing caller must assign g_downloader BEFORE the
+       probe so this callback sees it during probe reads too. */
+    (void)opaque;
+    StreamDownloader *dl = g_downloader;
     int64_t need = pos + (int64_t)want;
     /* Retained regions of a holey cache are on disk and immediately
        available (no downloader involved / not yet overwritten) — check
@@ -581,12 +589,17 @@ static int open_stream(const char *path,
                     return 1;
                 }
                 int dur_sec = 0;
+                /* assign g_downloader BEFORE the probe so wait_more_data
+                   (called during probe reads) always sees the live downloader
+                   via the global, never a stale/freed opaque */
+                g_downloader = dl;
                 *ffstream = ffstream_open_growing(
                     cache_path, wait_more_data, dl,
                     stream_downloader_total_size(dl),
                     samplerate, channels, &dur_sec);
                 if (!*ffstream) {
                     stream_downloader_destroy(dl);
+                    g_downloader = NULL;
                     LOG_WARN("Partial cache replay: growing open failed %s",
                              path);
                     if (open_cached_local(cache_path, decoder, samplerate,
@@ -602,7 +615,6 @@ static int open_stream(const char *path,
                 }
                 *total_frames = (int64_t)dur_sec * (*samplerate);
                 g_rec_active = 1;
-                g_downloader = dl;
                 g_part_path = strdup(cache_path);
                 g_reuse_cache = 1;
                 g_segs = cache_segs;   /* retained on-disk valid regions */
@@ -681,6 +693,10 @@ static int open_stream(const char *path,
                     return -1;
                 }
                 int dur_sec = 0;
+                /* assign g_downloader BEFORE the probe so wait_more_data
+                   (called during probe reads) always sees the live downloader
+                   via the global, never a stale/freed opaque */
+                g_downloader = dl;
                 *ffstream = ffstream_open_growing(part, wait_more_data, dl,
                                                   stream_downloader_total_size(dl),
                                                   samplerate, channels,
@@ -688,6 +704,7 @@ static int open_stream(const char *path,
                 if (!*ffstream) {
                     LOG_WARN("FFmpeg growing open failed %s", path);
                     stream_downloader_destroy(dl);
+                    g_downloader = NULL;
                     remove_utf8(part);   /* orphan .part: probe failed */
                     free(part);
                     cache_seglist_free(&cache_segs);
@@ -696,7 +713,6 @@ static int open_stream(const char *path,
                 }
                 *total_frames = (int64_t)dur_sec * (*samplerate);
                 g_rec_active = 1;
-                g_downloader = dl;
                 g_part_path = part;   /* ownership transferred */
                 /* Once the Content-Length is in, declare the stream's true
                    size so FFmpeg reports the real duration + seek math and
@@ -742,34 +758,12 @@ static long effective_bitrate(FFStream *ffstream, int64_t current_frame,
                               int samplerate) {
     if (!ffstream) return 0;
     long br = ffstream_bitrate(ffstream);
-    if (br > 0) {
-        /* For a growing stream the probe-time fmt->bit_rate was estimated
-           from the tiny downloaded prefix and is badly wrong for
-           variable-bitrate containers (FLAC et al.: a 64KB prefix can come
-           out as ~2.4k bps). Once playback has actually consumed a few
-           seconds, the MEASURED bitrate (bytes downloaded / playtime) is
-           far more accurate — prefer it for growing streams, keeping the
-           declared codec bitrate (CBR mp3: exact) as the base.
-           Measured from the downloader's MONOTONIC watermark (bytes written
-           so far), not the decoder's read cursor: the decoder consumes in
-           bursts (chunked freads that run ahead of the playhead), so its
-           instantaneous position jitters and would make a stable average
-           bitrate appear to "change". */
-        if (ffstream_growing(ffstream)) {
-            int played_sec = samplerate > 0
-                ? (int)(current_frame / samplerate) : 0;
-            if (played_sec >= 3 && g_downloader) {
-                int64_t sb = stream_downloader_start_byte(g_downloader);
-                int64_t wm = stream_downloader_watermark(g_downloader);
-                int64_t dl_bytes = sb + wm;   /* absolute bytes written */
-                if (dl_bytes > 0) {
-                    long measured = (long)(dl_bytes * 8 / played_sec);
-                    if (measured > 0) br = measured;
-                }
-            }
-        }
-        return br;
-    }
+    if (br > 0) return br;
+    /* No codec-declared bitrate (probe left it unknown). For a growing
+       stream, measure from what the decoder has actually READ (not what the
+       downloader wrote — the downloader runs ahead of the playhead, so its
+       watermark measures download throughput, not audio bitrate, and would
+       produce absurd values on a fast link). */
     if (!ffstream_growing(ffstream)) return 0;
     int64_t read_b = ffstream_growing_bytes_read(ffstream);
     int played_sec = samplerate > 0 ? (int)(current_frame / samplerate) : 0;
@@ -843,6 +837,12 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
                      until the sequential downloader reaches it. */
                 int64_t seq_start = stream_downloader_start_byte(g_downloader);
                 int has_prefix = (seq_start > 0) || (g_segs.count > 0);
+                LOG_INFO("do_seek: seek=%ds br=%ld avail=%ds target_byte=%lld "
+                         "seq_start=%lld wm=%lld fresh=%d",
+                         seek_sec, br, avail, (long long)target_byte,
+                         (long long)seq_start,
+                         (long long)stream_downloader_watermark(g_downloader),
+                         !has_prefix);
                 if (!has_prefix) {
                     /* fresh download (e.g. right after a quality switch
                        reopened the track at a new, uncached quality): the
