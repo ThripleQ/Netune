@@ -51,6 +51,7 @@ struct FFStream {
     ffstream_wait_fn grow_wait;
     void        *grow_opaque;
     int          growing;
+    int64_t      grow_total;  /* declared total size (0 = unknown) */
 };
 
 static void prefetch_clear(FFStream *s);   /* defined below, used by tee_seek */
@@ -482,6 +483,11 @@ static int growing_read(void *opaque, uint8_t *buf, int buf_size) {
 static int64_t growing_seek(void *opaque, int64_t offset, int whence) {
     FFStream *s = (FFStream*)opaque;
     if (whence == AVSEEK_SIZE) {
+        /* Report the declared total when known: FFmpeg derives the format
+           duration and seek byte offsets from this, so a grow file whose
+           Content-Length is known behaves like a complete file for
+           duration/seek purposes even while it is still being written. */
+        if (s->grow_total > 0) return s->grow_total;
         struct stat st;
         if (stat_utf8(s->grow_path, &st) == 0) return st.st_size;
         return -1;
@@ -491,22 +497,22 @@ static int64_t growing_seek(void *opaque, int64_t offset, int whence) {
         if (pos < 0) return -1;
         offset += pos;
     } else if (whence == SEEK_END) {
-        /* the file is still growing — SEEK_END is unreliable, use the
-           current on-disk size so seeks land on the watermark */
-        struct stat st;
-        if (stat_utf8(s->grow_path, &st) != 0) return -1;
-        offset += st.st_size;
+        /* still growing — the true end is unknown unless declared; use the
+           declared total when set, else the current on-disk size */
+        if (s->grow_total > 0) offset += s->grow_total;
+        else {
+            struct stat st;
+            if (stat_utf8(s->grow_path, &st) != 0) return -1;
+            offset += st.st_size;
+        }
     }
-    /* clamp to the current on-disk size: a seek past the watermark would
-       put the read position in a file hole (beyond EOF) and the read side
-       would have to wait for the downloader to cover it. Landing on the
-       watermark keeps playback moving as the file grows — the downloader
-       always writes from 0, so data past the current watermark does not
-       exist yet. Also guard against negative offsets. */
+    /* Position anywhere >= 0. Unlike a static file we intentionally allow
+       offsets PAST the current on-disk size: a seek to not-yet-downloaded
+       audio lands in that region and growing_read then blocks (via the
+       wait callback) until the background downloader covers it — so a
+       quality switch or a forward seek resumes at the exact requested
+       spot instead of snapping to the watermark. */
     if (offset < 0) offset = 0;
-    struct stat st;
-    if (stat_utf8(s->grow_path, &st) == 0 && offset > st.st_size)
-        offset = st.st_size;
     if (fseek(s->grow_file, (long)offset, SEEK_SET) != 0) return -1;
     return offset;
 }
@@ -646,6 +652,25 @@ const char *ffstream_media_ext(const FFStream *s) {
 
 int ffstream_growing(const FFStream *s) {
     return s && s->growing;
+}
+
+void ffstream_set_growing_total(FFStream *s, int64_t total_bytes) {
+    if (!s || !s->growing || total_bytes <= 0) return;
+    /* Only declare the size when the filesize/duration ratio stays
+       consistent: FFmpeg derives seek byte offsets from (filesize ÷
+       duration), so reporting a larger size than the probed duration
+       implies would overshoot every seek. With a known bitrate we re-derive
+       the duration to match; without one, keep the previous behaviour. */
+    long br = (s->codec && s->codec->bit_rate > 0) ? s->codec->bit_rate : 0;
+    if (br <= 0 || !s->fmt) return;
+    int64_t dur_us = total_bytes * 8 * AV_TIME_BASE / br;
+    if (dur_us <= 0) return;
+    s->grow_total = total_bytes;
+    s->fmt->duration = dur_us;
+}
+
+int64_t ffstream_growing_total(const FFStream *s) {
+    return (s && s->growing) ? s->grow_total : 0;
 }
 
 int ffstream_growing_avail_sec(const FFStream *s, long bitrate) {

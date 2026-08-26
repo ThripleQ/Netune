@@ -29,6 +29,12 @@ int stream_downloader_start(StreamDownloader *dl);
 /* Bytes written to the file so far (monotonic). */
 int64_t stream_downloader_watermark(StreamDownloader *dl);
 
+/* Total size (bytes) of the download from the HTTP Content-Length, or 0
+   when unknown (chunked responses / headers not yet seen). The caller
+   already waits for a prefix before opening the stream, so by the time
+   playback starts the value is normally set. */
+int64_t stream_downloader_total_size(const StreamDownloader *dl);
+
 /* 1 = download finished cleanly (EOF reached), 0 = still downloading. */
 int stream_downloader_done(StreamDownloader *dl);
 

@@ -76,6 +76,16 @@ const char *ffstream_media_ext(const FFStream *s);
    being appended by a background downloader). */
 int ffstream_growing(const FFStream *s);
 
+/* Declare the total byte size of a growing stream (from the download's
+   Content-Length). Makes AVSEEK_SIZE report the true size and re-derives
+   the format duration, so FFmpeg's duration estimate and seek byte math
+   are correct while the file is still being written. total_bytes <= 0
+   (or non-growing) is a no-op. */
+void ffstream_set_growing_total(FFStream *s, int64_t total_bytes);
+
+/* The declared total byte size of a growing stream, or 0 when unknown. */
+int64_t ffstream_growing_total(const FFStream *s);
+
 /* Seconds of audio currently available in a growing stream (derived from
    the on-disk size and the caller-provided bitrate), or -1 when not
    growing / unknown. Seeks on a growing stream are clamped to this value

@@ -20,6 +20,7 @@ struct StreamDownloader {
     pthread_cond_t  cond;
     FILE        *fp;          /* write handle, owned by the download thread */
     int64_t      watermark;   /* bytes written so far */
+    int64_t      total;       /* total size from Content-Length (0 = unknown) */
     int          started;
     int          done;        /* download reached EOF cleanly */
     int          failed;      /* network error / aborted */
@@ -47,14 +48,18 @@ static size_t dl_write_cb(char *ptr, size_t size, size_t nmemb, void *ud) {
 }
 
 /* Progress callback: returning non-zero aborts the transfer. Used so
-   stream_downloader_destroy() can stop a slow download promptly. */
+   stream_downloader_destroy() can stop a slow download promptly. Also
+   captures the Content-Length from curl's dltotal (0 for chunked bodies)
+   so callers can size the stream / compute seek byte offsets. */
 static int dl_xferinfo_cb(void *ud, curl_off_t dltotal, curl_off_t dlnow,
                           curl_off_t ultotal, curl_off_t ulnow) {
-    (void)dltotal; (void)dlnow; (void)ultotal; (void)ulnow;
+    (void)dlnow; (void)ultotal; (void)ulnow;
     StreamDownloader *dl = (StreamDownloader*)ud;
     int stop;
     pthread_mutex_lock(&dl->mutex);
     stop = dl->stop;
+    if (dltotal > 0 && dl->total <= 0)
+        dl->total = (int64_t)dltotal;
     pthread_mutex_unlock(&dl->mutex);
     return stop ? 1 : 0;
 }
@@ -170,6 +175,15 @@ int64_t stream_downloader_watermark(StreamDownloader *dl) {
     wm = dl->watermark;
     pthread_mutex_unlock(&dl->mutex);
     return wm;
+}
+
+int64_t stream_downloader_total_size(const StreamDownloader *dl) {
+    if (!dl) return 0;
+    int64_t t;
+    pthread_mutex_lock(&dl->mutex);
+    t = dl->total;
+    pthread_mutex_unlock(&dl->mutex);
+    return t;
 }
 
 int stream_downloader_done(StreamDownloader *dl) {

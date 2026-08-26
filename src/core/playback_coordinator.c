@@ -504,6 +504,11 @@ static int open_stream(const char *path,
                 g_rec_active = 1;
                 g_downloader = dl;
                 g_part_path = part;   /* ownership transferred */
+                /* Once the Content-Length is in, declare the stream's true
+                   size so FFmpeg reports the real duration + seek math and
+                   the progress bar total is correct from the start. */
+                ffstream_set_growing_total(*ffstream,
+                                           stream_downloader_total_size(dl));
             }
         }
         free(level);
@@ -956,10 +961,17 @@ static void* playback_thread(void *arg) {
                    the download instead of overflowing at a wrong end. */
                 if (ffstream && g_downloader &&
                     ffstream_growing(ffstream) && g_part_path && br > 0) {
-                    struct stat st;
-                    if (stat_utf8(g_part_path, &st) == 0 && st.st_size > 0) {
-                        int64_t frames = (int64_t)st.st_size * 8 * samplerate
-                                         / br;
+                    /* Prefer the declared total (Content-Length) so the
+                       progress bar shows the true track length from the
+                       start; fall back to the on-disk size while growing. */
+                    int64_t total_bytes = stream_downloader_total_size(g_downloader);
+                    if (total_bytes <= 0) {
+                        struct stat st;
+                        if (stat_utf8(g_part_path, &st) == 0)
+                            total_bytes = st.st_size;
+                    }
+                    if (total_bytes > 0) {
+                        int64_t frames = total_bytes * 8 * samplerate / br;
                         if (frames > total_frames)
                             total_frames = (int)frames;
                     }
