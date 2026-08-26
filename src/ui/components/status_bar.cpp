@@ -42,27 +42,27 @@ Element render_status_bar(const AppState &s) {
     default:                     state_str = "\u25A0"; break;
     }
 
-    char buf[64];
-    int m = s.current_time_sec / 60, sc = s.current_time_sec % 60;
-    snprintf(buf, sizeof(buf), "%02d:%02d", m, sc);
-    std::string time_str = buf;
-
-    /* Append seek target time if pending */
-    bool seek_pending = (s.seek_indicator != 0 || s.seek_target_progress > 0.0f);
-    if (seek_pending && s.total_time_sec > 0) {
-        int tgt;
-        if (s.seek_indicator != 0) {
-            tgt = s.current_time_sec + s.seek_indicator;
-        } else {
-            tgt = (int)(s.seek_target_progress * s.total_time_sec);
-        }
-        if (tgt < 0) tgt = 0;
-        if (tgt > s.total_time_sec) tgt = s.total_time_sec;
-        char tgt_buf[16];
-        const char *arrow = (tgt >= s.current_time_sec) ? " -> " : " <- ";
-        snprintf(tgt_buf, sizeof(tgt_buf), "%s%02d:%02d", arrow, tgt / 60, tgt % 60);
-        time_str += tgt_buf;
+    /* Time display: "cur/total". While a seek is pending, the current
+       position shows the seek PREDICTION (current + accumulated delta, or
+       the fired target) in place of the live position — no arrow, the gauge
+       carries the visual cue. */
+    int shown = s.current_time_sec;
+    if (s.seek_indicator != 0) {
+        shown = s.current_time_sec + s.seek_indicator;
+    } else if (s.seek_target_progress > 0.0f) {
+        shown = (int)(s.seek_target_progress * s.total_time_sec);
     }
+    if (shown < 0) shown = 0;
+    if (shown > s.total_time_sec && s.total_time_sec > 0)
+        shown = s.total_time_sec;
+    char buf[64];
+    int m = shown / 60, sc = shown % 60;
+    int tm = s.total_time_sec / 60, ts = s.total_time_sec % 60;
+    if (s.total_time_sec > 0)
+        snprintf(buf, sizeof(buf), "%02d:%02d/%02d:%02d", m, sc, tm, ts);
+    else
+        snprintf(buf, sizeof(buf), "%02d:%02d/--:--", m, sc);
+    std::string time_str = buf;
 
     const char *loop_str = "Off";
     switch (s.loop_mode) {
