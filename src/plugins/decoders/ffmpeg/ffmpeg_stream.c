@@ -278,7 +278,35 @@ static int setup_decoder(FFStream *s, int *sr, int *ch, int *dur) {
 
     if (sr)  *sr  = s->sample_rate;
     if (ch)  *ch  = s->channels;
-    if (dur) *dur = (int)(s->fmt->duration / AV_TIME_BASE);
+    if (dur) {
+        /* Prefer the per-stream duration: for FLAC / OGG / Vorbis / Opus
+           this comes from the header's fixed frame count (STREAMINFO's
+           total_samples, OGG granule, ...) — EXACT and independent of
+           bitrate, unlike fmt->duration, which for a growing
+           (still-downloading) file can be negative or wildly wrong because
+           FFmpeg estimates it from (probe bytes ÷ bitrate). */
+        int64_t d = AV_NOPTS_VALUE;
+        if (s->stream_idx >= 0 &&
+            s->fmt->streams[s->stream_idx]->duration != AV_NOPTS_VALUE) {
+            AVRational tb = s->fmt->streams[s->stream_idx]->time_base;
+            int64_t sd = s->fmt->streams[s->stream_idx]->duration;
+            if (tb.num > 0 && tb.den > 0)
+                d = av_rescale(sd, tb.num, tb.den);   /* → seconds */
+        }
+        if (d <= 0 || d == AV_NOPTS_VALUE) {
+            /* Formats whose header alone carries no fixed frame count (WAV
+               data size lives in the header but is only relevant for local
+               files — those go through dr_wav, not ffstream; m4a/aac store
+               moov at the tail) keep FFmpeg's fmt->duration estimate here;
+               the caller re-derives the total from Content-Length once the
+               download completes. */
+            d = s->fmt->duration / AV_TIME_BASE;
+        }
+        *dur = (int)d;
+        LOG_INFO("ffstream open: fmt=%s sr=%d ch=%d dur=%d",
+                 s->fmt->iformat ? s->fmt->iformat->name : "?",
+                 s->sample_rate, s->channels, *dur);
+    }
     return 0;
 }
 
@@ -450,18 +478,18 @@ fail:
    served from the file directly (local random access). */
 static int growing_read(void *opaque, uint8_t *buf, int buf_size) {
     FFStream *s = (FFStream*)opaque;
-    /* Holey-cache mode: the file contains a gap (zeros) between the valid
-       prefix and a retained tail that a background downloader is refilling.
-       A zero hole must never be handed to the decoder as audio, so we ask
-       the wait callback whether data is available at the read position
-       BEFORE reading, and block until it is (the callback knows the valid
-       regions and the downloader's progress). */
-    int holey = (s->grow_seg_count > 0);
+    /* Regardless of holey mode, ASK the wait callback whether data is
+       available at the read position BEFORE reading, and block until it is.
+       This is the librespot AudioFile contract: the decoder only ever reads
+       bytes the downloader has confirmed on disk. Seeking to a not-yet-
+       downloaded region then naturally blocks here (the callback waits for
+       the downloader to cover the position) instead of handing FFmpeg a
+       zero-filled hole that fails to decode. */
     for (;;) {
-        if (holey) {
-            long pos = ftell(s->grow_file);
-            if (pos < 0) return AVERROR(EIO);
-            int w = s->grow_wait(s->grow_opaque, (int64_t)pos);
+        long pos = ftell(s->grow_file);
+        if (pos < 0) return AVERROR(EIO);
+        if (s->grow_wait) {
+            int w = s->grow_wait(s->grow_opaque, (int64_t)pos, buf_size);
             if (w < 0) return AVERROR(EIO);
             if (w == 0) {   /* finished — drain whatever is there, then EOF */
                 clearerr(s->grow_file);
@@ -469,42 +497,23 @@ static int growing_read(void *opaque, uint8_t *buf, int buf_size) {
                 if (n > 0) return (int)n;
                 return AVERROR_EOF;
             }
-            clearerr(s->grow_file);
-            size_t n = fread(buf, 1, (size_t)buf_size, s->grow_file);
-            if (n > 0) return (int)n;
-            /* wait said available but fread got nothing (the file is being
-               written concurrently, or pos sits past the retained tail) —
-               retry; the loop converges to EOF when the download finishes */
-            continue;
         }
+        clearerr(s->grow_file);
         size_t n = fread(buf, 1, (size_t)buf_size, s->grow_file);
         if (n > 0) return (int)n;
         if (ferror(s->grow_file)) return AVERROR(EIO);
-        /* EOF — wait for the file to grow past the current read position
-           (background downloader) */
-        if (s->growing && s->grow_wait) {
-            long pos = ftell(s->grow_file);
-            if (pos < 0) return AVERROR(EIO);
-            int w = s->grow_wait(s->grow_opaque, (int64_t)pos);
-            if (w > 0) {
-                /* stdio caches the EOF flag after a 0-byte fread; clear it
-                   so the next fread re-reads the (now grown) file */
-                clearerr(s->grow_file);
-                continue;
-            }
-            if (w < 0) return AVERROR(EIO); /* error */
-            /* finished — drain any bytes written between the EOF fread and
-               the completion signal before declaring EOF, so the final
-               chunk is never lost */
-            clearerr(s->grow_file);
-            n = fread(buf, 1, (size_t)buf_size, s->grow_file);
-            if (n > 0) return (int)n;
+        /* fread got nothing even though the wait said data is available —
+           the file is being written concurrently (the wait uses the
+           downloader's watermark; the file is still catching up), or pos
+           sits past the retained tail. Retry; the loop converges to EOF
+           when the download finishes. */
+        if (!s->grow_wait) {
+            /* static file / no wait callback — plain EOF. Must return
+               AVERROR_EOF (negative), NOT 0: FFmpeg's avio_read treats a 0
+               return as "no data, retry" and loops forever in its bypass
+               path. */
             return AVERROR_EOF;
         }
-        /* static file / no wait callback — plain EOF. Must return
-           AVERROR_EOF (negative), NOT 0: FFmpeg's avio_read treats a 0
-           return as "no data, retry" and loops forever in its bypass path. */
-        return AVERROR_EOF;
     }
 }
 
@@ -546,7 +555,7 @@ static int64_t growing_seek(void *opaque, int64_t offset, int whence) {
 }
 
 FFStream* ffstream_open_growing(const char *path, ffstream_wait_fn wait,
-                                void *wait_opaque,
+                                void *wait_opaque, int64_t declared_total,
                                 int *sr, int *ch, int *dur) {
     av_log_set_level(AV_LOG_ERROR);
     FFStream *s = calloc(1, sizeof(FFStream));
@@ -562,6 +571,13 @@ FFStream* ffstream_open_growing(const char *path, ffstream_wait_fn wait,
     s->grow_wait = wait;
     s->grow_opaque = wait_opaque;
     s->growing = 1;
+    /* Declare the true total BEFORE the probe: AVSEEK_SIZE then reports the
+       full file size instead of the tiny in-progress prefix, so FLAC's
+       demuxer does not mistake the still-downloading head for a short
+       complete file and collapse packet boundaries onto the read-block size
+       (which yields one giant packet per read and "invalid residual" on the
+       decoder). */
+    s->grow_total = declared_total;
 
     uint8_t *buf = (uint8_t*)av_malloc(64 * 1024);
     if (!buf) goto fail;
@@ -575,6 +591,7 @@ FFStream* ffstream_open_growing(const char *path, ffstream_wait_fn wait,
     s->fmt->flags |= AVFMT_FLAG_CUSTOM_IO;   /* we manage rec_pb's lifetime */
     s->fmt->max_analyze_duration = 10 * AV_TIME_BASE;
     if (avformat_open_input(&s->fmt, path, NULL, NULL) < 0) goto fail;
+    if (avio_seek(s->rec_pb, 0, SEEK_SET) < 0) goto fail;
     if (setup_decoder(s, sr, ch, dur) < 0) goto fail;
     return s;
 
@@ -702,17 +719,23 @@ int ffstream_growing(const FFStream *s) {
 
 void ffstream_set_growing_total(FFStream *s, int64_t total_bytes) {
     if (!s || !s->growing || total_bytes <= 0) return;
-    /* Only declare the size when the filesize/duration ratio stays
-       consistent: FFmpeg derives seek byte offsets from (filesize ÷
-       duration), so reporting a larger size than the probed duration
-       implies would overshoot every seek. With a known bitrate we re-derive
-       the duration to match; without one, keep the previous behaviour. */
-    long br = (s->codec && s->codec->bit_rate > 0) ? s->codec->bit_rate : 0;
-    if (br <= 0 || !s->fmt) return;
-    int64_t dur_us = total_bytes * 8 * AV_TIME_BASE / br;
-    if (dur_us <= 0) return;
+    /* Declare the file's true size unconditionally: growing_seek's
+       AVSEEK_SIZE returns it, so FFmpeg treats the file as complete for
+       duration/seek purposes even while it is still being written — a
+       timestamp seek to a not-yet-downloaded region works instead of being
+       rejected as out of bounds. */
     s->grow_total = total_bytes;
-    s->fmt->duration = dur_us;
+    if (!s->fmt) return;
+    /* When a bitrate is known, also re-derive fmt->duration so the
+       filesize/duration ratio stays consistent (FFmpeg derives seek byte
+       offsets from it). Without a bitrate (FLAC etc.) leave the probed
+       duration — the header carries the exact frame count, so it is
+       already correct and independent of file size. */
+    long br = (s->codec && s->codec->bit_rate > 0) ? s->codec->bit_rate : 0;
+    if (br <= 0) return;
+    int64_t dur_us = total_bytes * 8 * AV_TIME_BASE / br;
+    if (dur_us > 0)
+        s->fmt->duration = dur_us;
 }
 
 int64_t ffstream_growing_total(const FFStream *s) {

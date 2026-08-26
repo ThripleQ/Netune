@@ -1729,7 +1729,15 @@ int run_app(int argc, char **argv) {
                           now.time_since_epoch()).count();
         const AppState &st = state.state();
         if (st.seek_accum == 0) return;
-        if (now_ms - st.seek_last_ms < 150)
+        /* Hold-to-accumulate: don't consume while the key is still being
+           held. Terminals report only key-press (no key-release), so we
+           infer "still holding" from how recently a seek key fired. The
+           threshold must exceed the OS key-repeat initial delay (~250-400ms
+           on Linux), otherwise the single press at the start of a hold gets
+           consumed 150ms in, causing a visible "accumulate → sudden seek →
+           accumulate again" stutter. Repeat presses land ~30-60ms apart, so
+           500ms cleanly separates "holding" from "released". */
+        if (now_ms - st.seek_last_ms < 500)
             return;
         if (st.playback_state != PlaybackState::Stopped && st.total_time_sec > 0) {
             int target = st.current_time_sec + st.seek_accum;

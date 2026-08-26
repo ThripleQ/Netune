@@ -150,6 +150,11 @@ static int  g_rec_active     = 0;
    is the .part it writes, owned here. */
 static StreamDownloader *g_downloader = NULL;
 static char *g_part_path = NULL;
+/* Average bitrate of the currently-decoded LOCAL (complete-cache) file,
+   derived from file size / duration in open_stream; 0 when unknown.
+   Mirrors the growing stream's fixed Content-Length bitrate so the status
+   bar reads the same for cache and streaming playback. */
+static long g_decoded_bitrate = 0;
 /* URL of the current netease stream — kept so do_seek can restart the
    downloader at a new byte offset with the same source. */
 static char              g_stream_url[2048] = {0};
@@ -346,10 +351,10 @@ static void cache_keep_partial(FFStream *ffstream) {
    downloader has written past the read position `pos`, finishes, or fails.
    Returns 1 = more data may be available (retry the read),
    0 = the download finished (EOF), -1 = error. */
-static int wait_more_data(void *opaque, int64_t pos) {
-    (void)opaque;
-    StreamDownloader *dl = g_downloader;
-    int64_t need = pos + 1;
+static int wait_more_data(void *opaque, int64_t pos, int want) {
+    StreamDownloader *dl = (StreamDownloader*)opaque;
+    if (!dl) dl = g_downloader;   /* legacy: allow global fallback */
+    int64_t need = pos + (int64_t)want;
     /* Retained regions of a holey cache are on disk and immediately
        available (no downloader involved / not yet overwritten) — check
        BEFORE the blocking wait, or playing the prefix would stall 500ms per
@@ -362,17 +367,22 @@ static int wait_more_data(void *opaque, int64_t pos) {
     if (dl) {
         int64_t seq_start = stream_downloader_start_byte(dl);
         if (pos >= seq_start) {
-            need = pos - seq_start + 1;
+            need = pos - seq_start + (int64_t)want;
         } else {
             return -1;
         }
+    } else {
+        /* No downloader and the position is not in a retained segment:
+           nothing will ever fill it — fail rather than loop forever. */
+        return -1;
     }
     if (stream_downloader_failed(dl)) return -1;
-    /* wait for the downloader to reach one byte past the read position;
-       the 500ms cap keeps a stalled download from blocking the playback
-       thread forever. A timeout here means "no progress yet" — the read is
-       retried (the downloader either advances later or fails, and the wait
-       loop below converges to EOF / error then). */
+    /* wait for the downloader to cover the whole read (`pos + want`), so a
+       read never returns a buffer cut mid-packet; the 500ms cap keeps a
+       stalled download from blocking the playback thread forever. A timeout
+       here means "no progress yet" — the read is retried (the downloader
+       either advances later or fails, and the wait loop below converges to
+       EOF / error then). */
     stream_downloader_wait_watermark(dl, need, 500);
     if (stream_downloader_failed(dl)) return -1;
     if (stream_downloader_watermark(dl) >= need) return 1;  /* data available */
@@ -493,6 +503,21 @@ static int open_stream(const char *path,
                     *samplerate   = info.sample_rate;
                     *channels     = info.channels;
                     *total_frames = info.total_frames;
+                    /* Average bitrate of the cached file = file bytes × 8 /
+                       duration. Mirrors the growing path's Content-Length
+                       fix so the status bar shows the SAME value whether the
+                       track is played from a complete cache or streaming. */
+                    g_decoded_bitrate = 0;
+                    if (info.total_frames > 0 && info.sample_rate > 0) {
+                        struct stat st;
+                        if (stat_utf8(cache_path, &st) == 0 && st.st_size > 0) {
+                            int64_t dur_sec = (int64_t)info.total_frames
+                                            / info.sample_rate;
+                            if (dur_sec > 0)
+                                g_decoded_bitrate =
+                                    (long)((int64_t)st.st_size * 8 / dur_sec);
+                        }
+                    }
                     audio_cache_touch(path);
                     cache_seglist_free(&cache_segs);
                 }
@@ -558,6 +583,7 @@ static int open_stream(const char *path,
                 int dur_sec = 0;
                 *ffstream = ffstream_open_growing(
                     cache_path, wait_more_data, dl,
+                    stream_downloader_total_size(dl),
                     samplerate, channels, &dur_sec);
                 if (!*ffstream) {
                     stream_downloader_destroy(dl);
@@ -656,6 +682,7 @@ static int open_stream(const char *path,
                 }
                 int dur_sec = 0;
                 *ffstream = ffstream_open_growing(part, wait_more_data, dl,
+                                                  stream_downloader_total_size(dl),
                                                   samplerate, channels,
                                                   &dur_sec);
                 if (!*ffstream) {
@@ -715,7 +742,34 @@ static long effective_bitrate(FFStream *ffstream, int64_t current_frame,
                               int samplerate) {
     if (!ffstream) return 0;
     long br = ffstream_bitrate(ffstream);
-    if (br > 0) return br;
+    if (br > 0) {
+        /* For a growing stream the probe-time fmt->bit_rate was estimated
+           from the tiny downloaded prefix and is badly wrong for
+           variable-bitrate containers (FLAC et al.: a 64KB prefix can come
+           out as ~2.4k bps). Once playback has actually consumed a few
+           seconds, the MEASURED bitrate (bytes downloaded / playtime) is
+           far more accurate — prefer it for growing streams, keeping the
+           declared codec bitrate (CBR mp3: exact) as the base.
+           Measured from the downloader's MONOTONIC watermark (bytes written
+           so far), not the decoder's read cursor: the decoder consumes in
+           bursts (chunked freads that run ahead of the playhead), so its
+           instantaneous position jitters and would make a stable average
+           bitrate appear to "change". */
+        if (ffstream_growing(ffstream)) {
+            int played_sec = samplerate > 0
+                ? (int)(current_frame / samplerate) : 0;
+            if (played_sec >= 3 && g_downloader) {
+                int64_t sb = stream_downloader_start_byte(g_downloader);
+                int64_t wm = stream_downloader_watermark(g_downloader);
+                int64_t dl_bytes = sb + wm;   /* absolute bytes written */
+                if (dl_bytes > 0) {
+                    long measured = (long)(dl_bytes * 8 / played_sec);
+                    if (measured > 0) br = measured;
+                }
+            }
+        }
+        return br;
+    }
     if (!ffstream_growing(ffstream)) return 0;
     int64_t read_b = ffstream_growing_bytes_read(ffstream);
     int played_sec = samplerate > 0 ? (int)(current_frame / samplerate) : 0;
@@ -774,12 +828,76 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
         }
         if (g_downloader && br > 0 && seek_sec > avail) {
             if (!target_in_segs && !target_in_seq) {
-                /* Seek mode: abandon the current forward-fill and restart
-                   the sequential downloader AT the seek target, so the
-                   bytes right after the new position are fetched first
-                   (greedy forward from the new point). Bytes the old
-                   downloader wrote remain valid on disk — record them. */
+                /* Decide whether to RESTART the downloader at the target, or
+                   let the current sequential downloader keep going and just
+                   wait for it to cover the target.
+                   - restart: when the file already holds a usable prefix /
+                     retained regions (a partial-cache continuation, or a
+                     seek past a long downloaded run). We don't want to
+                     re-download the whole 0..target region just to jump.
+                   - wait: for a FRESH download (start_byte==0, no retained
+                     segments — e.g. right after a quality switch reopened
+                     the track). Restarting would abandon the from-byte-0
+                     fill and punch a hole in 0..target that nothing refills.
+                     Instead seek to the target and let growing_read block
+                     until the sequential downloader reaches it. */
                 int64_t seq_start = stream_downloader_start_byte(g_downloader);
+                int has_prefix = (seq_start > 0) || (g_segs.count > 0);
+                if (!has_prefix) {
+                    /* fresh download (e.g. right after a quality switch
+                       reopened the track at a new, uncached quality): the
+                       sequential downloader started at byte 0 and the seek
+                       target lies past its current watermark. Instead of
+                       blocking playback until the from-0 downloader crawls
+                       all the way to the target, RESTART it with a byte
+                       Range AT the target so the bytes right after the seek
+                       land are fetched first and playback resumes almost
+                       immediately. The 0..target hole is self-healing: any
+                       later seek into it restarts the downloader from that
+                       position down to EOF (filling everything after it),
+                       and if the track is committed as a partial cache, the
+                       next play resumes from byte 0 and fills the whole
+                       file. */
+                    if (seek_sec > avail) {
+                        stream_downloader_destroy(g_downloader);
+                        g_downloader = NULL;
+                        StreamDownloader *nd = stream_downloader_create_resume(
+                            g_stream_url, g_part_path, target_byte);
+                        if (nd && stream_downloader_start(nd) == 0) {
+                            g_downloader = nd;
+                            /* Byte-seek exactly onto the new downloader's
+                               start; the first read there blocks in
+                               growing_read's wait until it covers the
+                               target. */
+                            int ok = (ffstream_seek_bytes(ffstream,
+                                                          target_byte) == 0);
+                            if (ok != 0)
+                                ok = (ffstream_seek(ffstream, seek_sec) == 0);
+                            if (ok)
+                                *current_frame = seek_sec * samplerate;
+                            return;
+                        }
+                        if (nd) stream_downloader_destroy(nd);
+                        /* restart failed — fall through: re-measure the
+                           watermark and let the clamp/seek below decide */
+                        avail_bytes = growing_avail_bytes();
+                        avail = (int)(avail_bytes * 8 / br);
+                    }
+                    /* fallback: seek to the target; the read side waits for
+                       the from-0 downloader to cover it */
+                    int ok = (ffstream_seek(ffstream, seek_sec) == 0);
+                    if (ok)
+                        *current_frame = seek_sec * samplerate;
+                    return;
+                }
+                /* has a usable prefix — restart the downloader AT the target
+                   byte (HTTP Range) so the bytes right after the new
+                   position are fetched first. The read-side (growing_read)
+                   blocks on the wait callback until this downloader covers
+                   the target — the decoder never sees a zero-filled hole,
+                   which FFmpeg cannot parse. Bytes the old downloader wrote
+                   remain valid on disk — record them so future seeks back
+                   into them hit the retained segments. */
                 if (stream_downloader_watermark(g_downloader) > 0)
                     cache_seglist_add(&g_segs, seq_start,
                                       stream_downloader_watermark(g_downloader));
@@ -787,35 +905,12 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
                 g_downloader = NULL;
                 StreamDownloader *nd = stream_downloader_create_resume(
                     g_stream_url, g_part_path, target_byte);
-                int restarted = 0;
                 if (nd && stream_downloader_start(nd) == 0) {
                     g_downloader = nd;
-                    restarted = 1;   /* downloader is live; reads wait for it */
-                    /* Brief initial wait so the first read at the target
-                       isn't a total stall. Deliberately short (not a multi-
-                       second block): on a slow link it just times out and
-                       playback blocks inside wait_more_data's own 500ms per-
-                       read poll, keeping the playback thread responsive
-                       during repeated seeks. */
-                    int w = stream_downloader_wait_watermark(nd, 1, 500);
-                    if (w != 1)
-                        LOG_WARN("Seek resume data wait (500ms) not "
-                                 "satisfied — playback will wait for the "
-                                 "downloader to cover %d s", seek_sec);
-                } else if (nd) {
-                    stream_downloader_destroy(nd);
-                }
-                if (restarted) {
-                    /* The downloader now covers the seek target — jump there
-                       directly instead of clamping to the old continuous
-                       prefix (which would snap back to the start). Use the
-                       byte seek, NOT the timestamp seek: the latter
-                       AVSEEK_FLAG_BACKWARD-backtracks to a frame boundary,
-                       which can land in the structurally-empty region
-                       between the old downloader's end and the new target —
-                       a "dead zone" no downloader fills, stalling playback.
-                       The byte seek lands exactly on the new downloader's
-                       start, where data is (or is about to be) available. */
+                    /* Byte-seek exactly onto the new downloader's start. The
+                       first read there blocks in growing_read's wait until
+                       the downloader covers it — a clean resume with no
+                       dead zone and no clamp-back to the old prefix. */
                     int ok = (ffstream_seek_bytes(ffstream, target_byte) == 0);
                     if (ok != 0)
                         /* demuxer without AVSEEK_FLAG_BYTE support — fall
@@ -825,8 +920,10 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
                     if (ok)
                         *current_frame = seek_sec * samplerate;
                     return;
+                } else if (nd) {
+                    stream_downloader_destroy(nd);
                 }
-                /* restart failed — the watermark kept whatever it had */
+                /* restart failed — fall through to the clamp below */
                 avail_bytes = growing_avail_bytes();
                 avail = (int)(avail_bytes * 8 / br);
             }
@@ -954,6 +1051,7 @@ static void* playback_thread(void *arg) {
                 /* in-place quality switch: reopen the same netease track at
                    the now-resolved quality and resume from seek_frame sec,
                    keeping the playing/paused state. */
+                LOG_INFO("Reload executing for %s (seek %d)", cmd.path, cmd.seek_frame);
                 bool was_paused = (state == PS_PAUSED);
                 /* preserve the current quality's partial download before
                    reopening (playing switches already did this in the inner
@@ -1058,6 +1156,7 @@ static void* playback_thread(void *arg) {
                 case CMD_RELOAD:
                     /* in-place quality switch while playing: reopen the
                        stream via the outer loop, preserving seek + state */
+                    LOG_INFO("Reload requested (in-place) for %s (seek %d)", icmd.path, icmd.seek_frame);
                     if (ffstream) {
                         cache_keep_partial(ffstream);
                         ffstream_close(ffstream);
@@ -1204,6 +1303,31 @@ static void* playback_thread(void *arg) {
                 last_progress_ms = now_ms;
                 long br = effective_bitrate(ffstream, current_frame,
                                             samplerate);
+                if (br <= 0 && !ffstream && decoder)
+                    br = g_decoded_bitrate;   /* complete-cache local decode */
+                /* A growing stream is PLAYING BACK THE LOCAL .part file, so
+                   its average bitrate is a property of the audio data, not
+                   of the download pace — it must NOT flicker as the download
+                   runs ahead of the playhead. Once the true total length is
+                   known (per-stream duration from setup_decoder → positive
+                   total_frames) AND the Content-Length is in, the real
+                   average bitrate is fixed: Content-Length × 8 / total-sec.
+                   Pin br to it so the status bar shows one stable value.
+                   Without Content-Length, fall back to the measured value
+                   (download bytes / playtime), which converges and is
+                   monotonic. */
+                if (ffstream && g_downloader &&
+                    ffstream_growing(ffstream) && total_frames > 0 &&
+                    samplerate > 0) {
+                    int64_t cl = stream_downloader_total_size(g_downloader);
+                    if (cl > 0) {
+                        int64_t dur_sec = total_frames / samplerate;
+                        if (dur_sec > 0) {
+                            long fixed = (long)(cl * 8 / dur_sec);
+                            if (fixed > 0) br = fixed;
+                        }
+                    }
+                }
                 /* Growing-file mode: the probe-time duration was estimated
                    from the partially downloaded file and is shorter than the
                    real track. Track the true length from (on-disk size /
@@ -1211,22 +1335,23 @@ static void* playback_thread(void *arg) {
                    without one) so the progress bar and seek bounds grow with
                    the download instead of overflowing at a wrong end. */
                 if (ffstream && g_downloader &&
-                    ffstream_growing(ffstream) && g_part_path && br > 0) {
-                    /* Prefer the declared total (Content-Length) so the
-                       progress bar shows the true track length from the
-                       start; fall back to the continuous playable bytes
-                       while growing. The raw on-disk size is deliberately
-                       NOT used here: a restarted downloader fseeks past
-                       holes, inflating the file size, and it never shrinks,
-                       so a progress-bar total derived from it would overshoot
-                       and stay wrong. growing_avail_bytes() is the true
-                       contiguous download and converges as the file fills. */
+                    ffstream_growing(ffstream) && g_part_path && br > 0 &&
+                    total_frames <= 0) {
+                    /* The stream's total length is derived from the per-stream
+                       duration when the header carries a fixed frame count
+                       (FLAC total_samples, etc.) — that value is exact and is
+                       set in setup_decoder. This block is ONLY a fallback for
+                       containers whose header alone has no duration (m4a/aac:
+                       moov at the tail; opus: granule-only), where total_frames
+                       is still <= 0. Prefer Content-Length so the progress bar
+                       shows the true track length from the start; fall back to
+                       the continuous playable bytes while growing. */
                     int64_t total_bytes = stream_downloader_total_size(g_downloader);
                     if (total_bytes <= 0)
                         total_bytes = growing_avail_bytes();
                     if (total_bytes > 0) {
                         int64_t frames = total_bytes * 8 * samplerate / br;
-                        if (frames > total_frames)
+                        if (frames > 0)
                             total_frames = (int)frames;
                     }
                 }

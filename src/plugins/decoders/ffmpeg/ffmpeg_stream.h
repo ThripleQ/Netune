@@ -37,20 +37,29 @@ FFStream* ffstream_open_partial(const char *url, const char *prefix_path,
                                 int *duration_sec);
 
 /* Wait callback for ffstream_open_growing: invoked when the local file is
-   exhausted at byte position `pos` but may still be growing (a background
-   downloader is appending to it). The callback should block until data
-   past `pos` is available, or the stream finishes/fails. Returns:
-     1 = more data may be available (retry the read),
-     0 = the stream is finished (EOF), -1 = error. */
-typedef int (*ffstream_wait_fn)(void *opaque, int64_t pos);
+    exhausted at byte position `pos` but may still be growing (a background
+    downloader is appending to it). The callback should block until data
+    past `pos` is available, or the stream finishes/fails. `want` is the
+    number of bytes the reader intends to consume next: the callback should
+    wait until at least `pos + want` bytes are confirmed on disk, so a read
+    never returns a buffer that is cut mid-packet (which FFmpeg then fails
+    to demux — e.g. FLAC "invalid residual"). Returns:
+      1 = more data may be available (retry the read),
+      0 = the stream is finished (EOF), -1 = error. */
+typedef int (*ffstream_wait_fn)(void *opaque, int64_t pos, int want);
 
 /* Open a local file that may still be growing (e.g. a .part being written
    by a background downloader). Reads block via `wait` when the file is
    exhausted until more data arrives or the stream finishes, so FFmpeg
    never sees a spurious EOF mid-download. The file is read-only here; the
-   downloader is the sole writer. Returns NULL on failure. */
+   downloader is the sole writer. `declared_total` is the stream's known
+   final size (Content-Length) if any: it is set BEFORE the format probe so
+   AVSEEK_SIZE reports the true total (not the tiny in-progress file size),
+   which keeps FLAC's demuxer from mistaking the still-downloading prefix
+   for a short complete file and mis-parsing packet boundaries. Pass <=0 if
+   unknown. Returns NULL on failure. */
 FFStream* ffstream_open_growing(const char *path, ffstream_wait_fn wait,
-                                void *wait_opaque,
+                                void *wait_opaque, int64_t declared_total,
                                 int *sample_rate, int *channels,
                                 int *duration_sec);
 
