@@ -27,6 +27,11 @@
    thread opens the .part for FFmpeg probing (probe needs a few KB; 64KB
    covers ID3 + first frames comfortably). */
 #define MIN_PREFIX_BYTES (64 * 1024)
+/* Maximum time the playback thread blocks waiting for the new-quality
+   downloader to cover the resume position during an in-place quality
+   switch (CMD_RELOAD). Bounded so a slow link degrades to resuming at the
+   current download watermark instead of stalling playback. */
+#define RELOAD_RESUME_WAIT_MS 10000
 
 /* ── Commands ───────────────────────────────────────── */
 typedef enum {
@@ -549,22 +554,36 @@ static long effective_bitrate(FFStream *ffstream, int64_t current_frame,
 /* Apply a seek (seconds) to the current stream, updating current_frame. */
 static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
                     int total_frames, int seek_sec, int *current_frame) {
-    if (total_frames <= 0) return;
     int target = seek_sec * samplerate;
     if (target < 0) target = 0;
-    if (target >= total_frames) target = total_frames - 1;
-    /* Growing-file mode: the stream is only seekable up to what the
-       background downloader has already written. Clamp the target to the
-       downloaded seconds first, or the read side blocks at the watermark
-       while the UI reports the (unreachable) requested position. */
+    /* Growing-file mode is handled first: the total_frames probe estimate
+       is tiny and useless as a bound — the real bound is the download
+       watermark. To keep a quality switch continuous, wait (bounded) for
+       the background downloader to cover the target byte, so the seek
+       lands at the resume position instead of snapping back to the start.
+       On a slow link the timeout just resumes at the current watermark. */
     if (ffstream && ffstream_growing(ffstream)) {
         long br = effective_bitrate(ffstream, *current_frame, samplerate);
         int avail = ffstream_growing_avail_sec(ffstream, br);
-        if (avail >= 0 && seek_sec > avail) {
-            LOG_WARN("Seek %ds clamped to downloaded %ds", seek_sec, avail);
-            target = avail * samplerate;
+        if (g_downloader && avail >= 0 && br > 0 && seek_sec > avail) {
+            int64_t target_byte = (int64_t)seek_sec * br / 8;
+            int w = stream_downloader_wait_watermark(
+                g_downloader, target_byte, RELOAD_RESUME_WAIT_MS);
+            if (w != 1)
+                LOG_WARN("Quality-switch resume wait (%ds) not satisfied — "
+                         "resuming at the download watermark", seek_sec);
+            /* the watermark grew while we waited — re-read it */
+            avail = ffstream_growing_avail_sec(ffstream, br);
         }
+        if (avail >= 0 && seek_sec > avail)
+            target = avail * samplerate;
+        int ok = (ffstream_seek(ffstream, target / samplerate) == 0);
+        if (ok)
+            *current_frame = target;
+        return;
     }
+    if (total_frames <= 0) return;
+    if (target >= total_frames) target = total_frames - 1;
     int ok = 1;
     if (ffstream)
         ok = (ffstream_seek(ffstream, target / samplerate) == 0);
