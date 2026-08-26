@@ -3,6 +3,7 @@
 extern "C" {
 #endif
 #include <stddef.h>
+#include <stdint.h>   /* int64_t for the cache byte regions */
 
 /* audio_cache.h — transparent on-disk audio cache for streamed tracks.
  *

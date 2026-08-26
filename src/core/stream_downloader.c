@@ -9,6 +9,10 @@
 #include <pthread.h>
 #include <time.h>
 
+#ifdef _WIN32
+#include <windows.h>   /* GetTickCount64 for the monotonic clock */
+#endif
+
 #ifdef HAVE_LIBCURL
 #include <curl/curl.h>
 #endif
@@ -33,9 +37,15 @@ struct StreamDownloader {
 };
 
 static int64_t now_mono_ms(void) {
+#ifdef _WIN32
+    /* The MSVC pthread shim (compat/msvc/pthread.h) has no clock_gettime /
+       CLOCK_MONOTONIC; GetTickCount64 is the portable monotonic clock. */
+    return (int64_t)GetTickCount64();
+#else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+#endif
 }
 
 #ifdef HAVE_LIBCURL
@@ -208,13 +218,18 @@ StreamDownloader *stream_downloader_create(const char *url, const char *part_pat
         return NULL;
     }
     pthread_mutex_init(&dl->mutex, NULL);
-    /* bind the condvar to the monotonic clock so timed waits are immune to
-       wall-clock jumps (see wait_watermark) */
+    /* Bind the condvar to the monotonic clock so timed waits are immune to
+       wall-clock jumps (see wait_watermark). The MSVC pthread shim has no
+       condattr/clock support — Windows falls back to the default attrs. */
+#ifdef _WIN32
+    pthread_cond_init(&dl->cond, NULL);
+#else
     pthread_condattr_t attr;
     pthread_condattr_init(&attr);
     pthread_condattr_setclock(&attr, CLOCK_MONOTONIC);
     pthread_cond_init(&dl->cond, &attr);
     pthread_condattr_destroy(&attr);
+#endif
     return dl;
 }
 
@@ -327,6 +342,18 @@ int stream_downloader_wait_watermark(StreamDownloader *dl, int64_t min_bytes,
                 pthread_mutex_unlock(&dl->mutex); return 0;
             }
             int64_t remain = timeout_ms - elapsed;
+#ifdef _WIN32
+            /* The MSVC pthread shim exposes no pthread_cond_timedwait (the
+               Win32 CONDITION_VARIABLE has no timed-wait wrapper here), so
+               poll instead: release the lock, sleep briefly, and let the
+               loop re-check the conditions. */
+            {
+                DWORD ms = remain > 100 ? 100 : (DWORD)remain;
+                pthread_mutex_unlock(&dl->mutex);
+                Sleep(ms);
+                pthread_mutex_lock(&dl->mutex);
+            }
+#else
             /* the condvar is created with CLOCK_MONOTONIC (see create), so
                the absolute deadline must use the monotonic clock too —
                using CLOCK_REALTIME here would make a wall-clock jump (NTP)
@@ -339,6 +366,7 @@ int stream_downloader_wait_watermark(StreamDownloader *dl, int64_t min_bytes,
                 ts.tv_nsec %= 1000000000;
             }
             pthread_cond_timedwait(&dl->cond, &dl->mutex, &ts);
+#endif
         } else {
             pthread_cond_wait(&dl->cond, &dl->mutex);
         }
