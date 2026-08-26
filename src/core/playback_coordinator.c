@@ -70,6 +70,17 @@ static void cmd_queue_push(CmdQueue *q, const Command *cmd) {
         q->tail = (q->tail + 1) % CMD_QUEUE_SIZE;
         q->count++;
         pthread_cond_signal(&q->cond);
+    } else if (cmd->type == CMD_QUIT) {
+        /* CMD_QUIT must never be dropped: if the queue is full (UI burst
+           outpacing the playback thread), evict the oldest queued command
+           so shutdown always reaches the thread. Losing any other command
+           is harmless; losing QUIT hangs pthread_join forever. */
+        q->head = (q->head + 1) % CMD_QUEUE_SIZE;
+        q->count--;
+        q->items[q->tail] = *cmd;
+        q->tail = (q->tail + 1) % CMD_QUEUE_SIZE;
+        q->count++;
+        pthread_cond_signal(&q->cond);
     }
     pthread_mutex_unlock(&q->mutex);
 }
@@ -918,6 +929,10 @@ static void* playback_thread(void *arg) {
                 continue;
 
             case CMD_PLAY: {
+                /* preserve the current track's partial download before
+                   switching — when paused, the inner loop never ran and
+                   open_stream would otherwise drop the downloader's bytes */
+                if (ffstream) cache_keep_partial(ffstream);
                 int rc = open_stream(cmd.path, &ffstream, &decoder, &audio,
                                      &samplerate, &channels, &total_frames);
                 if (rc == 1) {
@@ -940,6 +955,10 @@ static void* playback_thread(void *arg) {
                    the now-resolved quality and resume from seek_frame sec,
                    keeping the playing/paused state. */
                 bool was_paused = (state == PS_PAUSED);
+                /* preserve the current quality's partial download before
+                   reopening (playing switches already did this in the inner
+                   loop; a paused switch reaches here directly) */
+                if (ffstream) cache_keep_partial(ffstream);
                 int rc = open_stream(cmd.path, &ffstream, &decoder, &audio,
                                      &samplerate, &channels, &total_frames);
                 if (rc != 0) {
@@ -1239,6 +1258,7 @@ cleanup:
     }
     if (decoder) decoder_close(decoder);
     audio_teardown(audio);
+    cache_seglist_free(&g_segs);   /* last track's retained regions */
     free(spectrum_buf);
     free(pcm_buf);
     LOG_INFO("Playback thread ended");
