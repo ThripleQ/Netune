@@ -86,6 +86,12 @@ void ffstream_set_growing_total(FFStream *s, int64_t total_bytes);
 /* The declared total byte size of a growing stream, or 0 when unknown. */
 int64_t ffstream_growing_total(const FFStream *s);
 
+/* Declare the valid byte regions of a holey cache file being re-fetched in
+   place: a contiguous prefix [0, prefix) and an optional tail [tail_at,
+   file end). Positions inside the gap are served only once the background
+   downloader covers them. Both <= 0 disables the holey mode. */
+void ffstream_set_growing_regions(FFStream *s, int64_t prefix, int64_t tail_at);
+
 /* Seconds of audio currently available in a growing stream (derived from
    the on-disk size and the caller-provided bitrate), or -1 when not
    growing / unknown. Seeks on a growing stream are clamped to this value

@@ -161,6 +161,14 @@ static int               g_resume_active = 0;
 /* URL of the current netease stream — kept so do_seek can start the resume
    downloader with the same source. */
 static char              g_stream_url[2048] = {0};
+/* Holey-cache replay state (stage C): the current stream re-fetches an
+   existing cache file in place. g_rec_prefix / g_rec_tail_at are the valid
+   byte regions of that file ([0,prefix) and optional [tail_at,end));
+   g_reuse_cache marks that g_part_path is already the final cache entry
+   (committed in place, never renamed). */
+static int64_t           g_rec_prefix = 0;
+static int64_t           g_rec_tail_at = 0;
+static int               g_reuse_cache = 0;
 
 /* ── Event bus handlers ────────────────────────────── */
 static void on_app_shutdown(const BusEvent *ev, void *ud) {
@@ -275,28 +283,46 @@ static void cache_keep_partial(FFStream *ffstream) {
                          !stream_downloader_failed(g_downloader);
         int64_t keep = stream_downloader_watermark(g_downloader);
         int had_resume = g_resume_active;
+        int complete = done_clean;
+        int64_t prefix = keep;
+        int64_t tail_at = 0;
+        if (g_reuse_cache && !complete) {
+            /* holey replay: the file already held a prefix + retained tail;
+               keep whatever is still valid. Once the re-fetch covered the
+               tail offset the whole file is valid → complete. */
+            if (g_rec_prefix > prefix) prefix = g_rec_prefix;
+            if (g_rec_tail_at > 0) {
+                if (keep >= g_rec_tail_at) complete = 1;
+                else tail_at = g_rec_tail_at;
+            }
+        } else if (had_resume && g_resume_at > keep) {
+            /* .part with a parallel resume downloader: retain the resume
+               region [g_resume_at..end] as the tail instead of trimming it,
+               so a later play can jump straight into it (stage C). */
+            tail_at = g_resume_at;
+        }
         stream_downloader_destroy(g_downloader);
         g_downloader = NULL;
         resume_cleanup();   /* stop the parallel resume downloader too */
         if (g_part_path) {
-            /* If a resume downloader wrote bytes at a high offset, the file
-               has a hole below it — trim back to the contiguous sequential
-               prefix so the partial cache entry resumes from byte 0. If the
-               trim fails, discard the file rather than commit a holey entry
-               (open_partial would resume from a hole and corrupt). */
-            int trunc_ok = 1;
-            if (had_resume && keep > 0)
-                trunc_ok = (truncate_utf8(g_part_path, keep) == 0);
             struct stat st;
-            if (trunc_ok && keep > 0 && stat_utf8(g_part_path, &st) == 0 &&
+            if (keep > 0 && stat_utf8(g_part_path, &st) == 0 &&
                 st.st_size > 0) {
-                char *final = audio_cache_final_path(
-                    g_rec_song, ffstream_media_ext(ffstream));
-                if (final) {
-                    if (rename_utf8(g_part_path, final) == 0)
-                        audio_cache_commit(g_rec_song, final,
-                                           g_rec_level, done_clean);
-                    free(final);
+                if (g_reuse_cache) {
+                    /* the file is already the final cache entry — commit in
+                       place with the current byte regions */
+                    audio_cache_commit(g_rec_song, g_part_path, g_rec_level,
+                                       complete, prefix, tail_at);
+                } else {
+                    char *final = audio_cache_final_path(
+                        g_rec_song, ffstream_media_ext(ffstream));
+                    if (final) {
+                        if (rename_utf8(g_part_path, final) == 0)
+                            audio_cache_commit(g_rec_song, final,
+                                               g_rec_level, complete,
+                                               prefix, tail_at);
+                        free(final);
+                    }
                 }
             } else {
                 remove_utf8(g_part_path);
@@ -316,7 +342,7 @@ static void cache_keep_partial(FFStream *ffstream) {
                                          ffstream_media_ext(ffstream));
     if (final) {
         if (ffstream_recorder_commit(ffstream, final) == 0)
-            audio_cache_commit(g_rec_song, final, g_rec_level, 0);  /* partial */
+            audio_cache_commit(g_rec_song, final, g_rec_level, 0, 0, 0);
         free(final);
     }
     g_rec_active = 0;
@@ -334,6 +360,10 @@ static int wait_more_data(void *opaque, int64_t pos) {
        into after a quality switch). */
     StreamDownloader *dl = g_downloader;
     int64_t need = pos + 1;
+    /* Retained tail of a holey cache: already on disk, immediately
+       available (no downloader involved). */
+    if (g_rec_tail_at > 0 && !g_resume_active && pos >= g_rec_tail_at)
+        return 1;
     /* Route to the resume downloader only while it is alive and covers
        `pos`; a failed resume downloader falls back to the sequential one,
        which still downloads the whole file. */
@@ -351,6 +381,8 @@ static int wait_more_data(void *opaque, int64_t pos) {
     stream_downloader_wait_watermark(dl, need, 500);
     if (stream_downloader_failed(dl)) return -1;
     if (stream_downloader_watermark(dl) >= need) return 1;  /* data available */
+    /* contiguous valid prefix of a holey cache not yet overwritten */
+    if (g_rec_prefix > 0 && pos < g_rec_prefix) return 1;
     if (stream_downloader_done(dl)) return 0;               /* finished past end */
     return 1;  /* retry the read (new data arrived, or still waiting) */
 }
@@ -366,6 +398,10 @@ static int open_stream(const char *path,
     }
     if (*decoder)  { decoder_close(*decoder); *decoder = NULL; }
     audio_teardown(*audio); *audio = NULL;
+    /* fresh stream: no holey-cache regions carried across */
+    g_rec_prefix = 0;
+    g_rec_tail_at = 0;
+    g_reuse_cache = 0;
 
     /* Determine if path points to a local file (vs. a streaming
        source ID such as a netease song ID).  Checks, in order:
@@ -417,8 +453,9 @@ static int open_stream(const char *path,
               prefix continues from disk and resumes the rest via network) */
         char cache_path[1100];
         int  cache_complete = 1;
+        int64_t cache_prefix = 0, cache_tail = 0;
         if (audio_cache_find(path, level, cache_path, sizeof(cache_path),
-                             &cache_complete) == 0) {
+                             &cache_complete, &cache_prefix, &cache_tail) == 0) {
             if (cache_complete) {
                 *decoder = decoder_open(cache_path);
                 if (!*decoder) {
@@ -455,6 +492,59 @@ static int open_stream(const char *path,
                     LOG_WARN("No play URL for %s", path);
                     free(level);
                     return 1;  /* unplayable — caller decides skip/error */
+                }
+                if (cache_tail > 0) {
+                    /* holey cache: a retained tail [cache_tail..end] sits
+                       past a gap below it. Re-fetch the file in place with a
+                       no-truncate downloader: the retained tail is read from
+                       disk immediately, and the gap fills as the download
+                       advances, converging the file to contiguous. */
+                    LOG_INFO("Continuing holey cache: %s", path);
+                    StreamDownloader *dl = stream_downloader_create_resume(
+                        url, cache_path, 0);
+                    if (!dl || stream_downloader_start(dl) != 0) {
+                        if (dl) stream_downloader_destroy(dl);
+                        LOG_WARN("Holey cache replay: downloader failed %s",
+                                 path);
+                        free(level);
+                        return 1;
+                    }
+                    int w = stream_downloader_wait_watermark(
+                        dl, MIN_PREFIX_BYTES, 15000);
+                    if (w < 0 ||
+                        (w == 0 && stream_downloader_watermark(dl) <= 0)) {
+                        stream_downloader_destroy(dl);
+                        LOG_WARN("Holey cache replay: prefix wait failed %s",
+                                 path);
+                        free(level);
+                        return 1;
+                    }
+                    int dur_sec = 0;
+                    *ffstream = ffstream_open_growing(
+                        cache_path, wait_more_data, dl,
+                        samplerate, channels, &dur_sec);
+                    if (!*ffstream) {
+                        stream_downloader_destroy(dl);
+                        LOG_WARN("Holey cache replay: growing open failed %s",
+                                 path);
+                        free(level);
+                        return 1;
+                    }
+                    *total_frames = (int64_t)dur_sec * (*samplerate);
+                    g_rec_active = 1;
+                    g_downloader = dl;
+                    g_part_path = strdup(cache_path);
+                    g_reuse_cache = 1;
+                    g_rec_prefix = cache_prefix;
+                    g_rec_tail_at = cache_tail;
+                    snprintf(g_stream_url, sizeof g_stream_url, "%s", url);
+                    ffstream_set_growing_total(
+                        *ffstream, stream_downloader_total_size(dl));
+                    ffstream_set_growing_regions(
+                        *ffstream, cache_prefix, cache_tail);
+                    audio_cache_touch(path);
+                    free(level);
+                    return 0;
                 }
                 LOG_INFO("Continuing partial cache: %s", path);
                 int dur_sec = 0;
@@ -959,19 +1049,30 @@ static void* playback_thread(void *arg) {
                         if (stream_downloader_done(g_downloader) &&
                             !stream_downloader_failed(g_downloader)) {
                             /* download finished cleanly → commit complete */
-                            char *final = audio_cache_final_path(
-                                g_rec_song, ffstream_media_ext(ffstream));
-                            if (final) {
-                                if (g_part_path) {
-                                    if (rename_utf8(g_part_path, final) == 0)
-                                        audio_cache_commit(g_rec_song, final,
-                                                           g_rec_level, 1);
-                                    else
-                                        remove_utf8(g_part_path);
-                                    free(g_part_path);
-                                    g_part_path = NULL;
+                            if (g_reuse_cache && g_part_path) {
+                                /* the file is already the final cache entry —
+                                   commit in place (no rename) */
+                                audio_cache_commit(g_rec_song, g_part_path,
+                                                   g_rec_level, 1, 0, 0);
+                                free(g_part_path);
+                                g_part_path = NULL;
+                            } else {
+                                char *final = audio_cache_final_path(
+                                    g_rec_song, ffstream_media_ext(ffstream));
+                                if (final) {
+                                    if (g_part_path) {
+                                        if (rename_utf8(g_part_path, final) == 0)
+                                            audio_cache_commit(g_rec_song,
+                                                               final,
+                                                               g_rec_level,
+                                                               1, 0, 0);
+                                        else
+                                            remove_utf8(g_part_path);
+                                        free(g_part_path);
+                                        g_part_path = NULL;
+                                    }
+                                    free(final);
                                 }
-                                free(final);
                             }
                         } else {
                             /* download failed/interrupted → keep the
@@ -990,7 +1091,7 @@ static void* playback_thread(void *arg) {
                         if (final) {
                             if (ffstream_recorder_commit(ffstream, final) == 0)
                                 audio_cache_commit(g_rec_song, final,
-                                                   g_rec_level, 1);
+                                                   g_rec_level, 1, 0, 0);
                             free(final);
                         }
                     }

@@ -21,7 +21,8 @@ struct StreamDownloader {
     FILE        *fp;          /* write handle, owned by the download thread */
     int64_t      watermark;   /* bytes written so far (relative to start_byte) */
     int64_t      total;       /* total size from Content-Length (0 = unknown) */
-    int64_t      start_byte;  /* 0 = sequential from 0; >0 = resume at offset */
+    int64_t      start_byte;  /* byte offset the file is written at (>= 0) */
+    int          no_truncate; /* open "r+b" and keep existing file content */
     int          range_denied;/* resume: server ignored Range, returned 200 */
     int          started;
     int          done;        /* download reached EOF cleanly */
@@ -106,14 +107,15 @@ static void *dl_thread(void *arg) {
         pthread_mutex_unlock(&dl->mutex);
         return NULL;
     }
-    /* Sequential downloader: "wb" (truncate/create). Resume downloader
-       (start_byte > 0): "r+b" — the .part was already created by the
-       sequential downloader — and seek to start_byte so the Range bytes
-       land at the right offset. */
+    /* Sequential downloader: "wb" (truncate/create). Resume/overwrite
+       downloader (no_truncate): "r+b" — the file must already exist — and
+       seek to start_byte (0 = from the beginning) so the fetched bytes land
+       at the right offset without destroying the rest of the file. */
     FILE *fp;
-    if (dl->start_byte > 0) {
+    if (dl->no_truncate) {
         fp = fopen_utf8(dl->part_path, "r+b");
-        if (fp && fseek(fp, (long)dl->start_byte, SEEK_SET) != 0) {
+        if (fp && dl->start_byte > 0 &&
+            fseek(fp, (long)dl->start_byte, SEEK_SET) != 0) {
             fclose(fp);
             fp = NULL;
         }
@@ -216,9 +218,12 @@ StreamDownloader *stream_downloader_create(const char *url, const char *part_pat
 StreamDownloader *stream_downloader_create_resume(const char *url,
                                                   const char *part_path,
                                                   int64_t start_byte) {
-    if (start_byte <= 0) return NULL;
+    if (start_byte < 0) return NULL;
     StreamDownloader *dl = stream_downloader_create(url, part_path);
-    if (dl) dl->start_byte = start_byte;
+    if (dl) {
+        dl->start_byte = start_byte;
+        dl->no_truncate = 1;
+    }
     return dl;
 }
 

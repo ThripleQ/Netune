@@ -52,6 +52,8 @@ struct FFStream {
     void        *grow_opaque;
     int          growing;
     int64_t      grow_total;  /* declared total size (0 = unknown) */
+    int64_t      grow_prefix; /* holey cache: contiguous valid prefix length */
+    int64_t      grow_tail_at;/* holey cache: valid tail start offset (0 = none) */
 };
 
 static void prefetch_clear(FFStream *s);   /* defined below, used by tee_seek */
@@ -448,7 +450,33 @@ fail:
    served from the file directly (local random access). */
 static int growing_read(void *opaque, uint8_t *buf, int buf_size) {
     FFStream *s = (FFStream*)opaque;
+    /* Holey-cache mode: the file contains a gap (zeros) between the valid
+       prefix and a retained tail that a background downloader is refilling.
+       A zero hole must never be handed to the decoder as audio, so we ask
+       the wait callback whether data is available at the read position
+       BEFORE reading, and block until it is (the callback knows the valid
+       regions and the downloader's progress). */
+    int holey = (s->grow_prefix > 0 || s->grow_tail_at > 0);
     for (;;) {
+        if (holey) {
+            long pos = ftell(s->grow_file);
+            if (pos < 0) return AVERROR(EIO);
+            int w = s->grow_wait(s->grow_opaque, (int64_t)pos);
+            if (w < 0) return AVERROR(EIO);
+            if (w == 0) {   /* finished — drain whatever is there, then EOF */
+                clearerr(s->grow_file);
+                size_t n = fread(buf, 1, (size_t)buf_size, s->grow_file);
+                if (n > 0) return (int)n;
+                return AVERROR_EOF;
+            }
+            clearerr(s->grow_file);
+            size_t n = fread(buf, 1, (size_t)buf_size, s->grow_file);
+            if (n > 0) return (int)n;
+            /* wait said available but fread got nothing (the file is being
+               written concurrently, or pos sits past the retained tail) —
+               retry; the loop converges to EOF when the download finishes */
+            continue;
+        }
         size_t n = fread(buf, 1, (size_t)buf_size, s->grow_file);
         if (n > 0) return (int)n;
         if (ferror(s->grow_file)) return AVERROR(EIO);
@@ -671,6 +699,17 @@ void ffstream_set_growing_total(FFStream *s, int64_t total_bytes) {
 
 int64_t ffstream_growing_total(const FFStream *s) {
     return (s && s->growing) ? s->grow_total : 0;
+}
+
+/* Declare the valid byte regions of a holey cache file being re-fetched in
+   place: a contiguous prefix [0, prefix) and an optional tail [tail_at,
+   file end). Positions inside the gap are served only once the background
+   downloader covers them (growing_read asks the wait callback first). Both
+   <= 0 disables the holey mode. */
+void ffstream_set_growing_regions(FFStream *s, int64_t prefix, int64_t tail_at) {
+    if (!s || !s->growing) return;
+    s->grow_prefix = prefix;
+    s->grow_tail_at = tail_at;
 }
 
 int ffstream_growing_avail_sec(const FFStream *s, long bitrate) {
