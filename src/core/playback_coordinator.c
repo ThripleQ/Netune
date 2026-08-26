@@ -248,8 +248,6 @@ static void cache_keep_partial(FFStream *ffstream) {
        next play hits the local file directly instead of failing a
        byte-range continuation on an already-complete file. */
     if (g_downloader) {
-        int done_clean = stream_downloader_done(g_downloader) &&
-                         !stream_downloader_failed(g_downloader);
         int64_t keep = stream_downloader_watermark(g_downloader);
         int64_t seq_start = stream_downloader_start_byte(g_downloader);
         /* Build the segment list to persist: everything the sequential
@@ -264,13 +262,18 @@ static void cache_keep_partial(FFStream *ffstream) {
                 cache_seglist_add(&segs, g_segs.segs[k].start,
                                   g_segs.segs[k].len);
         }
-        int complete = done_clean;
-        if (!complete) {
-            /* if the retained regions plus the sequential download now form
-               one contiguous run covering the whole file, it is complete */
+        /* Complete only when the retained regions plus the sequential
+           download form ONE contiguous run covering the whole file. A seek
+           restart can leave holes (the old downloader stopped, the new one
+           starts further ahead) and even a downloader that reached EOF does
+           not prove the gaps were ever filled — so this check applies
+           regardless of whether the download finished cleanly. */
+        int complete = 0;
+        {
             struct stat st;
-            if (stat_utf8(g_part_path, &st) == 0 && st.st_size > 0 &&
-                segs.count == 1 && segs.segs[0].start == 0 &&
+            if (g_part_path && stat_utf8(g_part_path, &st) == 0 &&
+                st.st_size > 0 && segs.count == 1 &&
+                segs.segs[0].start == 0 &&
                 segs.segs[0].len >= (int64_t)st.st_size)
                 complete = 1;
         }
@@ -278,8 +281,12 @@ static void cache_keep_partial(FFStream *ffstream) {
         g_downloader = NULL;
         if (g_part_path) {
             struct stat st;
-            if (keep > 0 && stat_utf8(g_part_path, &st) == 0 &&
-                st.st_size > 0) {
+            int file_ok = (stat_utf8(g_part_path, &st) == 0 && st.st_size > 0);
+            if (file_ok && (keep > 0 || g_reuse_cache)) {
+                /* keep>0: the downloader wrote something; g_reuse_cache: the
+                   file IS the existing cache entry (retained segments), so
+                   even a downloader that wrote nothing must NOT delete it —
+                   persist the still-valid regions instead. */
                 if (g_reuse_cache) {
                     /* the file is already the final cache entry — commit in
                        place with the current byte regions */
@@ -740,24 +747,28 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
         long br = effective_bitrate(ffstream, *current_frame, samplerate);
         int64_t avail_bytes = growing_avail_bytes();
         int avail = (br > 0) ? (int)(avail_bytes * 8 / br) : 0;
+        int64_t target_byte = (br > 0) ? (int64_t)seek_sec * br / 8 : 0;
+        /* Target already playable: inside a retained segment (any part of a
+           multi-segment cache, e.g. a tail past the contiguous prefix) or
+           inside the sequential downloader's covered run → seek directly.
+           Never restart the downloader for it, and never let the outer
+           contiguous-prefix clamp pull it back to the start. */
+        int target_in_segs = (br > 0) &&
+                             cache_seglist_contains(&g_segs, target_byte);
+        int target_in_seq = 0;
+        if (g_downloader && br > 0) {
+            int64_t sb = stream_downloader_start_byte(g_downloader);
+            int64_t se = sb + stream_downloader_watermark(g_downloader);
+            target_in_seq = (target_byte >= sb && target_byte < se);
+        }
         if (g_downloader && br > 0 && seek_sec > avail) {
-            int64_t target_byte = (int64_t)seek_sec * br / 8;
-            /* Seek target already on disk (a retained segment, e.g. the
-               tail of a holey cache) → play it directly. */
-            int target_in_segs = cache_seglist_contains(&g_segs, target_byte);
-            /* Target inside the sequential downloader's covered run → the
-               downloader keeps running ahead from where it is; just seek. */
-            int64_t seq_start = stream_downloader_start_byte(g_downloader);
-            int64_t seq_end = seq_start +
-                              stream_downloader_watermark(g_downloader);
-            int target_in_seq = (target_byte >= seq_start &&
-                                 target_byte < seq_end);
             if (!target_in_segs && !target_in_seq) {
                 /* Seek mode: abandon the current forward-fill and restart
                    the sequential downloader AT the seek target, so the
                    bytes right after the new position are fetched first
                    (greedy forward from the new point). Bytes the old
                    downloader wrote remain valid on disk — record them. */
+                int64_t seq_start = stream_downloader_start_byte(g_downloader);
                 if (stream_downloader_watermark(g_downloader) > 0)
                     cache_seglist_add(&g_segs, seq_start,
                                       stream_downloader_watermark(g_downloader));
@@ -809,7 +820,11 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
                 avail = (int)(avail_bytes * 8 / br);
             }
         }
-        if (avail >= 0 && seek_sec > avail)
+        /* Clamp only genuinely unavailable targets. avail is the contiguous
+           prefix bound; a target that lies in a retained segment or in the
+           sequential run is playable now and must NOT be pulled back. */
+        if (!target_in_segs && !target_in_seq &&
+            avail >= 0 && seek_sec > avail)
             target = avail * samplerate;
         int ok = (ffstream_seek(ffstream, target / samplerate) == 0);
         if (ok)
@@ -1065,35 +1080,9 @@ static void* playback_thread(void *arg) {
                 if (ffstream && g_rec_active) {
                     if (g_downloader) {
                         /* growing-file mode: the downloader is the writer */
-                        if (stream_downloader_done(g_downloader) &&
-                            !stream_downloader_failed(g_downloader)) {
-                            /* download finished cleanly → commit complete */
-                            if (g_reuse_cache && g_part_path) {
-                                /* the file is already the final cache entry —
-                                   commit in place (no rename) */
-                                audio_cache_commit(g_rec_song, g_part_path,
-                                                   g_rec_level, 1, NULL);
-                                free(g_part_path);
-                                g_part_path = NULL;
-                            } else {
-                                char *final = audio_cache_final_path(
-                                    g_rec_song, ffstream_media_ext(ffstream));
-                                if (final) {
-                                    if (g_part_path) {
-                                        if (rename_utf8(g_part_path, final) == 0)
-                                            audio_cache_commit(g_rec_song,
-                                                               final,
-                                                               g_rec_level,
-                                                               1, NULL);
-                                        else
-                                            remove_utf8(g_part_path);
-                                        free(g_part_path);
-                                        g_part_path = NULL;
-                                    }
-                                    free(final);
-                                }
-                            }
-                        } else {
+                        int dl_ok = stream_downloader_done(g_downloader) &&
+                                    !stream_downloader_failed(g_downloader);
+                        if (!dl_ok) {
                             /* download failed/interrupted → keep the
                                received bytes as a partial cache entry and
                                report the failure */
@@ -1109,9 +1098,15 @@ static void* playback_thread(void *arg) {
                                           g_rec_song, we);
                             else
                                 LOG_WARN("Download failed for %s", g_rec_song);
-                            cache_keep_partial(ffstream);
                         }
-                        stream_downloader_destroy(g_downloader);
+                        /* Commit whatever was received. cache_keep_partial
+                           marks the entry complete only when the retained
+                           segments + this download cover the whole file — a
+                           seek restart can leave holes even when the last
+                           downloader reached EOF, and those must persist as
+                           a partial entry, not a falsely-complete one. */
+                        cache_keep_partial(ffstream);
+                        stream_downloader_destroy(g_downloader);   /* NULL-safe */
                         g_downloader = NULL;
                     } else {
                         /* legacy recorder mode (partial-continuation
