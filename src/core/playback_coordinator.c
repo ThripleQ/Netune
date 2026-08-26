@@ -756,6 +756,21 @@ static int wait_for_resume(int64_t target_byte, int timeout_ms) {
     return 0;
 }
 
+/* Contiguous bytes playable from position 0 right now. The sequential
+   downloader writes [0, watermark) contiguously; a retained on-disk prefix
+   (segment starting at 0) may be longer. Holes beyond that are NOT counted
+   — unlike the file size, which a parallel Range downloader inflates with
+   holey regions, this is the true continuous-play bound. */
+static int64_t growing_avail_bytes(void) {
+    int64_t avail = 0;
+    if (g_downloader)
+        avail = stream_downloader_watermark(g_downloader);
+    if (g_segs.count > 0 && g_segs.segs[0].start == 0 &&
+        g_segs.segs[0].len > avail)
+        avail = g_segs.segs[0].len;
+    return avail;
+}
+
 /* Apply a seek (seconds) to the current stream, updating current_frame. */
 static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
                     int total_frames, int seek_sec, int *current_frame) {
@@ -769,41 +784,50 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
        On a slow link the timeout just resumes at the current watermark. */
     if (ffstream && ffstream_growing(ffstream)) {
         long br = effective_bitrate(ffstream, *current_frame, samplerate);
-        int avail = ffstream_growing_avail_sec(ffstream, br);
-        if (g_downloader && avail >= 0 && br > 0 && seek_sec > avail) {
+        int64_t avail_bytes = growing_avail_bytes();
+        int avail = (br > 0) ? (int)(avail_bytes * 8 / br) : 0;
+        if (g_downloader && br > 0 && seek_sec > avail) {
             int64_t target_byte = (int64_t)seek_sec * br / 8;
-            /* A previous resume downloader may have been retired (stalled
-               by wait_more_data as redundant, or finished) while its
-               g_resume_active flag is still set. Drop it before starting a
-               fresh Range download for the new target — join is immediate
-               since a stopped thread has already exited. */
-            if (g_resume_active && g_resume_dl &&
-                (stream_downloader_stopped(g_resume_dl) ||
-                 stream_downloader_done(g_resume_dl) ||
-                 stream_downloader_failed(g_resume_dl))) {
-                resume_cleanup();
-            }
-            /* Optionally start a parallel Range download at the target byte
-               so the resume region is fetched directly instead of waiting
-               for the sequential download to reach it (zero-wait switch). */
-            if (!g_resume_active && g_stream_url[0] && g_part_path &&
-                target_byte >= RESUME_MIN_BYTES) {
-                StreamDownloader *rd = stream_downloader_create_resume(
-                    g_stream_url, g_part_path, target_byte);
-                if (rd && stream_downloader_start(rd) == 0) {
-                    g_resume_dl = rd;
-                    g_resume_at = target_byte;
-                    g_resume_active = 1;
-                } else if (rd) {
-                    stream_downloader_destroy(rd);
+            /* Seek target already on disk (a retained segment, e.g. the
+               tail of a holey cache) → play it directly; no parallel Range
+               download is needed and none is started. */
+            int target_in_segs = cache_seglist_contains(&g_segs, target_byte);
+            if (!target_in_segs) {
+                /* A previous resume downloader may have been retired (stalled
+                   by wait_more_data as redundant, or finished) while its
+                   g_resume_active flag is still set. Drop it before starting a
+                   fresh Range download for the new target — join is immediate
+                   since a stopped thread has already exited. */
+                if (g_resume_active && g_resume_dl &&
+                    (stream_downloader_stopped(g_resume_dl) ||
+                     stream_downloader_done(g_resume_dl) ||
+                     stream_downloader_failed(g_resume_dl))) {
+                    resume_cleanup();
                 }
+                /* Optionally start a parallel Range download at the target
+                   byte so the resume region is fetched directly instead of
+                   waiting for the sequential download to reach it
+                   (zero-wait switch). */
+                if (!g_resume_active && g_stream_url[0] && g_part_path &&
+                    target_byte >= RESUME_MIN_BYTES) {
+                    StreamDownloader *rd = stream_downloader_create_resume(
+                        g_stream_url, g_part_path, target_byte);
+                    if (rd && stream_downloader_start(rd) == 0) {
+                        g_resume_dl = rd;
+                        g_resume_at = target_byte;
+                        g_resume_active = 1;
+                    } else if (rd) {
+                        stream_downloader_destroy(rd);
+                    }
+                }
+                int w = wait_for_resume(target_byte, RELOAD_RESUME_WAIT_MS);
+                if (w != 1)
+                    LOG_WARN("Quality-switch resume wait (%ds) not satisfied — "
+                             "resuming at the download watermark", seek_sec);
+                /* the watermark grew while we waited — re-read it */
+                avail_bytes = growing_avail_bytes();
+                avail = (int)(avail_bytes * 8 / br);
             }
-            int w = wait_for_resume(target_byte, RELOAD_RESUME_WAIT_MS);
-            if (w != 1)
-                LOG_WARN("Quality-switch resume wait (%ds) not satisfied — "
-                         "resuming at the download watermark", seek_sec);
-            /* the watermark grew while we waited — re-read it */
-            avail = ffstream_growing_avail_sec(ffstream, br);
         }
         if (avail >= 0 && seek_sec > avail)
             target = avail * samplerate;
