@@ -57,7 +57,7 @@ Element render_action_sheet(const AppState &s) {
             if ((int)i == s.action_sheet_selected)
                 body.push_back(hbox({theme_sel_marker(is_playlist, is_vip), row | bold}) | focus);
             else
-                body.push_back(hbox({text("   "), row}));
+                body.push_back(hbox({text("  "), row}));
         }
     } else if (s.action_sheet_menu == 1) {
         /* playlist picker */
@@ -71,7 +71,7 @@ Element render_action_sheet(const AppState &s) {
                 if ((int)i == s.action_sheet_selected)
                     body.push_back(hbox({theme_sel_marker(true, false), row | bold}) | focus);
                 else
-                    body.push_back(hbox({text("   "), row}));
+                    body.push_back(hbox({text("  "), row}));
             }
         }
     } else if (s.action_sheet_menu == 2) {
