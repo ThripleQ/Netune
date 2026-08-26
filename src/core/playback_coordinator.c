@@ -360,10 +360,13 @@ static int wait_more_data(void *opaque, int64_t pos) {
        into after a quality switch). */
     StreamDownloader *dl = g_downloader;
     int64_t need = pos + 1;
-    /* Retained tail of a holey cache: already on disk, immediately
-       available (no downloader involved). */
+    /* Retained regions of a holey cache are on disk and immediately
+       available (no downloader involved / not yet overwritten) — check
+       BEFORE the blocking wait, or playing the prefix would stall 500ms per
+       read while the re-fetch lags behind. */
     if (g_rec_tail_at > 0 && !g_resume_active && pos >= g_rec_tail_at)
         return 1;
+    if (g_rec_prefix > 0 && pos < g_rec_prefix) return 1;
     /* Route to the resume downloader only while it is alive and covers
        `pos`; a failed resume downloader falls back to the sequential one,
        which still downloads the whole file. */
@@ -381,8 +384,6 @@ static int wait_more_data(void *opaque, int64_t pos) {
     stream_downloader_wait_watermark(dl, need, 500);
     if (stream_downloader_failed(dl)) return -1;
     if (stream_downloader_watermark(dl) >= need) return 1;  /* data available */
-    /* contiguous valid prefix of a holey cache not yet overwritten */
-    if (g_rec_prefix > 0 && pos < g_rec_prefix) return 1;
     if (stream_downloader_done(dl)) return 0;               /* finished past end */
     return 1;  /* retry the read (new data arrived, or still waiting) */
 }
