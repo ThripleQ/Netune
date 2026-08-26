@@ -400,3 +400,71 @@ long long audio_cache_total_bytes(void) {
     pthread_mutex_unlock(&g_mutex);
     return total;
 }
+
+/* Reconcile the index against what is actually on disk, recovering from an
+   unclean shutdown (crash/kill). MUST be called while no cache file is being
+   actively written (e.g. once at playback startup, before any stream opens):
+
+   - Drops entries whose file is missing (a complete entry whose file was
+     lost, or a partial whose file was never created) or is empty/shortened
+     below the recorded contiguous prefix (a partial truncated mid-download —
+     its gaps are no longer trustworthy).
+   - Deletes every leftover .part file. .part files never enter the index
+     (they are only promoted to a final entry by commit+rename), so with no
+     active downloader any remaining .part is crash residue.
+
+   A complete entry whose file exists is left alone: without knowing the
+   format's intrinsic size we cannot verify it, and the worst outcome is a
+   decode that stops short (handled as a local playback error), which is
+   strictly better than deleting a possibly-good cache entry. Returns 0. */
+int audio_cache_reconcile(void) {
+    pthread_mutex_lock(&g_mutex);
+    load_locked();
+    int changed = 0;
+    for (int i = g_count - 1; i >= 0; i--) {
+        AucEntry *e = &g_entries[i];
+        char p[1100];
+        snprintf(p, sizeof(p), "%s" PATH_SEP "%s", audio_dir(), e->file);
+        struct stat st;
+        int drop = 0;
+        if (stat_utf8(p, &st) != 0) {
+            drop = 1;                       /* entry points at a missing file */
+        } else if (st.st_size <= 0) {
+            drop = 1;                       /* empty file — unusable */
+        } else if (!e->complete && e->prefix_size > st.st_size) {
+            /* a partial whose recorded contiguous prefix extends past the
+               actual on-disk size was truncated by a crash mid-download —
+               the recorded regions no longer describe the file */
+            drop = 1;
+        }
+        if (drop) {
+            free(e->id);
+            free(e->file);
+            free(e->quality);
+            g_entries[i] = g_entries[g_count - 1];
+            g_count--;
+            changed = 1;
+        }
+    }
+    /* leftover .part files are crash residue (see fn comment) */
+    {
+        DIR *d = opendir(audio_dir());
+        if (d) {
+            struct dirent *de;
+            while ((de = readdir(d)) != NULL) {
+                const char *n = de->d_name;
+                size_t len = strlen(n);
+                if (len > 5 && strcmp(n + len - 5, ".part") == 0) {
+                    char p[1100];
+                    snprintf(p, sizeof(p), "%s" PATH_SEP "%s",
+                             audio_dir(), n);
+                    if (remove_utf8(p) == 0) changed = 1;
+                }
+            }
+            closedir(d);
+        }
+    }
+    if (changed) flush_locked();
+    pthread_mutex_unlock(&g_mutex);
+    return 0;
+}

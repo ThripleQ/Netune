@@ -72,6 +72,14 @@ int  audio_cache_clear(void);
 /* Total bytes currently cached (sum of index sizes). */
 long long audio_cache_total_bytes(void);
 
+/* Reconcile the index against what is actually on disk after an unclean
+   shutdown: drops entries whose file is missing / empty / truncated below
+   the recorded prefix, and deletes leftover .part files (none are in the
+   index, so without an active downloader every .part is crash residue).
+   MUST be called while no cache file is actively being written (once at
+   playback startup, before any stream opens). Returns 0. */
+int audio_cache_reconcile(void);
+
 #ifdef __cplusplus
 }
 #endif

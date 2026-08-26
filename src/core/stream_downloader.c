@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
 #include <pthread.h>
 #include <time.h>
 
@@ -28,6 +29,7 @@ struct StreamDownloader {
     int          done;        /* download reached EOF cleanly */
     int          failed;      /* network error / aborted */
     int          stop;        /* request the download thread to abort */
+    int          write_errno; /* errno of the last short/failed fwrite (0=none) */
 };
 
 static int64_t now_mono_ms(void) {
@@ -49,6 +51,7 @@ static size_t dl_write_cb(char *ptr, size_t size, size_t nmemb, void *ud) {
     size_t w = fwrite(ptr, 1, n, dl->fp);
     pthread_mutex_lock(&dl->mutex);
     dl->watermark += (int64_t)w;
+    if (w < n) dl->write_errno = errno;   /* e.g. ENOSPC on a full disk */
     pthread_cond_broadcast(&dl->cond);
     pthread_mutex_unlock(&dl->mutex);
     return w;
@@ -225,6 +228,38 @@ StreamDownloader *stream_downloader_create_resume(const char *url,
         dl->no_truncate = 1;
     }
     return dl;
+}
+
+/* Non-blocking stop request: asks the download thread to abort (same flag
+   stream_downloader_destroy sets) but does NOT join or free the object. Used
+   to retire a redundant downloader (e.g. the parallel Range downloader once
+   the sequential one has covered its region) without stalling the playback
+   thread on a slow abort; the actual join/free happens later in destroy(),
+   by which time the thread has already exited. */
+void stream_downloader_stop(StreamDownloader *dl) {
+    if (!dl) return;
+    pthread_mutex_lock(&dl->mutex);
+    dl->stop = 1;
+    pthread_cond_broadcast(&dl->cond);
+    pthread_mutex_unlock(&dl->mutex);
+}
+
+int stream_downloader_stopped(const StreamDownloader *dl) {
+    if (!dl) return 0;
+    int s;
+    pthread_mutex_lock(&((StreamDownloader*)dl)->mutex);
+    s = dl->stop;
+    pthread_mutex_unlock(&((StreamDownloader*)dl)->mutex);
+    return s;
+}
+
+int stream_downloader_write_errno(const StreamDownloader *dl) {
+    if (!dl) return 0;
+    int e;
+    pthread_mutex_lock(&((StreamDownloader*)dl)->mutex);
+    e = dl->write_errno;
+    pthread_mutex_unlock(&((StreamDownloader*)dl)->mutex);
+    return e;
 }
 
 int stream_downloader_start(StreamDownloader *dl) {

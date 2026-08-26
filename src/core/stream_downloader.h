@@ -53,6 +53,20 @@ int stream_downloader_done(StreamDownloader *dl);
 /* 1 = download failed (network error, aborted), 0 = ok. */
 int stream_downloader_failed(StreamDownloader *dl);
 
+/* Request the download thread to abort without joining (not blocking).
+   The object is still owned by the caller and must eventually be released
+   with stream_downloader_destroy() (whose join then returns immediately, as
+   the thread has already exited). */
+void stream_downloader_stop(StreamDownloader *dl);
+
+/* 1 = a stop was requested (stream_downloader_stop/destroy), 0 = running. */
+int stream_downloader_stopped(const StreamDownloader *dl);
+
+/* errno captured from the last short/failed fwrite (0 = none). Lets the
+   caller distinguish a full-disk failure (ENOSPC/EDQUOT) from a network one
+   so it can surface the right message. */
+int stream_downloader_write_errno(const StreamDownloader *dl);
+
 /* Block until watermark >= min_bytes, or the download finishes/fails, or
    timeout_ms elapses (timeout_ms < 0 = wait forever). When min_bytes < 0,
    waits for any watermark progress instead. Returns:

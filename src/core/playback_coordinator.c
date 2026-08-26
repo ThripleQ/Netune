@@ -16,6 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <pthread.h>
 #include <sys/stat.h>
 
@@ -282,25 +283,30 @@ static void cache_keep_partial(FFStream *ffstream) {
         int done_clean = stream_downloader_done(g_downloader) &&
                          !stream_downloader_failed(g_downloader);
         int64_t keep = stream_downloader_watermark(g_downloader);
-        int had_resume = g_resume_active;
         int complete = done_clean;
-        int64_t prefix = keep;
-        int64_t tail_at = 0;
-        if (g_reuse_cache && !complete) {
-            /* holey replay: the file already held a prefix + retained tail;
-               keep whatever is still valid. Once the re-fetch covered the
-               tail offset the whole file is valid → complete. */
-            if (g_rec_prefix > prefix) prefix = g_rec_prefix;
-            if (g_rec_tail_at > 0) {
-                if (keep >= g_rec_tail_at) complete = 1;
-                else tail_at = g_rec_tail_at;
-            }
-        } else if (had_resume && g_resume_at > keep) {
-            /* .part with a parallel resume downloader: retain the resume
-               region [g_resume_at..end] as the tail instead of trimming it,
-               so a later play can jump straight into it (stage C). */
+        int64_t prefix = keep;     /* contiguous bytes from 0 (sequential) */
+        int64_t tail_at = 0;       /* contiguous tail start (0 = none) */
+        /* Retain the parallel resume downloader's region [g_resume_at..end]
+           as a tail when it actually wrote bytes (watermark > 0) and starts
+           past the prefix. Both tails (resume + retained old) run to the
+           file end; the one with the leftmost start covers the other, so we
+           keep the smaller start to lose no downloaded data. */
+        if (g_resume_active && g_resume_dl &&
+            stream_downloader_watermark(g_resume_dl) > 0 &&
+            g_resume_at > prefix &&
+            (tail_at == 0 || g_resume_at < tail_at))
             tail_at = g_resume_at;
+        if (g_reuse_cache) {
+            /* holey replay: the file already held a prefix + retained tail;
+               keep whatever is still valid. */
+            if (g_rec_prefix > prefix) prefix = g_rec_prefix;
+            if (g_rec_tail_at > 0 &&
+                (tail_at == 0 || g_rec_tail_at < tail_at))
+                tail_at = g_rec_tail_at;
         }
+        /* once the sequential downloader reached the tail start, the file is
+           contiguous end to end */
+        if (tail_at > 0 && keep >= tail_at) complete = 1;
         stream_downloader_destroy(g_downloader);
         g_downloader = NULL;
         resume_cleanup();   /* stop the parallel resume downloader too */
@@ -354,6 +360,18 @@ static void cache_keep_partial(FFStream *ffstream) {
    0 = the download finished (EOF), -1 = error. */
 static int wait_more_data(void *opaque, int64_t pos) {
     (void)opaque;
+    /* Once the sequential downloader has covered the resume offset, the
+       parallel Range downloader (which fetches the same bytes from the same
+       URL) is fully redundant — have it stop to save bandwidth. The stop is
+       non-blocking; the actual join/free happens later in resume_cleanup(),
+       by which time its thread has exited, so playback is never stalled. */
+    if (g_resume_active && g_resume_dl && g_downloader &&
+        stream_downloader_watermark(g_downloader) >= g_resume_at) {
+        LOG_INFO("Sequential download covered resume offset %lld — "
+                 "retiring the Range downloader",
+                 (long long)g_resume_at);
+        stream_downloader_stop(g_resume_dl);
+    }
     /* Route the wait to whichever downloader covers `pos`: the sequential
        one for positions below the resume offset, the parallel resume
        downloader for positions at/above it (the region the player resumes
@@ -368,10 +386,11 @@ static int wait_more_data(void *opaque, int64_t pos) {
         return 1;
     if (g_rec_prefix > 0 && pos < g_rec_prefix) return 1;
     /* Route to the resume downloader only while it is alive and covers
-       `pos`; a failed resume downloader falls back to the sequential one,
-       which still downloads the whole file. */
+       `pos`; a failed or already-stopped resume downloader falls back to
+       the sequential one, which still downloads the whole file. */
     if (g_resume_active && g_resume_dl && pos >= g_resume_at &&
-        !stream_downloader_failed(g_resume_dl)) {
+        !stream_downloader_failed(g_resume_dl) &&
+        !stream_downloader_stopped(g_resume_dl)) {
         dl = g_resume_dl;
         need = pos - g_resume_at + 1;
     }
@@ -715,7 +734,8 @@ static long effective_bitrate(FFStream *ffstream, int64_t current_frame,
    waited. Returns 1 = covered, 0 = timed out / not yet, -1 = error. */
 static int wait_for_resume(int64_t target_byte, int timeout_ms) {
     if (g_resume_active && g_resume_dl &&
-        !stream_downloader_failed(g_resume_dl)) {
+        !stream_downloader_failed(g_resume_dl) &&
+        !stream_downloader_stopped(g_resume_dl)) {
         int64_t need = target_byte - g_resume_at + RESUME_BUFFER_BYTES;
         int w = stream_downloader_wait_watermark(g_resume_dl, need,
                                                  timeout_ms);
@@ -750,6 +770,17 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
         int avail = ffstream_growing_avail_sec(ffstream, br);
         if (g_downloader && avail >= 0 && br > 0 && seek_sec > avail) {
             int64_t target_byte = (int64_t)seek_sec * br / 8;
+            /* A previous resume downloader may have been retired (stalled
+               by wait_more_data as redundant, or finished) while its
+               g_resume_active flag is still set. Drop it before starting a
+               fresh Range download for the new target — join is immediate
+               since a stopped thread has already exited. */
+            if (g_resume_active && g_resume_dl &&
+                (stream_downloader_stopped(g_resume_dl) ||
+                 stream_downloader_done(g_resume_dl) ||
+                 stream_downloader_failed(g_resume_dl))) {
+                resume_cleanup();
+            }
             /* Optionally start a parallel Range download at the target byte
                so the resume region is fetched directly instead of waiting
                for the sequential download to reach it (zero-wait switch). */
@@ -793,6 +824,11 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
 static void* playback_thread(void *arg) {
     (void)arg;
     LOG_INFO("Playback thread started");
+
+    /* Startup: reconcile the cache index against disk before any stream
+       opens. No downloader exists yet, so leftover .part files are crash
+       residue and entries pointing at missing/truncated files are dropped. */
+    audio_cache_reconcile();
 
     Decoder      *decoder = NULL;
     AudioOutput  *audio   = NULL;
@@ -921,19 +957,9 @@ static void* playback_thread(void *arg) {
                 }
                 continue;
             case CMD_SEEK:
-                if (total_frames > 0) {
-                    int target = cmd.seek_frame * samplerate;
-                    if (target < 0) target = 0;
-                    if (target >= total_frames)
-                        target = total_frames - 1;
-                    int ok = 1;
-                    if (ffstream)
-                        ok = (ffstream_seek(ffstream, cmd.seek_frame) == 0);
-                    if (decoder)
-                        decoder_seek(decoder, target);
-                    if (ok)
-                        current_frame = target;
-                }
+                if (total_frames > 0)
+                    do_seek(ffstream, decoder, samplerate, total_frames,
+                            cmd.seek_frame, &current_frame);
                 continue;
             default:
                 break;
@@ -1004,17 +1030,8 @@ static void* playback_thread(void *arg) {
                     goto next_song;
                 case CMD_SEEK:
                     if (total_frames > 0) {
-                        int target = icmd.seek_frame * samplerate;
-                        if (target < 0) target = 0;
-                        if (target >= total_frames)
-                            target = total_frames - 1;
-                        int ok = 1;
-                        if (ffstream)
-                            ok = (ffstream_seek(ffstream, icmd.seek_frame) == 0);
-                        if (decoder)
-                            decoder_seek(decoder, target);
-                        if (ok)
-                            current_frame = target;
+                        do_seek(ffstream, decoder, samplerate, total_frames,
+                                icmd.seek_frame, &current_frame);
                         /* flush residual audio from output buffer */
                         if (audio) audio_output_flush(audio);
                         /* force progress update — now_ms went backward */
@@ -1080,6 +1097,17 @@ static void* playback_thread(void *arg) {
                                received bytes as a partial cache entry and
                                report the failure */
                             playback_err = stream_downloader_failed(g_downloader);
+                            int we = stream_downloader_write_errno(g_downloader);
+#ifdef EDQUOT
+                            if (we == ENOSPC || we == EDQUOT)
+#else
+                            if (we == ENOSPC)
+#endif
+                                LOG_ERROR("Disk full while downloading %s "
+                                          "(errno %d) — cache kept partial",
+                                          g_rec_song, we);
+                            else
+                                LOG_WARN("Download failed for %s", g_rec_song);
                             cache_keep_partial(ffstream);
                         }
                         stream_downloader_destroy(g_downloader);
