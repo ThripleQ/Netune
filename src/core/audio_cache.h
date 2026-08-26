@@ -4,6 +4,7 @@ extern "C" {
 #endif
 #include <stddef.h>
 #include <stdint.h>   /* int64_t for the cache byte regions */
+#include "core/cache_segments.h"
 
 /* audio_cache.h — transparent on-disk audio cache for streamed tracks.
  *
@@ -31,15 +32,14 @@ void audio_cache_ensure_dir(void);
 /* Find a finished cache entry for song_id@quality.
    0 = hit: path_out filled with the full file path, *complete set to
    1 when the file covers the whole track (play directly) or 0 when it is
-   only a partial prefix (stream it via ffstream_open_partial to resume +
-   backfill). *prefix_size / *tail_at describe the valid byte regions of a
-   partial entry (contiguous prefix [0,prefix_size), optional tail
-   [tail_at, end]); they may be NULL. complete may be NULL.
+   only partially cached. *segs (may be NULL) receives the valid byte
+   regions of a partial entry (sorted, non-overlapping; a whole-track file
+   reports a single segment covering the whole size). complete may be NULL.
    -1 = miss (disabled, no entry, or existing entry at another quality —
    a quality mismatch means the cached copy must be re-downloaded). */
 int  audio_cache_find(const char *song_id, const char *quality,
                       char *path_out, size_t sz, int *complete,
-                      int64_t *prefix_size, int64_t *tail_at);
+                      CacheSegList *segs);
 
 /* Malloc'd full path of the in-progress .part recording file, or NULL
    when caching is disabled (caller then uses a plain stream). */
@@ -51,13 +51,12 @@ char *audio_cache_final_path(const char *song_id, const char *ext);
 /* Register a cache file at final_path (renamed from .part by the caller,
    or written in place by a partial-mode continuation). Records quality +
    size (stat'd internally) + now-ts, then prunes to the size cap.
-   complete=1 for a whole-track file (prefix_size/tail_at ignored), 0 for a
-   partial prefix with the given valid byte regions: contiguous [0,
-   prefix_size) and optional tail [tail_at, end). Updating an existing
-   entry (e.g. partial → complete) keeps its file. 0 = ok. */
+   complete=1 for a whole-track file (segs ignored), 0 for a partial file
+   with the given valid byte regions. Updating an existing entry (e.g.
+   partial → complete) keeps its file. 0 = ok. */
 int  audio_cache_commit(const char *song_id, const char *final_path,
                         const char *quality, int complete,
-                        int64_t prefix_size, int64_t tail_at);
+                        const CacheSegList *segs);
 
 /* Refresh last-used timestamp after a cache-hit play. */
 void audio_cache_touch(const char *song_id);

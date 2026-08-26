@@ -52,8 +52,8 @@ struct FFStream {
     void        *grow_opaque;
     int          growing;
     int64_t      grow_total;  /* declared total size (0 = unknown) */
-    int64_t      grow_prefix; /* holey cache: contiguous valid prefix length */
-    int64_t      grow_tail_at;/* holey cache: valid tail start offset (0 = none) */
+    CacheSeg     grow_segs[CACHE_SEG_MAX]; /* holey cache: valid regions */
+    int          grow_seg_count;           /* 0 = no holey mode */
 };
 
 static void prefetch_clear(FFStream *s);   /* defined below, used by tee_seek */
@@ -456,7 +456,7 @@ static int growing_read(void *opaque, uint8_t *buf, int buf_size) {
        the wait callback whether data is available at the read position
        BEFORE reading, and block until it is (the callback knows the valid
        regions and the downloader's progress). */
-    int holey = (s->grow_prefix > 0 || s->grow_tail_at > 0);
+    int holey = (s->grow_seg_count > 0);
     for (;;) {
         if (holey) {
             long pos = ftell(s->grow_file);
@@ -702,14 +702,20 @@ int64_t ffstream_growing_total(const FFStream *s) {
 }
 
 /* Declare the valid byte regions of a holey cache file being re-fetched in
-   place: a contiguous prefix [0, prefix) and an optional tail [tail_at,
-   file end). Positions inside the gap are served only once the background
-   downloader covers them (growing_read asks the wait callback first). Both
-   <= 0 disables the holey mode. */
-void ffstream_set_growing_regions(FFStream *s, int64_t prefix, int64_t tail_at) {
+   place: an ordered, non-overlapping segment list. Positions inside the
+   gaps are served only once the background downloader covers them
+   (growing_read asks the wait callback first). seg_count <= 0 disables the
+   holey mode. */
+void ffstream_set_growing_regions(FFStream *s, const CacheSeg *segs,
+                                  int seg_count) {
     if (!s || !s->growing) return;
-    s->grow_prefix = prefix;
-    s->grow_tail_at = tail_at;
+    if (!segs || seg_count <= 0) {
+        s->grow_seg_count = 0;
+        return;
+    }
+    if (seg_count > CACHE_SEG_MAX) seg_count = CACHE_SEG_MAX;
+    s->grow_seg_count = seg_count;
+    for (int i = 0; i < seg_count; i++) s->grow_segs[i] = segs[i];
 }
 
 int ffstream_growing_avail_sec(const FFStream *s, long bitrate) {

@@ -45,8 +45,7 @@ typedef struct {
     long long ts;    /* last use / last write (unix sec) */
     char *quality;   /* quality level the file was cached at */
     int complete;    /* 1 = whole track, 0 = partial (resumable) */
-    long long prefix_size; /* contiguous valid bytes from 0 (partial) */
-    long long tail_at;     /* valid tail start offset (0 = no tail) */
+    CacheSegList segs; /* valid byte regions (partial); sorted, non-overlapping */
 } AucEntry;
 
 static AucEntry *g_entries = NULL;
@@ -152,16 +151,39 @@ static void load_locked(void) {
             yyjson_val *c = yyjson_obj_get(v, "complete");
             e->complete = c && yyjson_is_bool(c)
                 ? (yyjson_get_bool(c) ? 1 : 0) : 1;  /* legacy entries = full */
-            /* byte regions (range map): prefix + optional tail. Legacy
-               entries without them = whole track. */
-            yyjson_val *ps = yyjson_obj_get(v, "prefix_size");
-            e->prefix_size = ps && yyjson_is_num(ps)
-                ? (long long)yyjson_get_int(ps) : 0;
-            yyjson_val *ta = yyjson_obj_get(v, "tail_at");
-            e->tail_at = ta && yyjson_is_num(ta)
-                ? (long long)yyjson_get_int(ta) : 0;
-            if (e->complete && e->prefix_size <= 0)
-                e->prefix_size = e->size;
+            /* byte regions (range map, M5): ordered segment list. Legacy
+               entries store prefix_size/tail_at instead — convert them. */
+            yyjson_val *sg = yyjson_obj_get(v, "segments");
+            if (sg && yyjson_is_arr(sg)) {
+                size_t si, smax;
+                yyjson_val *sv;
+                yyjson_arr_foreach(sg, si, smax, sv) {
+                    yyjson_val *s0 = yyjson_arr_get(sv, 0);
+                    yyjson_val *s1 = yyjson_arr_get(sv, 1);
+                    if (s0 && s1 && yyjson_is_num(s0) && yyjson_is_num(s1))
+                        cache_seglist_add(&e->segs,
+                                          (int64_t)yyjson_get_int(s0),
+                                          (int64_t)yyjson_get_int(s1));
+                }
+            } else {
+                int64_t legacy_prefix = 0, legacy_tail = 0;
+                yyjson_val *ps = yyjson_obj_get(v, "prefix_size");
+                legacy_prefix = ps && yyjson_is_num(ps)
+                    ? (long long)yyjson_get_int(ps) : 0;
+                yyjson_val *ta = yyjson_obj_get(v, "tail_at");
+                legacy_tail = ta && yyjson_is_num(ta)
+                    ? (long long)yyjson_get_int(ta) : 0;
+                if (legacy_prefix > 0)
+                    cache_seglist_add(&e->segs, 0, legacy_prefix);
+                if (legacy_tail > 0 && legacy_tail < e->size)
+                    cache_seglist_add(&e->segs, legacy_tail,
+                                      e->size - legacy_tail);
+            }
+            /* a whole-track entry always reports [0, size) as valid */
+            if (e->complete) {
+                if (e->segs.count == 0 && e->size > 0)
+                    cache_seglist_add(&e->segs, 0, e->size);
+            }
             g_count++;
         }
     }
@@ -182,8 +204,24 @@ static int flush_locked(void) {
         yyjson_mut_obj_add_int(mdoc, e, "ts", (int64_t)g_entries[i].ts);
         yyjson_mut_obj_add_str(mdoc, e, "quality", g_entries[i].quality);
         yyjson_mut_obj_add_bool(mdoc, e, "complete", g_entries[i].complete ? 1 : 0);
-        yyjson_mut_obj_add_int(mdoc, e, "prefix_size", (int64_t)g_entries[i].prefix_size);
-        yyjson_mut_obj_add_int(mdoc, e, "tail_at", (int64_t)g_entries[i].tail_at);
+        /* range map: ordered segment array [[start,len],...] */
+        yyjson_mut_val *sga = yyjson_mut_arr(mdoc);
+        for (int k = 0; k < g_entries[i].segs.count; k++) {
+            yyjson_mut_val *pair = yyjson_mut_arr(mdoc);
+            yyjson_mut_arr_add_int(mdoc, pair, g_entries[i].segs.segs[k].start);
+            yyjson_mut_arr_add_int(mdoc, pair, g_entries[i].segs.segs[k].len);
+            yyjson_mut_arr_add_val(sga, pair);
+        }
+        yyjson_mut_obj_add_val(mdoc, e, "segments", sga);
+        /* legacy mirror fields so older builds can still read the regions */
+        int64_t legacy_prefix = (g_entries[i].segs.count > 0 &&
+                                 g_entries[i].segs.segs[0].start == 0)
+            ? g_entries[i].segs.segs[0].len : 0;
+        int64_t legacy_tail = 0;
+        if (g_entries[i].segs.count >= 2)
+            legacy_tail = g_entries[i].segs.segs[g_entries[i].segs.count - 1].start;
+        yyjson_mut_obj_add_int(mdoc, e, "prefix_size", legacy_prefix);
+        yyjson_mut_obj_add_int(mdoc, e, "tail_at", legacy_tail);
         yyjson_mut_obj_add_val(mdoc, root, g_entries[i].id, e);
     }
     int rc = json_save_root(path, root);
@@ -232,7 +270,7 @@ void audio_cache_ensure_dir(void) { ensure_audio_dir(); }
 
 int audio_cache_find(const char *song_id, const char *quality,
                      char *path_out, size_t sz, int *complete,
-                     int64_t *prefix_size, int64_t *tail_at) {
+                     CacheSegList *segs) {
     if (!song_id || !*song_id || !path_out || sz == 0) return -1;
     if (!audio_enabled()) return -1;
     pthread_mutex_lock(&g_mutex);
@@ -247,8 +285,7 @@ int audio_cache_find(const char *song_id, const char *quality,
                 snprintf(path_out, sz, "%s" PATH_SEP "%s",
                          audio_dir(), g_entries[i].file);
                 if (complete) *complete = g_entries[i].complete;
-                if (prefix_size) *prefix_size = g_entries[i].prefix_size;
-                if (tail_at) *tail_at = g_entries[i].tail_at;
+                if (segs) *segs = g_entries[i].segs;
                 rc = 0;
             }
             break;
@@ -277,7 +314,7 @@ char *audio_cache_final_path(const char *song_id, const char *ext) {
 
 int audio_cache_commit(const char *song_id, const char *final_path,
                        const char *quality, int complete,
-                       int64_t prefix_size, int64_t tail_at) {
+                       const CacheSegList *segs) {
     if (!audio_enabled() || !song_id || !*song_id || !final_path) return -1;
     pthread_mutex_lock(&g_mutex);
     load_locked();
@@ -298,8 +335,14 @@ int audio_cache_commit(const char *song_id, const char *final_path,
         g_entries[idx].size = sz;
         g_entries[idx].ts = ts;
         g_entries[idx].complete = complete ? 1 : 0;
-        g_entries[idx].prefix_size = complete ? sz : prefix_size;
-        g_entries[idx].tail_at = complete ? 0 : tail_at;
+        cache_seglist_init(&g_entries[idx].segs);
+        if (complete) {
+            if (sz > 0) cache_seglist_add(&g_entries[idx].segs, 0, sz);
+        } else if (segs) {
+            for (int k = 0; k < segs->count; k++)
+                cache_seglist_add(&g_entries[idx].segs,
+                                  segs->segs[k].start, segs->segs[k].len);
+        }
     } else {
         if (g_count == g_cap) {
             g_cap = g_cap ? g_cap * 2 : 16;
@@ -313,8 +356,14 @@ int audio_cache_commit(const char *song_id, const char *final_path,
         e->size = sz;
         e->ts = ts;
         e->complete = complete ? 1 : 0;
-        e->prefix_size = complete ? sz : prefix_size;
-        e->tail_at = complete ? 0 : tail_at;
+        cache_seglist_init(&e->segs);
+        if (complete) {
+            if (sz > 0) cache_seglist_add(&e->segs, 0, sz);
+        } else if (segs) {
+            for (int k = 0; k < segs->count; k++)
+                cache_seglist_add(&e->segs, segs->segs[k].start,
+                                  segs->segs[k].len);
+        }
         g_count++;
     }
     prune_locked();
@@ -431,11 +480,17 @@ int audio_cache_reconcile(void) {
             drop = 1;                       /* entry points at a missing file */
         } else if (st.st_size <= 0) {
             drop = 1;                       /* empty file — unusable */
-        } else if (!e->complete && e->prefix_size > st.st_size) {
-            /* a partial whose recorded contiguous prefix extends past the
-               actual on-disk size was truncated by a crash mid-download —
-               the recorded regions no longer describe the file */
-            drop = 1;
+        } else if (!e->complete) {
+            /* a partial whose recorded valid regions extend past the actual
+               on-disk size was truncated by a crash mid-download — the
+               recorded segments no longer describe the file */
+            for (int k = 0; k < e->segs.count; k++) {
+                if (e->segs.segs[k].start + e->segs.segs[k].len >
+                    (int64_t)st.st_size) {
+                    drop = 1;
+                    break;
+                }
+            }
         }
         if (drop) {
             free(e->id);

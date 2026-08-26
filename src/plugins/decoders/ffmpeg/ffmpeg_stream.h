@@ -3,6 +3,7 @@
 extern "C" {
 #endif
 #include <stdint.h>
+#include "core/cache_segments.h"
 
 /* FFmpeg-based stream decoder. Takes a URL, decodes to PCM S16.
    Handles HTTP streaming, buffering, reconnection internally. */
@@ -87,10 +88,12 @@ void ffstream_set_growing_total(FFStream *s, int64_t total_bytes);
 int64_t ffstream_growing_total(const FFStream *s);
 
 /* Declare the valid byte regions of a holey cache file being re-fetched in
-   place: a contiguous prefix [0, prefix) and an optional tail [tail_at,
-   file end). Positions inside the gap are served only once the background
-   downloader covers them. Both <= 0 disables the holey mode. */
-void ffstream_set_growing_regions(FFStream *s, int64_t prefix, int64_t tail_at);
+   place: an ordered, non-overlapping segment list. Positions inside the
+   gaps are served only once the background downloader covers them
+   (growing_read asks the wait callback first). seg_count <= 0 disables the
+   holey mode. The list is copied. */
+void ffstream_set_growing_regions(FFStream *s, const CacheSeg *segs,
+                                  int seg_count);
 
 /* Seconds of audio currently available in a growing stream (derived from
    the on-disk size and the caller-provided bitrate), or -1 when not
