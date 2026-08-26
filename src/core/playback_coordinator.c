@@ -819,8 +819,20 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
                 if (restarted) {
                     /* The downloader now covers the seek target — jump there
                        directly instead of clamping to the old continuous
-                       prefix (which would snap back to the start). */
-                    int ok = (ffstream_seek(ffstream, seek_sec) == 0);
+                       prefix (which would snap back to the start). Use the
+                       byte seek, NOT the timestamp seek: the latter
+                       AVSEEK_FLAG_BACKWARD-backtracks to a frame boundary,
+                       which can land in the structurally-empty region
+                       between the old downloader's end and the new target —
+                       a "dead zone" no downloader fills, stalling playback.
+                       The byte seek lands exactly on the new downloader's
+                       start, where data is (or is about to be) available. */
+                    int ok = (ffstream_seek_bytes(ffstream, target_byte) == 0);
+                    if (ok != 0)
+                        /* demuxer without AVSEEK_FLAG_BYTE support — fall
+                           back to the timestamp seek (rare; only used if
+                           the byte seek rejects the offset) */
+                        ok = (ffstream_seek(ffstream, seek_sec) == 0);
                     if (ok)
                         *current_frame = seek_sec * samplerate;
                     return;

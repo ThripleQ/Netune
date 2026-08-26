@@ -60,6 +60,14 @@ int ffstream_decode(FFStream *s, int16_t *pcm, int max_frames);
 /* Seek to timestamp in seconds. Returns 0 on success. */
 int ffstream_seek(FFStream *s, int64_t timestamp_sec);
 
+/* Byte-level seek (growing mode only): av_seek_frame with AVSEEK_FLAG_BYTE,
+   landing exactly at `byte` with no timestamp-based BACKWARD backtrack.
+   Used after restarting the sequential downloader at a seek target, so the
+   read position stays inside the new downloader's covered run instead of
+   being pulled back into a structurally-empty region (a "dead zone" no
+   downloader fills). Returns 0 on success. */
+int ffstream_seek_bytes(FFStream *s, int64_t byte);
+
 /* Whether the stream currently has an open recorder (.part being written). */
 int ffstream_recording(const FFStream *s);
 

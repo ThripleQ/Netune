@@ -638,6 +638,24 @@ int ffstream_seek(FFStream *s, int64_t timestamp_sec) {
     return 0;
 }
 
+int ffstream_seek_bytes(FFStream *s, int64_t byte) {
+    if (!s) return -1;
+    if (byte < 0) byte = 0;
+    /* AVSEEK_FLAG_BYTE seeks by raw file offset — FFmpeg resets the demuxer
+       and re-parses from the target byte (our growing_seek callback handles
+       the IO side). Unlike the timestamp seek it does NOT BACKWARD-backtrack
+       to a frame boundary, so the read position lands exactly where the new
+       downloader starts — never inside a structurally-empty region. */
+    if (av_seek_frame(s->fmt, -1, byte, AVSEEK_FLAG_BYTE) < 0)
+        return -1;
+    avcodec_flush_buffers(s->codec);
+    swr_close(s->swr);
+    swr_init(s->swr);
+    s->eof = 0;
+    s->flushing = 0;
+    return 0;
+}
+
 int ffstream_recording(const FFStream *s) {
     return s && s->rec_file;
 }
