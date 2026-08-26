@@ -22,6 +22,7 @@ struct StreamDownloader {
     int64_t      watermark;   /* bytes written so far (relative to start_byte) */
     int64_t      total;       /* total size from Content-Length (0 = unknown) */
     int64_t      start_byte;  /* 0 = sequential from 0; >0 = resume at offset */
+    int          range_denied;/* resume: server ignored Range, returned 200 */
     int          started;
     int          done;        /* download reached EOF cleanly */
     int          failed;      /* network error / aborted */
@@ -40,12 +41,40 @@ static int64_t now_mono_ms(void) {
 static size_t dl_write_cb(char *ptr, size_t size, size_t nmemb, void *ud) {
     StreamDownloader *dl = (StreamDownloader*)ud;
     size_t n = size * nmemb;
+    /* The server ignored the Range request and answered 200 (full body):
+       abort before writing the wrong bytes at the resume offset — the
+       caller then falls back to the sequential downloader. */
+    if (dl->start_byte > 0 && dl->range_denied) return 0;
     size_t w = fwrite(ptr, 1, n, dl->fp);
     pthread_mutex_lock(&dl->mutex);
     dl->watermark += (int64_t)w;
     pthread_cond_broadcast(&dl->cond);
     pthread_mutex_unlock(&dl->mutex);
     return w;
+}
+
+/* Response-status line parser for the resume (Range) downloader: if the
+   server ignores the Range header and answers 200, flag range_denied so
+   the write callback aborts. A later 206 (redirect chain) clears it. Runs
+   on the download thread, before any body bytes. */
+static size_t dl_range_status_cb(char *buffer, size_t size, size_t nitems,
+                                 void *ud) {
+    StreamDownloader *dl = (StreamDownloader*)ud;
+    size_t n = size * nitems;
+    if (n > 5 && strncmp(buffer, "HTTP/", 5) == 0) {
+        const char *p = buffer + 5;
+        const char *end = buffer + n;
+        while (p < end && *p != ' ') p++;   /* HTTP version */
+        while (p < end && *p == ' ') p++;
+        if (p + 3 <= end) {
+            int code = (p[0]-'0')*100 + (p[1]-'0')*10 + (p[2]-'0');
+            int denied = (code == 200) ? 1 : 0;
+            pthread_mutex_lock(&dl->mutex);
+            dl->range_denied = denied;
+            pthread_mutex_unlock(&dl->mutex);
+        }
+    }
+    return n;
 }
 
 /* Progress callback: returning non-zero aborts the transfer. Used so
@@ -111,6 +140,10 @@ static void *dl_thread(void *arg) {
         char range[32];
         snprintf(range, sizeof range, "%lld-", (long long)dl->start_byte);
         curl_easy_setopt(h, CURLOPT_RANGE, range);
+        /* detect a server that ignores Range (200 full body) so the write
+           callback can abort instead of corrupting the resume offset */
+        curl_easy_setopt(h, CURLOPT_HEADERFUNCTION, dl_range_status_cb);
+        curl_easy_setopt(h, CURLOPT_HEADERDATA, dl);
     }
     curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(h, CURLOPT_MAXREDIRS, 8L);
