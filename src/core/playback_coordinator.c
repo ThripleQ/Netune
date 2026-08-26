@@ -281,11 +281,14 @@ static void cache_keep_partial(FFStream *ffstream) {
         if (g_part_path) {
             /* If a resume downloader wrote bytes at a high offset, the file
                has a hole below it — trim back to the contiguous sequential
-               prefix so the partial cache entry resumes from byte 0. */
+               prefix so the partial cache entry resumes from byte 0. If the
+               trim fails, discard the file rather than commit a holey entry
+               (open_partial would resume from a hole and corrupt). */
+            int trunc_ok = 1;
             if (had_resume && keep > 0)
-                truncate_utf8(g_part_path, keep);
+                trunc_ok = (truncate_utf8(g_part_path, keep) == 0);
             struct stat st;
-            if (keep > 0 && stat_utf8(g_part_path, &st) == 0 &&
+            if (trunc_ok && keep > 0 && stat_utf8(g_part_path, &st) == 0 &&
                 st.st_size > 0) {
                 char *final = audio_cache_final_path(
                     g_rec_song, ffstream_media_ext(ffstream));
