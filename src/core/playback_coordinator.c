@@ -754,6 +754,22 @@ static int open_stream(const char *path,
    stream with none, it is MEASURED from what has actually been consumed so
    far (bytes read / playtime), because the probe-time estimate on a tiny
    prefix is wildly wrong. Returns 0 when unknown. */
+/* Measured-bitrate anchor: reset on every seek. ffstream_growing_bytes_read
+   is the decoder's read cursor (ftell), which a seek_bytes jump moves to the
+   target byte in one step; current_frame is likewise set to the seek target.
+   Those two jumps are proportional, so a single measurement after the seek
+   still comes out right — but only if the two stay in sync. Anchoring the
+   measurement to (anchor_read_b, anchor_frame) and computing an INCREMENTAL
+   rate removes that implicit coupling entirely: even if a future seek path
+   updates only one of the two, the measured rate cannot blow up. */
+static int64_t g_br_anchor_read_b = 0;
+static int64_t g_br_anchor_frame = 0;
+
+static void effective_bitrate_anchor_reset(void) {
+    g_br_anchor_read_b = 0;
+    g_br_anchor_frame = 0;
+}
+
 static long effective_bitrate(FFStream *ffstream, int64_t current_frame,
                               int samplerate) {
     if (!ffstream) return 0;
@@ -763,9 +779,19 @@ static long effective_bitrate(FFStream *ffstream, int64_t current_frame,
        stream, measure from what the decoder has actually READ (not what the
        downloader wrote — the downloader runs ahead of the playhead, so its
        watermark measures download throughput, not audio bitrate, and would
-       produce absurd values on a fast link). */
+       produce absurd values on a fast link). Measured INCREMENTALLY from the
+       anchor captured at the last seek/stream-open: the decoder's read
+       cursor jumps on a byte-seek, so a from-zero accumulation would include
+       the jumped-over bytes once the playhead catches up. */
     if (!ffstream_growing(ffstream)) return 0;
     int64_t read_b = ffstream_growing_bytes_read(ffstream);
+    int64_t frames = current_frame - g_br_anchor_frame;
+    int64_t bytes = read_b - g_br_anchor_read_b;
+    if (bytes > 0 && frames > 0)
+        return (long)(bytes * 8 * samplerate / frames);
+    /* No usable delta yet (right after a seek, before any bytes were
+       consumed) — fall back to the absolute ratio, which is at least in the
+       right ballpark once the playhead has run a little. */
     int played_sec = samplerate > 0 ? (int)(current_frame / samplerate) : 0;
     if (read_b > 0 && played_sec > 0)
         return (long)(read_b * 8 / played_sec);
@@ -796,6 +822,10 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
                     int total_frames, int seek_sec, int *current_frame) {
     int target = seek_sec * samplerate;
     if (target < 0) target = 0;
+    /* The seek (if it succeeds) jumps both the decoder read cursor and
+       current_frame to the target; anchor the measured bitrate so the
+       incremental measurement after the jump is correct. */
+    effective_bitrate_anchor_reset();
     /* Growing-file mode is handled first: the total_frames probe estimate
        is tiny and useless as a bound — the real bound is the download
        watermark. To keep a quality switch continuous, wait (bounded) for
@@ -950,6 +980,76 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
         *current_frame = target;
 }
 
+/* Compute the stream's effective bitrate (codec-declared, or the fixed
+   Content-Length/total-sec ratio once the true length is known; measured
+   incrementally as a last resort for growing streams without either) and
+   publish an EV_PROGRESS_UPDATE. Shared by the decode-loop progress tick
+   and the immediate post-open publish, so a freshly opened stream shows the
+   correct bitrate and track length at once instead of waiting for the first
+   ~1s tick (and so the UI never lingers on a stale bitrate tag). */
+static void publish_progress(FFStream *ffstream, Decoder *decoder,
+                             int current_frame, int *total_frames,
+                             int samplerate) {
+    long br = effective_bitrate(ffstream, current_frame, samplerate);
+    if (br <= 0 && !ffstream && decoder)
+        br = g_decoded_bitrate;   /* complete-cache local decode */
+    /* A growing stream is PLAYING BACK THE LOCAL .part file, so its average
+       bitrate is a property of the audio data, not of the download pace — it
+       must NOT flicker as the download runs ahead of the playhead. Once the
+       true total length is known (per-stream duration from setup_decoder →
+       positive total_frames) AND the Content-Length is in, the real average
+       bitrate is fixed: Content-Length × 8 / total-sec. Pin br to it so the
+       status bar shows one stable value. Without Content-Length, fall back
+       to the measured value, which converges and is monotonic. */
+    if (ffstream && g_downloader &&
+        ffstream_growing(ffstream) && *total_frames > 0 &&
+        samplerate > 0) {
+        int64_t cl = stream_downloader_total_size(g_downloader);
+        if (cl > 0) {
+            int64_t dur_sec = *total_frames / samplerate;
+            if (dur_sec > 0) {
+                long fixed = (long)(cl * 8 / dur_sec);
+                if (fixed > 0) br = fixed;
+            }
+        }
+    }
+    /* Growing-file mode: the probe-time duration was estimated from the
+       partially downloaded file and is shorter than the real track. Track
+       the true length from (on-disk size / the effective bitrate — declared,
+       or measured for streams without one) so the progress bar and seek
+       bounds grow with the download instead of overflowing at a wrong end. */
+    if (ffstream && g_downloader &&
+        ffstream_growing(ffstream) && g_part_path && br > 0 &&
+        *total_frames <= 0) {
+        /* The stream's total length is derived from the per-stream duration
+           when the header carries a fixed frame count (FLAC total_samples,
+           etc.) — that value is exact and is set in setup_decoder. This
+           block is ONLY a fallback for containers whose header alone has no
+           duration (m4a/aac: moov at the tail; opus: granule-only), where
+           total_frames is still <= 0. Prefer Content-Length so the progress
+           bar shows the true track length from the start; fall back to the
+           continuous playable bytes while growing. */
+        int64_t total_bytes = stream_downloader_total_size(g_downloader);
+        if (total_bytes <= 0)
+            total_bytes = growing_avail_bytes();
+        if (total_bytes > 0) {
+            int64_t frames = total_bytes * 8 * samplerate / br;
+            if (frames > 0)
+                *total_frames = (int)frames;
+        }
+    }
+    /* Send exact frames for smooth progress bar. The 4th slot carries the
+       stream's average bitrate (bits/sec; 0 when unknown, e.g. local files
+       decoded without ffstream) so the UI can show it on the status bar. */
+    int progress_data[4] = {
+        current_frame,          /* exact frame position */
+        *total_frames,          /* total frames          */
+        samplerate,             /* for time calculation  */
+        (int)(br > 0 ? br : 0)  /* bitrate bits/sec       */
+    };
+    event_bus_publish(EV_PROGRESS_UPDATE, progress_data, sizeof(progress_data));
+}
+
 static void* playback_thread(void *arg) {
     (void)arg;
     LOG_INFO("Playback thread started");
@@ -1044,6 +1144,13 @@ static void* playback_thread(void *arg) {
                 }
                 current_frame = 0;
                 state = PS_PLAYING;
+                /* Publish the track's info immediately: open_stream already
+                   has the true duration (header frame count) and the
+                   downloader usually has Content-Length, so the status bar
+                   and progress bar can show the correct bitrate/length at
+                   once instead of after the first ~1s progress tick. */
+                publish_progress(ffstream, decoder, current_frame,
+                                 &total_frames, samplerate);
                 continue;
             }
 
@@ -1074,6 +1181,10 @@ static void* playback_thread(void *arg) {
                     audio_output_flush(audio);
                     audio_output_pause(audio);
                 }
+                /* quality switch reopened the track — publish its info now
+                   (bitrate/length can differ from the old quality) */
+                publish_progress(ffstream, decoder, current_frame,
+                                 &total_frames, samplerate);
                 continue;
             }
 
@@ -1301,73 +1412,8 @@ static void* playback_thread(void *arg) {
             int64_t now_ms = (int64_t)current_frame * 1000 / samplerate;
             if (now_ms - last_progress_ms >= PROGRESS_INTERVAL_MS) {
                 last_progress_ms = now_ms;
-                long br = effective_bitrate(ffstream, current_frame,
-                                            samplerate);
-                if (br <= 0 && !ffstream && decoder)
-                    br = g_decoded_bitrate;   /* complete-cache local decode */
-                /* A growing stream is PLAYING BACK THE LOCAL .part file, so
-                   its average bitrate is a property of the audio data, not
-                   of the download pace — it must NOT flicker as the download
-                   runs ahead of the playhead. Once the true total length is
-                   known (per-stream duration from setup_decoder → positive
-                   total_frames) AND the Content-Length is in, the real
-                   average bitrate is fixed: Content-Length × 8 / total-sec.
-                   Pin br to it so the status bar shows one stable value.
-                   Without Content-Length, fall back to the measured value
-                   (download bytes / playtime), which converges and is
-                   monotonic. */
-                if (ffstream && g_downloader &&
-                    ffstream_growing(ffstream) && total_frames > 0 &&
-                    samplerate > 0) {
-                    int64_t cl = stream_downloader_total_size(g_downloader);
-                    if (cl > 0) {
-                        int64_t dur_sec = total_frames / samplerate;
-                        if (dur_sec > 0) {
-                            long fixed = (long)(cl * 8 / dur_sec);
-                            if (fixed > 0) br = fixed;
-                        }
-                    }
-                }
-                /* Growing-file mode: the probe-time duration was estimated
-                   from the partially downloaded file and is shorter than the
-                   real track. Track the true length from (on-disk size /
-                   the effective bitrate — declared, or measured for streams
-                   without one) so the progress bar and seek bounds grow with
-                   the download instead of overflowing at a wrong end. */
-                if (ffstream && g_downloader &&
-                    ffstream_growing(ffstream) && g_part_path && br > 0 &&
-                    total_frames <= 0) {
-                    /* The stream's total length is derived from the per-stream
-                       duration when the header carries a fixed frame count
-                       (FLAC total_samples, etc.) — that value is exact and is
-                       set in setup_decoder. This block is ONLY a fallback for
-                       containers whose header alone has no duration (m4a/aac:
-                       moov at the tail; opus: granule-only), where total_frames
-                       is still <= 0. Prefer Content-Length so the progress bar
-                       shows the true track length from the start; fall back to
-                       the continuous playable bytes while growing. */
-                    int64_t total_bytes = stream_downloader_total_size(g_downloader);
-                    if (total_bytes <= 0)
-                        total_bytes = growing_avail_bytes();
-                    if (total_bytes > 0) {
-                        int64_t frames = total_bytes * 8 * samplerate / br;
-                        if (frames > 0)
-                            total_frames = (int)frames;
-                    }
-                }
-                /* Send exact frames for smooth progress bar. The 4th slot
-                   carries the stream's average bitrate (bits/sec; 0 when
-                   unknown, e.g. local files decoded without ffstream) so the
-                   UI can show it on the status bar — the same effective
-                   bitrate shared with the growing correction above. */
-                int progress_data[4] = {
-                    current_frame,          /* exact frame position */
-                    total_frames,           /* total frames          */
-                    samplerate,             /* for time calculation  */
-                    (int)(br > 0 ? br : 0)  /* bitrate bits/sec       */
-                };
-                event_bus_publish(EV_PROGRESS_UPDATE,
-                                  progress_data, sizeof(progress_data));
+                publish_progress(ffstream, decoder, current_frame,
+                                 &total_frames, samplerate);
             }
         }
 
