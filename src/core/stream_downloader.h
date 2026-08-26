@@ -41,6 +41,12 @@ int stream_downloader_start(StreamDownloader *dl);
 /* Bytes written to the file so far (monotonic). */
 int64_t stream_downloader_watermark(StreamDownloader *dl);
 
+/* Byte offset the downloader writes at (the Range start / fseek position).
+   A sequential downloader uses 0; a resume downloader uses its start_byte.
+   Combined with watermark it describes the covered region
+   [start_byte, start_byte + watermark). */
+int64_t stream_downloader_start_byte(const StreamDownloader *dl);
+
 /* Total size (bytes) of the download from the HTTP Content-Length, or 0
    when unknown (chunked responses / headers not yet seen). The caller
    already waits for a prefix before opening the stream, so by the time

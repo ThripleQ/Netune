@@ -293,6 +293,15 @@ int64_t stream_downloader_watermark(StreamDownloader *dl) {
     return wm;
 }
 
+int64_t stream_downloader_start_byte(const StreamDownloader *dl) {
+    if (!dl) return 0;
+    int64_t sb;
+    pthread_mutex_lock(&((StreamDownloader*)dl)->mutex);
+    sb = dl->start_byte;
+    pthread_mutex_unlock(&((StreamDownloader*)dl)->mutex);
+    return sb;
+}
+
 int64_t stream_downloader_total_size(const StreamDownloader *dl) {
     if (!dl) return 0;
     int64_t t;
