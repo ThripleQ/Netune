@@ -19,11 +19,14 @@ extern "C" {
    switches can drop or relocate placed images; the periodic re-place
    heals that with no fragile resize detection.
 
-   Every placement uses a stable placement id (p=1) and stale placements
-   of the image are deleted first, so re-placing REPLACES the previous
-   image instead of adding another one on top — repeated a=p without a
-   placement id creates a new placement each time, which leaves ghost
-   covers at old positions after a resize. */
+   The single-image cover/QR path keeps a stable placement id (p=1) and
+   deletes stale placements of the image first, so re-placing REPLACES
+   the previous image instead of adding another one on top. The
+   multi-image song-list path hands out a globally unique placement id
+   per place instead — kitty identifies a placement by the
+   (image id, placement id) pair, so two rows that reuse the same
+   cover_url must get distinct placement ids or the second would
+   silently replace the first. */
 
 typedef enum {
     TERM_GFX_NONE,   /* fall back to half-block rendering */
@@ -77,6 +80,12 @@ void term_gfx_clear_ids(void);
 /* Last-seen placement of an id, to detect repositioning cheaply.
    Returns 0 if the id has no placement. */
 int term_gfx_id_placed(uint64_t id);
+
+/* Mark every live multi-image placement as stale so the next
+   update_list_covers() pass re-places them (without re-transferring
+   pixel data). Heals covers that terminals drop on fullscreen toggles,
+   window switches or terminal-initiated placement evictions. */
+void term_gfx_invalidate_placements(void);
 
 #ifdef __cplusplus
 }

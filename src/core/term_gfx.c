@@ -16,6 +16,7 @@ void term_gfx_place_id(uint64_t id, int row0, int col0, int cols, int rows) { (v
 void term_gfx_delete_id(uint64_t id) { (void)id; }
 void term_gfx_clear_ids(void) {}
 int term_gfx_id_placed(uint64_t id) { (void)id; return 0; }
+void term_gfx_invalidate_placements(void) {}
 #else
 
 /* ── Protocol state ─────────────────────────────────── */
@@ -37,6 +38,24 @@ static unsigned long g_img_id = 0;
    (image id, placement id) pair atomically replaces the previous
    placement instead of stacking a new one on top */
 #define TERM_GFX_PLACEMENT_ID 1
+
+/* ── Multi-image placement ids ─────────────────────────
+   The single-image cover/QR path keeps a fixed placement id and relies
+   on "(image id, placement id)" pairing for atomic re-places. The
+   multi-image path hands out a GLOBALLY UNIQUE placement id per place:
+   kitty identifies a placement by the (image id, placement id) pair,
+   so sharing one fixed id would silently collapse two rows that reuse
+   the same cover_url (same image id) — the second place replaces the
+   first and the list shows a single cover. A monotonic counter keeps
+   every on-screen cover distinct; stale placements of an id are dropped
+   first (kitty_delete_img) so moves never ghost. */
+static unsigned long g_place_id = 0;
+
+static unsigned long next_place_id(void) {
+    g_place_id++;
+    if (g_place_id == 0) g_place_id = 1;  /* placement id 0 is invalid */
+    return g_place_id;
+}
 
 /* ── Multi-image bookkeeping ─────────────────────────────
    Song-list covers each live under an explicit caller-assigned id. We
@@ -260,10 +279,16 @@ void term_gfx_upload_id(uint64_t id, const CoverData *cd) {
         img->h == cd->height)
         return;  /* unchanged: keep uploaded data */
 
-    /* replacing a different cover under this id: drop the old data +
-       placements first */
-    if (img->stamp != 0 || img->w != 0)
-        kitty_delete_img(id);
+    /* replacing a different cover under this id: the protocol requires
+       the existing image AND its placements to be deleted before the id
+       can be re-transmitted (uppercase d=I frees the data too) —
+       re-uploading under a still-alive id is ignored by kitty, which
+       would leave the stale artwork on screen */
+    if (img->stamp != 0 || img->w != 0) {
+        char seq[96];
+        snprintf(seq, sizeof(seq), "\x1b_Ga=d,d=I,i=%lu\x1b\\", id);
+        esc_write(seq);
+    }
 
     kitty_upload_raw(cd->pixels, cd->width, cd->height, id);
     img->stamp = cd->stamp;
@@ -273,10 +298,12 @@ void term_gfx_upload_id(uint64_t id, const CoverData *cd) {
     LOG_DEBUG("term_gfx: uploaded id=%lu %dx%d", id, cd->width, cd->height);
 }
 
-/* Place the id image at an absolute position. Replacing the previous
-   placement of the same id (same image+placement id pair) atomically
-   moves it; stale placements are dropped first so a move never leaves a
-   ghost. */
+/* Place the id image at an absolute position. Stale placements of this
+   image are dropped first (so a move never leaves a ghost), then a NEW
+   globally-unique placement id is used: kitty identifies placements by
+   (image id, placement id), so two rows sharing one cover_url (same
+   image id) must get distinct placement ids or the second place would
+   silently replace the first. */
 void term_gfx_place_id(uint64_t id, int row0, int col0, int cols, int rows) {
     if (!term_gfx_active() || id == 0 || cols <= 0 || rows <= 0) return;
     TermGfxImg *img = img_find(id);
@@ -288,8 +315,8 @@ void term_gfx_place_id(uint64_t id, int row0, int col0, int cols, int rows) {
     kitty_delete_img(id);
     char seq[160];
     snprintf(seq, sizeof(seq),
-             "\x1b_Ga=p,i=%lu,p=%d,q=2,c=%d,r=%d,C=1\x1b\\",
-             id, TERM_GFX_PLACEMENT_ID, cols, rows);
+             "\x1b_Ga=p,i=%lu,p=%lu,q=2,c=%d,r=%d,C=1\x1b\\",
+             id, next_place_id(), cols, rows);
     /* Move the cursor to the top-left cell of the image first */
     printf("\x1b[%d;%dH", row0, col0);
     fflush(stdout);
@@ -329,6 +356,17 @@ void term_gfx_clear_ids(void) {
 int term_gfx_id_placed(uint64_t id) {
     TermGfxImg *img = img_find(id);
     return img ? img->placed : 0;
+}
+
+/* Force re-placement of every live cover on the next update pass. The
+   uploaded pixel data is kept (no re-transfer); only the "already
+   placed" bookkeeping is reset so update_list_covers() re-issues a=p.
+   Used as a periodic heal for terminals that drop or relocate placed
+   images on fullscreen toggles / window switches. */
+void term_gfx_invalidate_placements(void) {
+    if (!term_gfx_active()) return;
+    for (int i = 0; i < TERM_GFX_MAX_IMGS; i++)
+        g_imgs[i].placed = 0;
 }
 
 #endif /* _WIN32 */

@@ -1092,9 +1092,25 @@ static void update_list_covers(const AppState &st) {
     const int off = st.song_list_offset;
     const int h = st.screen_height - 5;
 
+    /* Periodic re-place (mirrors the single-cover path's ~500ms heal):
+       terminals drop or relocate placed images on fullscreen toggles and
+       window switches. Invalidating the placed flag makes the loop below
+       re-issue a=p on the next frame without re-transferring pixels. */
+    static auto last_reflow = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    if (now - last_reflow >= std::chrono::milliseconds(500)) {
+        term_gfx_invalidate_placements();
+        last_reflow = now;
+    }
+
     std::vector<uint64_t> want;
     want.reserve((size_t)(h / rows_song) + 2);
-    int first = off / rows_song;
+    /* first = ceil(off / rows_song): the cover's top row must be INSIDE
+       the viewport. off can be odd (h = screen_height - 5 is odd on
+       standard terminals), and the old floor(off/rows_song) pulled in
+       the half-visible song whose cover then landed one row above the
+       list content — on the border / top-bar row. */
+    int first = (off + rows_song - 1) / rows_song;
     int last = (off + h) / rows_song;
     if (last >= (int)st.playlist.size()) last = (int)st.playlist.size();
     if (first < 0) first = 0;
@@ -2601,7 +2617,7 @@ int run_app(int argc, char **argv) {
                 if (in_dl) row -= (int)st.downloads.size();
                 /* image terminals render each song over two rows — a click
                    on either row selects the song */
-                if (term_gfx_active() && !in_dl)
+                if (term_gfx_active() && !in_dl && !st.action_sheet_open)
                     row /= 2;
                 StateStore::instance().set_active_panel(1);
                 if (st.top_search_active)
