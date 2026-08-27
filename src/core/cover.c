@@ -56,9 +56,16 @@ static void cover_scale(const uint8_t *src, int sw, int sh, int ch,
 /* unique id source for CoverData.stamp */
 static uint64_t g_cover_seq = 0;
 /* cover_load can be called from several worker threads (the lyric cover
-   via threadpool and the song-list cache via its own worker); the stamp
+   via threadpool and the song-list cache via its own workers); the stamp
    counter must not be incremented concurrently. */
 static pthread_mutex_t g_seq_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+uint64_t cover_stamp_next(void) {
+    pthread_mutex_lock(&g_seq_mutex);
+    uint64_t s = ++g_cover_seq;
+    pthread_mutex_unlock(&g_seq_mutex);
+    return s;
+}
 
 /* ── Run a program and capture stdout ────────────── */
 static char *popen_read(const char *cmd, size_t *out_size) {
@@ -126,6 +133,11 @@ static char *shell_escape(const char *s) {
 
 /* ── Load cover from URL ─────────────────────────── */
 int cover_load(const char *url, CoverData *out) {
+    return cover_load_to(url, 0, 0, out);
+}
+
+/* Downscaled variant for the song-list overlay. See cover.h for why. */
+int cover_load_to(const char *url, int max_w, int max_h, CoverData *out) {
     if (!url || !out) return -1;
 
     memset(out, 0, sizeof(*out));
@@ -159,18 +171,28 @@ int cover_load(const char *url, CoverData *out) {
         return -1;
     }
 
-    /* Store the original image (within a sanity cap). The renderer samples
-       from it per frame, so keeping full resolution preserves detail —
-       2048px covers real-world covers (typically 300–800px) while capping
-       memory against 4K+ edge cases.
+    /* Cap the longest side (full-size caller) and/or fit the caller's
+       display box (song-list overlay). A box constraint for the overlay is
+       essential: the list shows each cover at ~cell_h*2 px tall, and
+       keeping full resolution means a multi-MB base64 transfer per row on
+       the main thread — the list's dominant cost. Downscale to the display
+       size instead; the area-average (box) filter keeps it looking sharp.
 
-       NOTE: images *below* the cap keep their native size. The previous
-       code resized everything to a 2048px longest side, nearest-neighbor
-       UPSCALING typical 300–800px covers: ~12MB of duplicated pixels per
-       cover, a ~17MB base64 kitty upload, and zero extra detail. */
+       The lyric cover keeps its full size (2048px cap below); the
+       renderer samples per frame, so detail is preserved there. */
     int max_dim = 2048;
     int dw = w, dh = h;
-    if (w > max_dim || h > max_dim) {
+    if (max_w > 0 && max_h > 0) {
+        int bw = max_w, bh = max_h;
+        if (bw < 1) bw = 1;
+        if (bh < 1) bh = 1;
+        double scale = 1.0;
+        if (w > bw) scale = (double)bw / w;
+        if (h * scale > bh) scale = (double)bh / h;
+        dw = (int)(w * scale); if (dw < 1) dw = 1;
+        dh = (int)(h * scale); if (dh < 1) dh = 1;
+        /* a box constraint is never an upscale */
+    } else if (w > max_dim || h > max_dim) {
         if (w >= h) { dw = max_dim; dh = max_dim * h / w; }
         else        { dh = max_dim; dw = max_dim * w / h; }
     }
@@ -192,9 +214,7 @@ int cover_load(const char *url, CoverData *out) {
     out->width    = dw;
     out->height   = dh;
     out->channels = 3;
-    pthread_mutex_lock(&g_seq_mutex);
-    out->stamp    = ++g_cover_seq;
-    pthread_mutex_unlock(&g_seq_mutex);
+    out->stamp    = cover_stamp_next();
     return 0;
 }
 

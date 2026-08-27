@@ -1,5 +1,7 @@
 #include "ui/components/theme_util.h"
 
+#include "ui/color_util.h"
+
 /* ── Hardcoded safe defaults (Tokyo Night) ───────────── */
 /* Used when a theme color slot has never been set.
    Exception: bg has NO fallback — when unset, the terminal's own
@@ -223,35 +225,49 @@ Element theme_warning_bg(Element e) {
 
 /* ── Extended semantic colors ──────────────────────── */
 
-/* Selection: sets both bgcolor (accent_bg) and color (fg) */
+/* Selection: sets both bgcolor (accent_bg) and text colour. The text
+   colour is the WCAG-readable version of the fg over that background
+   (hue-preserving contrast via netune::color_readable_on_bg), so every
+   theme_selection() call site — top_bar, group_list, action_sheet,
+   song_list filter rows — gets the SAME readable-and-pleasant highlight
+   as the song-list selection instead of a flat fg that can wash out. */
 Element theme_selection(Element e) {
     auto &t = ThemeManager::instance().current();
-    Color sel_bg = t.accent_bg.has_color
-        ? Color::RGB(t.accent_bg.r, t.accent_bg.g, t.accent_bg.b)
-        : pick_accent(t);
-    e = e | bgcolor(sel_bg);
-    e = e | color(pick_fg(t));
+    ThemeColor sel_bg = t.accent_bg.has_color
+        ? t.accent_bg
+        : (t.accent.has_color ? t.accent : ThemeColor{80, 80, 80, true});
+    ThemeColor fg = t.fg.has_color ? t.fg : ThemeColor{255, 255, 255, true};
+    ThemeColor tc = netune::color_readable_on_bg(fg, sel_bg);
+    e = e | bgcolor(Color::RGB(sel_bg.r, sel_bg.g, sel_bg.b));
+    e = e | color(Color::RGB(tc.r, tc.g, tc.b));
     return e;
 }
 
-/* Selection text color for a selected row. Uses YIQ perceived-luminance
-   of the row background to pick a high-contrast text color WITHOUT
-   inventing new hues: if the background is bright, text uses the theme's
-   bg (dark) color; if the background is dark, text uses the theme's fg
-   (light) color. Falls back to black/white when the needed theme slot is
-   unset (e.g. bg: none). */
+/* ── Selection text colour ───────────────────────────
+   Both public functions delegate to netune::color_readable_on_bg (the
+   WCAG hue-preserving algorithm in color_util.cpp), so the whole app
+   shares ONE colour strategy — selected text everywhere keeps its
+   category hue and is brightness-adjusted for >= 4.5:1 contrast, with
+   saturation fallback to avoid pure black/white. */
+
+/* Selection text colour for a selected row: the WCAG-readable version of
+   the row's own background colour (same hue, brightness-adjusted). Used
+   when the whole row collapses to a single inverse colour. */
 Color theme_selection_text(const ThemeColor &bg) {
-    auto &t = ThemeManager::instance().current();
-    bool bg_bright = false;
-    if (bg.has_color) {
-        /* YIQ perceived luminance (green weighs most, blue least) */
-        int yiq = (299 * (int)bg.r + 587 * (int)bg.g + 114 * (int)bg.b) / 1000;
-        bg_bright = yiq >= 128;
+    if (!bg.has_color) {
+        const auto &t = ThemeManager::instance().current();
+        return t.fg.has_color ? Color::RGB(t.fg.r, t.fg.g, t.fg.b)
+                              : Color::RGB(255, 255, 255);
     }
-    if (bg_bright) {
-        return t.bg.has_color ? Color::RGB(t.bg.r, t.bg.g, t.bg.b)
-                              : Color::RGB(0, 0, 0);
-    }
-    return t.fg.has_color ? Color::RGB(t.fg.r, t.fg.g, t.fg.b)
-                          : Color::RGB(255, 255, 255);
+    ThemeColor out = netune::color_readable_on_bg(bg, bg);
+    return Color::RGB(out.r, out.g, out.b);
+}
+
+/* Per-category selected text colour: keeps the TEXT's own hue (title =
+   fg, artist = custom colour, badge = playlist/VIP) and brightness-shifts
+   it against the row background for >= 4.5:1 contrast. */
+Color theme_text_on_bg(const ThemeColor &text, const ThemeColor &bg) {
+    if (!text.has_color || !bg.has_color) return theme_selection_text(bg);
+    ThemeColor out = netune::color_readable_on_bg(text, bg);
+    return Color::RGB(out.r, out.g, out.b);
 }

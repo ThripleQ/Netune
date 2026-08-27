@@ -24,6 +24,12 @@ Element theme_selection(Element e);
    the selection highlight regardless of theme. */
 Color theme_selection_text(const ThemeColor &bg);
 
+/* Per-category selected text color: keeps the text's OWN colour (title =
+   fg, artist = custom artist colour, badge = playlist/VIP) and only
+   shifts brightness against the row background, so each class of
+   character keeps its identity while staying readable on the highlight. */
+Color theme_text_on_bg(const ThemeColor &text, const ThemeColor &bg);
+
 /* Border / divider lines color (applied outermost) */
 Element theme_border(Element e);
 

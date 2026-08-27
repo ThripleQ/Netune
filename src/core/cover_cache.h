@@ -14,11 +14,12 @@ extern "C" {
    hash of the cover URL.
 
    Loading is asynchronous: cover_cache_request() returns immediately and
-   a worker thread fetches+decodes (serialized through a single worker so
-   stb_image's stamp counter stays safe). When a requested cover is
-   ready, EV_COVER_CACHE_LOADED is published with a CoverCacheResult; the
-   main thread then calls cover_cache_store() to move it into the cache
-   and reads it with cover_cache_get(). */
+   worker threads fetch+decode (several workers drain a shared queue;
+   cover_load is thread-safe). Covers are also cached on disk under
+   ~/.cache/netune/covers/ so repeat runs skip the network entirely. When
+   a requested cover is ready, EV_COVER_CACHE_LOADED is published with a
+   CoverCacheResult; the main thread then calls cover_cache_store() to
+   move it into the cache and reads it with cover_cache_get(). */
 
 /* Payload of EV_COVER_CACHE_LOADED: a freshly fetched cover. `cd` holds
    worker-owned pixels; the main thread passes it to cover_cache_store()

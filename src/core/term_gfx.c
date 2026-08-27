@@ -317,10 +317,13 @@ void term_gfx_place_id(uint64_t id, int row0, int col0, int cols, int rows) {
     snprintf(seq, sizeof(seq),
              "\x1b_Ga=p,i=%lu,p=%lu,q=2,c=%d,r=%d,C=1\x1b\\",
              id, next_place_id(), cols, rows);
-    /* Move the cursor to the top-left cell of the image first */
-    printf("\x1b[%d;%dH", row0, col0);
-    fflush(stdout);
-    esc_write(seq);
+    /* Move the cursor to the top-left cell of the image, then emit the
+       placement escape. These go out together; the main loop flushes
+       stdout once per frame AFTER update_list_covers, so an internal
+       fflush here would push the whole (still-being-built) frame buffer
+       out early for every single image — with ~20 covers visible that
+       was a constant stream of partial-frame flushes. */
+    printf("\x1b[%d;%dH%s", row0, col0, seq);
     img->placed = 1;
     img->p_row = row0; img->p_col = col0;
     img->p_cols = cols; img->p_rows = rows;
@@ -338,16 +341,17 @@ void term_gfx_delete_id(uint64_t id) {
     img->placed = 0;
 }
 
-/* Delete every multi-image slot. The single-image cover/QR data (which
-   uses a separate id space) is untouched. */
+/* Hide every multi-image placement (the uploaded data stays in the
+   terminal — kitty_delete_img uses lowercase d=i). The bookkeeping keeps
+   id/stamp/dimensions so a later re-placement (modal close, list return)
+   re-issues a=p without re-transmitting the pixels; only the placed flag
+   is cleared to force it. The single-image cover/QR data (a separate id
+   space) is untouched. */
 void term_gfx_clear_ids(void) {
     if (!term_gfx_active()) return;
     for (int i = 0; i < TERM_GFX_MAX_IMGS; i++) {
         if (g_imgs[i].id != 0) {
             kitty_delete_img(g_imgs[i].id);
-            g_imgs[i].id = 0;
-            g_imgs[i].stamp = 0;
-            g_imgs[i].w = g_imgs[i].h = 0;
             g_imgs[i].placed = 0;
         }
     }

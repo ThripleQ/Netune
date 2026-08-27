@@ -1,6 +1,7 @@
 #include "ui/components/song_list.h"
 #include "ui/components/theme_util.h"
 #include "ui/components/spinner.h"
+#include "ui/components/cover_overlay.h"
 #include "ui/state_store.h"
 #include "ui/ui_util.h"
 #include "core/term_gfx.h"
@@ -14,20 +15,6 @@ using namespace ftxui;
 
 #define MARQUEE_SPEED_MS 130   /* ms per column scrolled */
 #define MARQUEE_PAUSE_MS 750   /* ms hold at each end */
-
-/* ── Cover-art list rows (kitty-graphics terminals) ──
-   In a native-image terminal each song occupies LIST_COVER_ROWS rows:
-   a square cover placeholder on the left (the real image is overlaid by
-   the frame hook in app.cpp) with the title and artist stacked to its
-   right. The placeholder width keeps the image square: a 2-row tall
-   cover needs cols = 2 * cell_h / cell_w to match the cell aspect. */
-#define LIST_COVER_ROWS 2
-int song_list_cover_cols(void) {
-    int c = LIST_COVER_ROWS * cover_cell_height() / cover_cell_width();
-    if (c < 4) c = 4;
-    return c;
-}
-#define list_cover_cols() song_list_cover_cols()
 
 /* ── Truncate or marquee-scroll text within width ─── */
 static std::string fit_text(const std::string &text, int width) {
@@ -291,66 +278,132 @@ Element render_song_list(const AppState &s) {
             std::string tail = is_pl ? " \u6B4C\u5355" : (is_vip ? " VIP" : "");
 
             /* ── Image-terminal cover rows ────────────────
-               Each song spans LIST_COVER_ROWS rows: the square cover
+               Each song spans cover_overlay::rows() rows: the square cover
                placeholder column on the left (image overlaid by the frame
                hook in app.cpp), then title / artist stacked to its right.
-               Selected rows get a leading ▶ marker and accent text; no
-               full-row background — the highlight would fight the overlaid
-               artwork. */
-            if (term_gfx_active() && !in_downloads && !s.action_sheet_open) {
+               The placeholder is a CoverNode that records the final layout
+               box so the overlay places the image exactly there.
+
+               Colour system mirrors the text list row-for-row: title uses
+               the fg slot, artist the artist slot, the playlist badge the
+               playlist slot. A selected song highlights BOTH rows with ONE
+               shared solid background (playlist/VIP/full accent variants,
+               text per-category contrast-adjusted) so the pair reads as a
+               single object — the "▶" marker is NOT drawn in the kitty
+               list, the two-row block IS the selection indicator. The
+               cover column on the left stays clear so the artwork is
+               never painted over.
+
+               When a modal (action sheet) is open the SAME two-row solid
+               block is used (the sheet sits bottom-right, far from the
+               cover column, so the block and the covers stay placed and
+               the song object reads as one selected block under the
+               modal). */
+            if (term_gfx_active() && !in_downloads) {
                 bool active_sel = (sel && s.active_panel == 1 && !s.top_search_active);
-                std::string pad = active_sel ? "\u25B6 " : "  ";
-                std::string cover_ph((size_t)list_cover_cols(), ' ');
-                int txt_w = avail_w - list_cover_cols() - 2;
+                int cw = cover_overlay::cols();
+                int txt_w = avail_w - cw - 2;  /* 2-col selection pad */
                 if (txt_w < 5) txt_w = 5;
-                Element cover_el = text(cover_ph);
+                Element cover_el = cover_overlay::coverPlaceholder((int)i, song.cover_url);
                 std::string t1 = fit_text(title, txt_w);
                 std::string a1 = (song.artist && song.artist[0])
                                ? song.artist : "";
                 if (!a1.empty()) a1 = fit_text(a1, txt_w);
-                std::string line1 = t1;
-                if (!a1.empty() && (int)string_width(t1) < txt_w - 4)
-                    line1 += std::string(" \u2014 ") + a1;
-                Element title_el = text(line1);
-                Element artist_el = theme_artist(text(a1));
+
+                /* Raw (uncoloured) text: the selected state applies its own
+                   fg (theme_selection_text) via the outer color() decorator,
+                   which ONLY reaches the pixel if the inner text has no
+                   colour of its own (FTXUI FgColor::Render paints the box
+                   first, then the child re-paints over it). The text list's
+                   selected row uses a bare text() for the same reason. The
+                   theme colours are applied in the unselected branches
+                   below. */
+                Element title_el = text(t1);
+                Element artist_el = text(a1);
+                Element tail_el;
+                if (is_pl) tail_el = text(tail);
+                /* VIP badge rides on the ARTIST row (2nd line), after the
+                   artist name — only in the image-terminal cover list. */
+                Element vip_el;
+                if (is_vip) vip_el = text(" VIP");
+
+                Element pad_el = text("  ");
+
                 if (active_sel) {
-                    title_el = title_el | bold | theme_accent;
-                    artist_el = artist_el | theme_accent;
+                    /* Selected: a TWO-ROW solid colour block covering the
+                       whole song object (title row + artist row). This is
+                       used both with no modal and with the action sheet
+                       open — the sheet sits bottom-right and never touches
+                       the cover column or the highlight, so a full block is
+                       always safe. The colour is the row's dedicated
+                       playlist / VIP slot (falling back to accent/
+                       accent_bg), and the text is per-category
+                       contrast-adjusted so the pair reads as one selected
+                       block. The "▶" marker is intentionally gone in the
+                       kitty list — the block is the selection indicator. */
+                    const auto &th = ThemeManager::instance().current();
+                    ThemeColor bg;
+                    if (is_pl)
+                        bg = th.playlist.has_color ? th.playlist : th.accent;
+                    else if (is_vip)
+                        bg = th.vip.has_color ? th.vip : th.warning;
+                    else
+                        bg = th.accent_bg.has_color ? th.accent_bg
+                           : (th.accent.has_color ? th.accent
+                                                  : ThemeColor{80, 80, 80, true});
+                    Color bgc = Color::RGB(bg.r, bg.g, bg.b);
+                    /* category text colours, each contrast-adjusted. The
+                       badge uses the SAME adjusted fg as the title: the whole
+                       background is already the playlist/VIP colour, so a
+                       badge in its own colour would be text-on-its-own-bg
+                       (unreadable, collapses to black). Keeping it the same
+                       as the title makes the selected row read as ONE
+                       coherent block. */
+                    ThemeColor fg = th.fg.has_color ? th.fg
+                                   : ThemeColor{255, 255, 255, true};
+                    ThemeColor ar = th.artist.has_color ? th.artist : fg;
+                    Element bg1 = title_el | color(theme_text_on_bg(fg, bg));
+                    if (tail_el)
+                        bg1 = hbox({bg1, tail_el | color(theme_text_on_bg(fg, bg))});
+                    Element bg2 = artist_el | color(theme_text_on_bg(ar, bg));
+                    if (vip_el)
+                        bg2 = hbox({bg2, vip_el | color(theme_text_on_bg(fg, bg))});
+                    bg1 = (bg1 | flex) | bgcolor(bgc);
+                    bg2 = (bg2 | flex) | bgcolor(bgc);
+                    els.push_back(hbox({cover_el, pad_el, bg1}) | focus);
+                    els.push_back(hbox({text(std::string((size_t)cw + 2, ' ')),
+                                        bg2}));
+                    continue;
                 }
-                /* first row: title (+ tail badge) */
-                Element r1 = hbox({cover_el, text(pad), title_el});
-                if (!tail.empty())
-                    r1 = hbox({r1, text(tail) | (is_pl ? theme_playlist
-                                                       : theme_vip)});
+
+                /* first row: title (+ playlist badge) — theme colours */
+                Element r1 = hbox({cover_el, pad_el, theme_fg(title_el)});
+                if (tail_el) r1 = hbox({r1, tail_el | theme_playlist});
                 els.push_back(r1 | focus);
-                /* second row: artist (dim, indented under the title) */
-                Element r2 = hbox({text(std::string((size_t)list_cover_cols(), ' ')),
-                                   text("  "), artist_el});
+                /* second row: artist (dim, indented under the title) with the
+                   VIP badge after the artist name */
+                Element r2 = hbox({text(std::string((size_t)cw, ' ')),
+                                   text("  "), theme_artist(artist_el)});
+                if (vip_el) r2 = hbox({r2, vip_el | theme_vip});
                 els.push_back(r2);
                 continue;
             }
 
-            Element line = theme_fg(text(title));
             int line_w = avail_w;
             if (s.action_sheet_open) line_w -= 2;  /* "> " marker block width */
-            bool scroll = (s.active_panel == 1 && sel && !s.top_search_active);
-            if (scroll) {
-                std::string content = title;
-                if (song.artist && song.artist[0])
-                    content += std::string(" \u2014 ") + song.artist;
-                content += tail;
-                line = text(build_info_row(content, line_w, true));
-            } else {
-                if (song.artist && song.artist[0])
-                    line = hbox({line, text(" \u2014 ") | theme_fg,
-                                 theme_artist(text(song.artist))});
-                if (!tail.empty())
-                    line = hbox({line, text(tail) | (is_pl ? theme_playlist
-                                                           : theme_vip)});
-            }
-
             bool active_sel = (sel && s.active_panel == 1 && !s.top_search_active);
+            bool scroll = active_sel;  /* marquee the title of the selected row */
             std::string pad = active_sel ? "> " : "  ";
+
+            /* Raw, uncoloured pieces: each branch below applies its own
+               colouring so the selected row can tint title / artist /
+               badge per category (theme_text_on_bg) instead of collapsing
+               the whole row to one colour. */
+            Element title_raw = text(title);
+            Element artist_raw = (song.artist && song.artist[0])
+                               ? text(song.artist) : Element{};
+            Element tail_raw = !tail.empty() ? text(tail) : Element{};
+
             if (active_sel && s.action_sheet_open) {
                 /* A modal is open on top: keep the selection marker but
                    collapse it to a small colour block at the ">" position
@@ -358,35 +411,66 @@ Element render_song_list(const AppState &s) {
                    would bleed into the popup's area through dbox's
                    background blending. The block keeps the row's dedicated
                    colour (playlist / VIP) when the theme defines one. */
-                els.push_back(hbox({theme_sel_marker(is_pl, is_vip), line}) | focus);
+                Element l = scroll ? text(build_info_row(title, line_w, true))
+                                   : title_raw;
+                l = l | theme_fg;
+                if (artist_raw)
+                    l = hbox({l, text(" \u2014 ") | theme_fg,
+                              artist_raw | theme_artist});
+                if (tail_raw)
+                    l = hbox({l, tail_raw | (is_pl ? theme_playlist
+                                                   : theme_vip)});
+                els.push_back(hbox({theme_sel_marker(is_pl, is_vip), l}) | focus);
             } else if (active_sel) {
-                /* selected: full marker background accent, or the
-                   generic selection color for plain rows. The text color
-                   is the inverse of the row background so it stays
-                   readable on the highlight. */
-                if (is_pl) {
-                    const auto &th = ThemeManager::instance().current();
-                    line = theme_playlist_sel_bg(line);
-                    line = line | color(theme_selection_text(
-                        th.playlist.has_color ? th.playlist : th.accent));
-                } else if (is_vip) {
-                    const auto &th = ThemeManager::instance().current();
-                    line = theme_vip_sel_bg(line);
-                    line = line | color(theme_selection_text(
-                        th.vip.has_color ? th.vip : th.warning));
-                } else {
-                    const auto &th = ThemeManager::instance().current();
-                    ThemeColor bg = th.accent_bg.has_color ? th.accent_bg
-                                  : (th.accent.has_color ? th.accent
-                                                         : ThemeColor{80, 80, 80, true});
-                    line = line | color(theme_selection_text(bg));
-                    line = line | bgcolor(Color::RGB(bg.r, bg.g, bg.b));
-                }
-                els.push_back(hbox({text(pad) | bold, line}) | focus);
+                /* selected: per-category text colour on one shared row
+                   background. Title stays fg, artist keeps its custom colour,
+                   the badge keeps playlist/VIP; each is brightness-adjusted
+                   against the background (theme_text_on_bg) so the category
+                   identity survives the highlight. */
+                const auto &th = ThemeManager::instance().current();
+                ThemeColor bg;
+                if (is_pl)
+                    bg = th.playlist.has_color ? th.playlist : th.accent;
+                else if (is_vip)
+                    bg = th.vip.has_color ? th.vip : th.warning;
+                else
+                    bg = th.accent_bg.has_color ? th.accent_bg
+                       : (th.accent.has_color ? th.accent
+                                              : ThemeColor{80, 80, 80, true});
+                Color bgc = Color::RGB(bg.r, bg.g, bg.b);
+                ThemeColor fg = th.fg.has_color ? th.fg
+                                : ThemeColor{255, 255, 255, true};
+                ThemeColor ar = th.artist.has_color ? th.artist : fg;
+                Element l = (scroll ? text(build_info_row(title, line_w, true))
+                                    : title_raw)
+                            | color(theme_text_on_bg(fg, bg));
+                if (artist_raw)
+                    l = hbox({l, text(" \u2014 ")
+                                    | color(theme_text_on_bg(fg, bg)),
+                              artist_raw | color(theme_text_on_bg(ar, bg))});
+                if (tail_raw)
+                    l = hbox({l, tail_raw
+                                    | color(theme_text_on_bg(fg, bg))});
+                l = l | bgcolor(bgc);
+                els.push_back(hbox({text(pad) | bold, l}) | focus);
             } else if (sel) {
-                els.push_back(hbox({text(pad) | bold, line}) | focus);
+                Element l = title_raw | theme_fg;
+                if (artist_raw)
+                    l = hbox({l, text(" \u2014 ") | theme_fg,
+                              artist_raw | theme_artist});
+                if (tail_raw)
+                    l = hbox({l, tail_raw | (is_pl ? theme_playlist
+                                                   : theme_vip)});
+                els.push_back(hbox({text(pad) | bold, l}) | focus);
             } else {
-                els.push_back(hbox({text(pad), line}));
+                Element l = title_raw | theme_fg;
+                if (artist_raw)
+                    l = hbox({l, text(" \u2014 ") | theme_fg,
+                              artist_raw | theme_artist});
+                if (tail_raw)
+                    l = hbox({l, tail_raw | (is_pl ? theme_playlist
+                                                   : theme_vip)});
+                els.push_back(hbox({text(pad), l}));
             }
         }
         if (shown_rows == 0 && !filter_q.empty())
@@ -447,9 +531,9 @@ Element render_song_list(const AppState &s) {
         const int h = s.screen_height - 5;  /* top 1 + status 2 + borders 2 */
         int n = (int)els.size();
         int off = s.song_list_offset;
-        /* visual row of the selected file (each song = LIST_COVER_ROWS
+        /* visual row of the selected file (each song = cover_overlay::rows()
            rows in image terminals, 1 elsewhere) */
-        int rows_song = term_gfx_active() ? LIST_COVER_ROWS : 1;
+        int rows_song = term_gfx_active() ? cover_overlay::rows() : 1;
         int sel = task_n + s.selected_index * rows_song;
         if (sel < 0) sel = 0;
         if (sel >= off + h) off = sel - h + rows_song;

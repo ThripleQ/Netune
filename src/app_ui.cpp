@@ -67,6 +67,7 @@ extern "C" {
 #include "ui/components/status_bar.h"
 #include "ui/components/group_list.h"
 #include "ui/components/song_list.h"
+#include "ui/components/cover_overlay.h"
 #include "ui/components/help_screen.h"
 #include "ui/components/login_screen.h"
 #include "ui/components/action_sheet.h"
@@ -1053,17 +1054,22 @@ static void ev_cover_cache_loaded(const BusEvent *ev, void *data) {
 
 /* ── Song-list cover overlay (image terminals) ──────────
    Places a real image over each visible row's cover placeholder. Called
-   every frame from the main loop; uploads are fingerprinted (no re-send),
-   placements are repositioned only on change, and rows scrolled out of
-   view have their images deleted. Coordinates mirror render_song_list:
-   the list content starts at 1-based row 3 (top bar 1 + border top 1 +
-   1) and 1-based column 23 (left panel 20 + separator 1 + border left
-   1 + 1); each song spans LIST_COVER_ROWS rows starting at visual row
-   idx*2. */
+   every frame from the main loop, AFTER the FTXUI render pass.
+
+   Coordinates come from the layout itself, not from arithmetic: every
+   song row's cover placeholder is a CoverNode (cover_overlay) whose
+   SetBox() recorded the FINAL screen box (already scroll-offset by the
+   parent yframe) into the slot table. We read that table — the ground
+   truth of where each row's cover column actually sits this frame — and
+   place images exactly there. No song_list_offset, no idx*2 arithmetic,
+   no prefetch ranges. */
 static void update_list_covers(const AppState &st) {
+    /* The 2-row cover layout keeps the sheet's selection marker and its
+       covers placed: the action sheet sits in the bottom-right corner and
+       never overlaps the cover column (far-left), so covers stay visible
+       under the modal — no floating-image problem. */
     bool list_shown = !st.lyric_mode && st.login_state == 0 && !st.show_help &&
                       !st.search_active &&
-                      !st.action_sheet_open &&
                       /* filtered / API-search views auto-scroll with FTXUI
                          and are not offset-mapped; skip image overlay there */
                       !st.top_search_active &&
@@ -1073,61 +1079,80 @@ static void update_list_covers(const AppState &st) {
                         st.group_index < (int)st.groups.size() &&
                         st.groups[st.group_index].is_downloads);
     static std::vector<uint64_t> live;
+    static int last_cov_dimx = -1, last_cov_dimy = -1;
+    static uint64_t last_cov_gen = 0;
     if (!list_shown || st.playlist.empty()) {
         if (!live.empty()) {
             term_gfx_clear_ids();
             live.clear();
         }
+        last_cov_dimx = last_cov_dimy = -1;
+        last_cov_gen = 0;
         return;
     }
-    const int rows_song = 2;                  /* LIST_COVER_ROWS */
-    const int cols = song_list_cover_cols();
-    /* The right panel starts one row below the top bar (border top) and
-       one column right of the left panel + separator + border left.
-       Verified against the actual FTXUI render: top bar = row 1,
-       border top = row 2, so the first song row is row 3; left panel 20
-       + separator 1 + border left 1 = column 23. */
-    const int content_col = 20 + 1 + 1 + 1;   /* left panel + sep + border */
-    const int content_row = 3;                /* top bar + border top + 1 */
-    const int off = st.song_list_offset;
-    const int h = st.screen_height - 5;
 
-    /* Periodic re-place (mirrors the single-cover path's ~500ms heal):
-       terminals drop or relocate placed images on fullscreen toggles and
-       window switches. Invalidating the placed flag makes the loop below
-       re-issue a=p on the next frame without re-transferring pixels. */
-    static auto last_reflow = std::chrono::steady_clock::now();
-    auto now = std::chrono::steady_clock::now();
-    if (now - last_reflow >= std::chrono::milliseconds(500)) {
+    /* Re-place after a terminal resize: terminals can drop or relocate
+       placed images when the geometry changes, so invalidate the "placed"
+       bookkeeping and let the loop below re-issue a=p on the next frame
+       (pixels are never re-transferred). */
+    int tdimx = Terminal::Size().dimx;
+    int tdimy = Terminal::Size().dimy;
+    if (tdimx != last_cov_dimx || tdimy != last_cov_dimy) {
         term_gfx_invalidate_placements();
-        last_reflow = now;
+        last_cov_dimx = tdimx;
+        last_cov_dimy = tdimy;
     }
 
+    /* The slot table holds the layout's ground truth, persisting across
+       frames: SetBox overwrites the entry for each row whenever the
+       layout runs. A frame where FTXUI skips re-layout keeps the previous
+       boxes, so the overlay stays stable instead of delete/re-place
+       cycling. */
+    const int scr_h = st.screen_height;
+    const int rows_song = cover_overlay::rows();
+    const int cols = cover_overlay::cols();
+    /* The list's visible area excludes the top bar (1), the bottom status
+       bar (2) and the border below the list (1) — a box landing in that
+       band (e.g. a partially-scrolled edge row) must not have its image
+       placed over the status bar. */
+    const int view_y0 = 1;
+    const int view_y1 = scr_h - 4;
+
     std::vector<uint64_t> want;
-    want.reserve((size_t)(h / rows_song) + 2);
-    /* first = ceil(off / rows_song): the cover's top row must be INSIDE
-       the viewport. off can be odd (h = screen_height - 5 is odd on
-       standard terminals), and the old floor(off/rows_song) pulled in
-       the half-visible song whose cover then landed one row above the
-       list content — on the border / top-bar row. */
-    int first = (off + rows_song - 1) / rows_song;
-    int last = (off + h) / rows_song;
-    if (last >= (int)st.playlist.size()) last = (int)st.playlist.size();
-    if (first < 0) first = 0;
-    for (int idx = first; idx < last; idx++) {
-        const auto &song = st.playlist[(size_t)idx];
-        if (!song.cover_url || !song.cover_url[0]) continue;
-        uint64_t id = cover_cache_request(song.cover_url);
+    want.reserve(cover_overlay::slots().size());
+    /* A slot is "in the tree this frame" if its CoverNode got SetBox'd
+       since the previous update pass — i.e. its gen is strictly newer
+       than the boundary we observed last time. The gen only advances when
+       SetBox runs, so:
+         - a layout frame: visible rows get fresh gens (> last_gen), the
+           rows scrolled out of the visible slice STOP being laid out and
+           keep their old gen (<= last_gen) → correctly treated as gone;
+         - an idle frame (no re-layout): g_gen is unchanged, so NOTHING
+           has a gen newer than last_gen. That must NOT delete the placed
+           covers — we simply skip the reconcile and keep the previous
+           placements (the slots still hold valid, current boxes). */
+    const uint64_t cur_gen = cover_overlay::gen();
+    bool layout_happened = (cur_gen != last_cov_gen);
+    for (const auto &slot : cover_overlay::slots()) {
+        uint64_t id = slot.id;
         if (id == 0) continue;
+        bool in_tree = !layout_happened || (slot.gen > last_cov_gen);
+        bool on_screen = slot.y >= view_y0 && slot.y + slot.h <= view_y1 &&
+                         slot.x + slot.w >= 0;
+        if (!in_tree || !on_screen) continue;
         want.push_back(id);
         const CoverData *cd = cover_cache_get(id);
         if (!cd) continue;   /* still loading — place on a later frame */
-        int row0 = content_row + (idx * rows_song - off);
         term_gfx_upload_id(id, cd);
-        term_gfx_place_id(id, row0, content_col, cols, rows_song);
+        /* box x_min/y_min are 0-based screen coords; kitty wants 1-based */
+        term_gfx_place_id(id, slot.y + 1, slot.x + 1, cols, rows_song);
     }
+    last_cov_gen = cur_gen;
 
-    /* delete images that scrolled out of view */
+    /* delete images whose row was not laid out in the latest layout pass
+       (scrolled out of the visible slice / removed / never got a visible
+       slot). On idle frames layout_happened is false and want==live keeps
+       every placement, so nothing is spuriously deleted. */
     for (uint64_t id : live) {
         if (std::find(want.begin(), want.end(), id) == want.end())
             term_gfx_delete_id(id);
@@ -2616,8 +2641,9 @@ int run_app(int argc, char **argv) {
                               st.groups[st.group_index].is_downloads);
                 if (in_dl) row -= (int)st.downloads.size();
                 /* image terminals render each song over two rows — a click
-                   on either row selects the song */
-                if (term_gfx_active() && !in_dl && !st.action_sheet_open)
+                   on either row selects the song (the 2-row layout is kept
+                   even while a modal is open) */
+                if (term_gfx_active() && !in_dl)
                     row /= 2;
                 StateStore::instance().set_active_panel(1);
                 if (st.top_search_active)
