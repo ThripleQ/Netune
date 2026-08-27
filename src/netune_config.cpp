@@ -121,10 +121,13 @@ struct CfgState {
     std::string hex_buf;
     /* 2D gradient picker: 纵=色相(可滚动) 横=饱和度 底部=亮度 */
     int pick_hue = 0;   /* 0..HUE_ROWS-1 */
-    int pick_sat = 0;   /* 0..SAT_COLS-1 */
+    int pick_sat = 0;   /* 0..sat_cols-1 */
     int pick_val = 200; /* 0..255 (亮度, 底部固定) */
     int hue_top = 0;    /* 视口顶部色相行 */
     int pick_focus = 0; /* Tab 焦点: 0=二维表 1=亮度条 2=hex */
+    /* terminal-size adaptive picker geometry (recomputed each frame) */
+    int sat_cols = 20;  /* 饱和度列数 */
+    int hue_view = 12;  /* 一屏可见色相行数 */
 
     /* local music dirs (main config tab) */
     std::vector<std::string> dirs;
@@ -164,9 +167,9 @@ static const ColorSlot kSlots[] = {
    A full-screen color picker: the grid maps hue vertically (scrollable,
    0°..360°) and saturation horizontally (0%..100%); brightness is NOT in
    the grid — it sits on a fixed bar at the bottom and never scrolls. */
-#define SAT_COLS 20   /* 饱和度列数 (20%..100%) */
-#define HUE_ROWS 72   /* 色相行数 (每格 5°, 0°..355°) — 可滚动 */
-#define HUE_VIEW 12   /* 一屏可见色相行数 */
+#define SAT_COLS_MAX 40   /* 饱和度列数上限 (0%..100%) */
+#define HUE_ROWS 72       /* 色相行数 (每格 5°, 0°..355°) — 可滚动 */
+#define HUE_VIEW_MIN 3    /* 一屏可见色相行数下限 */
 
 static void hsv_to_rgb(double h, double s, double v, int *r, int *g, int *b) {
     if (s <= 0) {
@@ -215,9 +218,9 @@ static void rgb_to_hsv(int r, int g, int b, double *h, double *s, double *v) {
 /* Color of a cell: hue row index + saturation column index + brightness.
    hue descends top→bottom (top = 355°, bottom = 0°); sat descends
    left→right (100% → 20%). */
-static ThemeColor pick_cell_color(int hue_idx, int sat_idx, int val) {
+static ThemeColor pick_cell_color(int hue_idx, int sat_idx, int sat_cols, int val) {
     double hue = (HUE_ROWS - 1 - hue_idx + 0.5) * 360.0 / HUE_ROWS;
-    double sat = 1.0 - 0.80 * sat_idx / (SAT_COLS - 1);
+    double sat = 1.0 - 0.80 * sat_idx / (sat_cols - 1);
     double v = val / 255.0;
     int r, g, b;
     hsv_to_rgb(hue, sat, v, &r, &g, &b);
@@ -225,6 +228,35 @@ static ThemeColor pick_cell_color(int hue_idx, int sat_idx, int val) {
     c.r = (uint8_t)r; c.g = (uint8_t)g; c.b = (uint8_t)b;
     c.has_color = true;
     return c;
+}
+
+/* Recompute the picker's grid geometry from the current terminal size so it
+   always fits: saturation columns scale with width (each cell is 2 cols wide,
+   a hue label column + 1 gap sits on the left, plus window padding), and the
+   visible hue rows scale with height (title, two separators, hue hint,
+   brightness bar, hex line, hint line, window border, top tab bar are fixed
+   overhead). State that depends on the grid (pick_sat, hue_top) is clamped
+   into the new bounds. */
+static void recompute_picker_geometry(CfgState &th, const Screen &scr) {
+    int W = scr.dimx();
+    int H = scr.dimy();
+    int sat_cols = (W - 8) / 2;   /* each cell = 2 cols, no border;
+                                      label column + gap ~6, padding ~2 */
+    if (sat_cols < 4) sat_cols = 4;
+    if (sat_cols > SAT_COLS_MAX) sat_cols = SAT_COLS_MAX;
+    int hue_view = H - 14;   /* fixed vertical overhead + 1 buffer: outer
+                                (tab bar 1 + bottom hints 2 + dbox border 2)
+                                + body fixed (title, separator, hue hint,
+                                separator, brightness bar, hex, tab hint,
+                                frame border 2) */
+    if (hue_view < HUE_VIEW_MIN) hue_view = HUE_VIEW_MIN;
+    if (hue_view > HUE_ROWS) hue_view = HUE_ROWS;
+    th.sat_cols = sat_cols;
+    th.hue_view = hue_view;
+    if (th.pick_sat > sat_cols - 1) th.pick_sat = sat_cols - 1;
+    if (th.hue_top > HUE_ROWS - hue_view) th.hue_top = HUE_ROWS - hue_view;
+    if (th.hue_top < 0) th.hue_top = 0;
+    if (th.pick_hue > HUE_ROWS - 1) th.pick_hue = HUE_ROWS - 1;
 }
 
 static bool write_theme_yaml(const std::string &path, const std::string &name, const Theme &t) {
@@ -643,6 +675,7 @@ int run_config(void) {
     /* ── Renderer ───────────────────────────────────── */
     auto render_frame = [&]() -> Element {
         auto &th = st;
+        recompute_picker_geometry(th, screen);
         Elements els;
 
         /* top bar: tabs (selected inverted, others dimmed; no inner border) */
@@ -715,7 +748,7 @@ int run_config(void) {
                亮度在底部固定条上, 不参与滚动 */
             const ColorSlot &slot = kSlots[th.slot_sel];
             const ThemeColor &cur = th.theme_edit.*(slot.member);
-            ThemeColor cell = pick_cell_color(th.pick_hue, th.pick_sat, th.pick_val);
+            ThemeColor cell = pick_cell_color(th.pick_hue, th.pick_sat, th.sat_cols, th.pick_val);
             Elements body;
             /* live preview: a typed hex (when valid) overrides the cursor color
                so the title swatch shows exactly what will be applied */
@@ -742,36 +775,32 @@ int run_config(void) {
             body.push_back(separator());
             /* scrollable grid: hue row label | sat 0% → 100% */
             Elements rows;
-            for (int j = 0; j < HUE_VIEW; j++) {
+            for (int j = 0; j < th.hue_view; j++) {
                 int hue_idx = th.hue_top + j;
                 if (hue_idx >= HUE_ROWS) break;
-                char lbl[8];
+                char lbl[16];
                 snprintf(lbl, sizeof(lbl), "%3d°", (HUE_ROWS - 1 - hue_idx) * 5);
                 Elements line;
                 line.push_back(text(lbl) | dim);
                 line.push_back(text(" "));
-                for (int i = 0; i < SAT_COLS; i++) {
-                    ThemeColor c = pick_cell_color(hue_idx, i, th.pick_val);
+                for (int i = 0; i < th.sat_cols; i++) {
+                    ThemeColor c = pick_cell_color(hue_idx, i, th.sat_cols, th.pick_val);
                     Color rgb = Color::RGB(c.r, c.g, c.b);
                     bool sel = (i == th.pick_sat && hue_idx == th.pick_hue);
                     if (sel) {
-                        int luma = 299 * (int)c.r + 587 * (int)c.g + 114 * (int)c.b;
-                        Color fg = (luma > 140000) ? Color::Black : Color::White;
-                        /* every cell carries an equally-thick border slot so the
-                           grid stays aligned and no neighbor covers this frame.
-                           The selected cell lights its border up (blank inner
-                           cells are unaffected by color(fg)); the others keep a
-                           transparent borderEmpty occupying the same slot. */
-                        line.push_back(text("  ") | bgcolor(rgb) |
-                                       color(fg) | borderLight);
+                        /* selected cell: invert so its swatch reads as a
+                           bright "frame" without a border element — borders
+                           would give every cell 3 rows (min_y += 2), and
+                           hue_view such cells would overflow the terminal. */
+                        line.push_back(text("  ") | bgcolor(rgb) | inverted);
                     } else {
-                        line.push_back(text("  ") | bgcolor(rgb) | borderEmpty);
+                        line.push_back(text("  ") | bgcolor(rgb));
                     }
                 }
                 rows.push_back(hbox(std::move(line)));
             }
             body.push_back(vbox(std::move(rows)));
-            int hue_end = th.hue_top + HUE_VIEW - 1;
+            int hue_end = th.hue_top + th.hue_view - 1;
             if (hue_end > HUE_ROWS - 1) hue_end = HUE_ROWS - 1;
             int ang_top = (HUE_ROWS - 1 - th.hue_top) * 5;
             int ang_bot = (HUE_ROWS - 1 - hue_end) * 5;
@@ -781,54 +810,58 @@ int run_config(void) {
             if (th.pick_focus == 0) huehint = huehint | inverted;
             body.push_back(huehint | dim);
             body.push_back(separator());
-            /* brightness bar (fixed, never scrolls): 20 cells from 20% to
-               100%, sharing the same bordered-slot sizing as the 2D grid so
-               the selected cell gets a highlighted frame, not a glyph */
-            int bw = 20;
+            /* brightness bar (fixed, never scrolls): width follows the grid's
+               saturation columns so the bar lines up with the 2D grid */
+            int bw = th.sat_cols;
             int vmin = 51;   /* 0.2 * 255 */
             int bpos = (int)((th.pick_val - vmin) / (double)(255 - vmin) *
                              (bw - 1) + 0.5);
             if (bpos < 0) bpos = 0;
             if (bpos > bw - 1) bpos = bw - 1;
             Elements barcells;
-            /* leading space mirrors each grid row's leading cell so the bar's
-               left edge lines up with the 2D grid's left edge */
+            /* 5-space label slot + 1 gap mirrors each grid row's label so
+               the bar's cells line up exactly under the 2D grid's cells */
+            barcells.push_back(text("     ") | dim);
             barcells.push_back(text(" "));
             for (int i = 0; i < bw; i++) {
                 double frac = (bw > 1) ? i / (double)(bw - 1) : 0.0;
                 int v = (int)((vmin + frac * (255 - vmin)) + 0.5);
                 int r, g, b;
                 hsv_to_rgb((HUE_ROWS - 1 - th.pick_hue + 0.5) * 360.0 / HUE_ROWS,
-                           1.0 - 0.80 * th.pick_sat / (SAT_COLS - 1),
+                           1.0 - 0.80 * th.pick_sat / (th.sat_cols - 1),
                            v / 255.0, &r, &g, &b);
                 Color rgb = Color::RGB((uint8_t)r, (uint8_t)g, (uint8_t)b);
                 if (i == bpos) {
-                    int luma = 299 * r + 587 * g + 114 * b;
-                    Color fg = (luma > 140000) ? Color::Black : Color::White;
-                    barcells.push_back(text("  ") | bgcolor(rgb) |
-                                       color(fg) | borderLight);
+                    barcells.push_back(text("  ") | bgcolor(rgb) | inverted);
                 } else {
-                    barcells.push_back(text("  ") | bgcolor(rgb) | borderEmpty);
+                    barcells.push_back(text("  ") | bgcolor(rgb));
                 }
             }
-            Element pctline = text("亮度 " +
+            /* percent + keys live on their own line below the bar (appending
+               them to the bar row would widen it past the grid and overflow
+               narrow terminals) */
+            Element pctline = text("      亮度 " +
                                     std::to_string(th.pick_val * 100 / 255) +
-                                    "%  [ ] 调节");
+                                    "%   [ ] 调节");
             if (th.pick_focus == 1) pctline = pctline | inverted;
-            barcells.push_back(pctline | dim);
             body.push_back(hbox(std::move(barcells)));
-            /* hex input */
-            Element hexline = text("  hex: " + th.hex_buf + "\u258C   (回车应用)");
+            body.push_back(pctline | dim);
+            /* hex input (indented to the grid's first cell column) */
+            Element hexline = text("      hex: " + th.hex_buf + "\u258C   (回车应用)");
             if (th.pick_focus == 2) hexline = hexline | inverted;
             body.push_back(hexline | dim);
-            body.push_back(text("  Tab 切换焦点(二维表/亮度/hex)   方向键按焦点操作   [ ] 亮度  PgUp/PgDn 翻页  Enter 应用  x 无色  ESC 返回") | dim);
-            /* auto-layout: the picker body is vertically centered and the
-               grid/brightness cells stretch to fill the terminal width, so
-               the window no longer has an empty right or bottom area */
-            body_el = vbox({text("") | flex, vbox(std::move(body)) | frame,
+            body.push_back(text("      Tab 切换焦点(二维表/亮度/hex)   方向键按焦点操作   [ ] 亮度  PgUp/PgDn 翻页  Enter 应用  x 无色  ESC 返回") | dim);
+            /* auto-layout: the picker body is centered both horizontally
+               and vertically — hbox fillers center the fixed-width grid/bar
+               in the terminal width, vbox fillers center it in the height */
+            body_el = vbox({text("") | flex,
+                            hbox({filler(), vbox(std::move(body)) | frame,
+                                  filler()}),
                             text("") | flex}) | flex;
         } else if (th.mode == Mode::ThemeEdit) {
-            /* theme color-slot editor sub-view */
+            /* theme color-slot editor sub-view: each slot row shows a real
+               swatch (bgcolor of its RGB) next to the name + hex, so opening
+               a theme is an at-a-glance color overview, not just text */
             Elements body;
             body.push_back(text("  编辑主题: " + th.theme_editing + "   (ESC 保存返回)") | bold);
             body.push_back(separator());
@@ -836,12 +869,23 @@ int run_config(void) {
                 const ColorSlot &slot = kSlots[i];
                 const ThemeColor &c = th.theme_edit.*(slot.member);
                 bool sel = ((int)i == th.slot_sel);
-                std::string line = "  " + std::string(slot.name) + " = " +
+                Element swatch;
+                if (c.has_color) {
+                    int luma = 299 * (int)c.r + 587 * (int)c.g + 114 * (int)c.b;
+                    Color fg = (luma > 140000) ? Color::Black : Color::White;
+                    swatch = text("  ") | bgcolor(Color::RGB(c.r, c.g, c.b)) |
+                             color(fg);
+                } else {
+                    swatch = text("  ") | color(Color::GrayDark);
+                }
+                std::string line = "  " + std::string(slot.name) + "  " +
                                    theme_color_to_hex(c);
                 if (sel)
-                    body.push_back(hbox({text("> "), text(line) | bold}) | inverted | focus);
+                    body.push_back(hbox({text("> "), swatch, text(" "),
+                                         text(line) | bold}) | inverted | focus);
                 else
-                    body.push_back(text(line));
+                    body.push_back(hbox({text("  "), swatch, text(" "),
+                                         text(line)}));
             }
             body.push_back(text(""));
             body.push_back(text("  Enter: 编辑颜色  ↑/↓: 选择  ESC: 保存返回") | dim);
@@ -895,22 +939,37 @@ int run_config(void) {
         /* body into the frame */
         els.push_back(body_el | flex);
 
-        /* bottom: status + hints (dim, separated by a line) */
+        /* bottom: status + hints (dim, separated by a line). The hint line
+           follows the current MODE, not just the category: when editing a
+           theme or picking a color the category-level list actions are
+           irrelevant, so they are replaced by the mode's own keys. */
         std::string hints;
-        switch (th.cat) {
-            case Cat::Theme:   hints = "Enter 选用   x 编辑颜色   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
-            case Cat::Keybind: hints = "Enter 选用(复制为default)   x 编辑按键   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
-            case Cat::Layout:  hints = "Enter 选用   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
-            case Cat::Main:    hints = "a 添加音乐目录   d 删除选中   ↑/↓ 选择"; break;
-            case Cat::Playback:hints = "←/→ 音量   l 循环   + / - 快进步长"; break;
-            case Cat::Cache:   hints = "d 清空音频缓存"; break;
+        std::string nav = " ←/→ 或 1-5 切换分类    q 退出";
+        if (th.mode == Mode::ColorEdit) {
+            hints = "ESC 返回   方向键按焦点操作   Enter 应用   x 无色";
+            nav = " Tab 切换焦点    q 退出";
+        } else if (th.mode == Mode::ThemeEdit) {
+            hints = "Enter 编辑颜色   ↑/↓ 选择   ESC 保存返回";
+            nav = " q 退出";
+        } else if (th.mode == Mode::KeyEdit || th.mode == Mode::Capture) {
+            hints = "Enter 完成   ESC 返回   Backspace 删除";
+            nav = " q 退出";
+        } else {
+            switch (th.cat) {
+                case Cat::Theme:   hints = "Enter 选用   x 编辑颜色   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
+                case Cat::Keybind: hints = "Enter 选用(复制为default)   x 编辑按键   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
+                case Cat::Layout:  hints = "Enter 选用   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
+                case Cat::Main:    hints = "a 添加音乐目录   d 删除选中   ↑/↓ 选择"; break;
+                case Cat::Playback:hints = "←/→ 音量   l 循环   + / - 快进步长"; break;
+                case Cat::Cache:   hints = "d 清空音频缓存"; break;
+            }
         }
         Elements bottom;
         bottom.push_back(th.notice.empty()
             ? text(" ")
             : text(" " + th.notice) | bold);
         bottom.push_back(text(" " + hints) | dim);
-        bottom.push_back(text(" ←/→ 或 1-5 切换分类    q 退出") | dim);
+        bottom.push_back(text(nav) | dim);
         els.push_back(separator());
         els.push_back(vbox(std::move(bottom)));
 
@@ -922,6 +981,7 @@ int run_config(void) {
 
     auto main = Renderer(render_frame);
     main |= CatchEvent([&](Event event) -> bool {
+        recompute_picker_geometry(st, screen);
         if (event.is_mouse()) return true;
 
         auto key_of = [&]() -> std::string {
@@ -950,12 +1010,12 @@ int run_config(void) {
             if (k == "left" || k == "right" || k == "up" || k == "down") {
                 if (st.pick_focus == 0) {
                     if (k == "left")  st.pick_sat = st.pick_sat > 0 ? st.pick_sat - 1 : 0;
-                    if (k == "right") st.pick_sat = st.pick_sat < SAT_COLS - 1 ? st.pick_sat + 1 : SAT_COLS - 1;
+                    if (k == "right") st.pick_sat = st.pick_sat < st.sat_cols - 1 ? st.pick_sat + 1 : st.sat_cols - 1;
                     if (k == "up")    st.pick_hue = st.pick_hue > 0 ? st.pick_hue - 1 : 0;
                     if (k == "down")  st.pick_hue = st.pick_hue < HUE_ROWS - 1 ? st.pick_hue + 1 : HUE_ROWS - 1;
                     /* auto-scroll the viewport to keep the cursor visible */
                     if (st.pick_hue < st.hue_top) st.hue_top = st.pick_hue;
-                    if (st.pick_hue >= st.hue_top + HUE_VIEW) st.hue_top = st.pick_hue - HUE_VIEW + 1;
+                    if (st.pick_hue >= st.hue_top + st.hue_view) st.hue_top = st.pick_hue - st.hue_view + 1;
                     st.hex_buf.clear();
                 } else if (st.pick_focus == 1) {
                     /* brightness only: left/down darker, right/up brighter */
@@ -971,14 +1031,14 @@ int run_config(void) {
             if (event == Event::PageUp || event == Event::PageDown) {
                 if (st.pick_focus != 0) return true;
                 if (event == Event::PageUp) {
-                    st.hue_top -= HUE_VIEW;
+                    st.hue_top -= st.hue_view;
                     if (st.hue_top < 0) st.hue_top = 0;
                 } else {
-                    st.hue_top += HUE_VIEW;
-                    if (st.hue_top > HUE_ROWS - HUE_VIEW) st.hue_top = HUE_ROWS - HUE_VIEW;
+                    st.hue_top += st.hue_view;
+                    if (st.hue_top > HUE_ROWS - st.hue_view) st.hue_top = HUE_ROWS - st.hue_view;
                 }
                 if (st.pick_hue < st.hue_top) st.pick_hue = st.hue_top;
-                if (st.pick_hue >= st.hue_top + HUE_VIEW) st.pick_hue = st.hue_top + HUE_VIEW - 1;
+                if (st.pick_hue >= st.hue_top + st.hue_view) st.pick_hue = st.hue_top + st.hue_view - 1;
                 st.hex_buf.clear();
                 return true;
             }
@@ -1030,7 +1090,7 @@ int run_config(void) {
                     return true;
                 }
                 /* no hex typed -> apply the grid cursor color */
-                ThemeColor nc = pick_cell_color(st.pick_hue, st.pick_sat, st.pick_val);
+                ThemeColor nc = pick_cell_color(st.pick_hue, st.pick_sat, st.sat_cols, st.pick_val);
                 st.theme_edit.*(kSlots[st.slot_sel].member) = nc;
                 st.dirty_theme = true;
                 st.notice = std::string("已设置 ") + kSlots[st.slot_sel].name +
@@ -1075,15 +1135,15 @@ int run_config(void) {
                     rgb_to_hsv(c.r, c.g, c.b, &h, &s, &v);
                     st.pick_hue = HUE_ROWS - 1 -
                                   (((int)(h / 360.0 * HUE_ROWS)) % HUE_ROWS);
-                    st.pick_sat = (int)((1.0 - s) / 0.80 * (SAT_COLS - 1) + 0.5);
+                    st.pick_sat = (int)((1.0 - s) / 0.80 * (st.sat_cols - 1) + 0.5);
                     if (st.pick_sat < 0) st.pick_sat = 0;
-                    if (st.pick_sat > SAT_COLS - 1) st.pick_sat = SAT_COLS - 1;
+                    if (st.pick_sat > st.sat_cols - 1) st.pick_sat = st.sat_cols - 1;
                     st.pick_val = (int)(v * 255 + 0.5);
                     if (st.pick_val > 255) st.pick_val = 255;
                     /* center the viewport on the cursor */
-                    st.hue_top = st.pick_hue - HUE_VIEW / 2;
+                    st.hue_top = st.pick_hue - st.hue_view / 2;
                     if (st.hue_top < 0) st.hue_top = 0;
-                    if (st.hue_top > HUE_ROWS - HUE_VIEW) st.hue_top = HUE_ROWS - HUE_VIEW;
+                    if (st.hue_top > HUE_ROWS - st.hue_view) st.hue_top = HUE_ROWS - st.hue_view;
                 } else {
                     st.pick_hue = 0;
                     st.pick_sat = 0;
