@@ -362,8 +362,15 @@ bool config_save(Config *cfg) {
     yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);
     if (!root) return false;
 
-    /* write via fopen_utf8 so UTF-8 paths work on Windows too */
-    FILE *fp = fopen_utf8(cfg->path, "wb");
+    /* Atomic write (tmp + rename): a direct "wb" overwrite can leave a
+       half-written config.json if the process is killed mid-write, which
+       then fails to parse on the next start and silently resets EVERY user
+       setting to defaults. rename() within the same directory is atomic, so
+       the config is always either the old complete version or the new
+       complete one — a crash leaves at worst a stray .tmp. */
+    char tmp[1280];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", cfg->path);
+    FILE *fp = fopen_utf8(tmp, "wb");
     if (!fp) {
         LOG_WARN("Cannot write config file: %s", cfg->path);
         return false;
@@ -371,7 +378,13 @@ bool config_save(Config *cfg) {
     yyjson_write_err werr = {0};
     bool ok = yyjson_mut_val_write_fp(fp, root, YYJSON_WRITE_PRETTY,
                                       NULL, &werr);
-    fclose(fp);
+    if (ok) fflush(fp);
+    if (fclose(fp) != 0) ok = false;
+    if (ok) {
+        if (rename_utf8(tmp, cfg->path) != 0) { remove_utf8(tmp); ok = false; }
+    } else {
+        remove_utf8(tmp);
+    }
     if (!ok) LOG_WARN("Failed to serialize config to: %s (code=%d %s)",
                        cfg->path, werr.code, werr.msg ? werr.msg : "");
     return ok;

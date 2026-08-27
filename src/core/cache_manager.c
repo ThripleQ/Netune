@@ -53,10 +53,23 @@ static yyjson_mut_doc* load_doc(void) {
 
 static int save_doc(yyjson_mut_doc *doc) {
     yyjson_write_err err;
-    FILE *fp = fopen_utf8(g_cache_path, "wb");
+    /* Atomic write (tmp + rename): a direct "wb" overwrite can leave a
+       half-written cache.json if the process is killed mid-write, making
+       the whole song-metadata cache unparseable on the next start (all
+       entries re-fetched). rename() within the same directory is atomic,
+       so the file is always the old complete version or the new one. */
+    char tmp[1280];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", g_cache_path);
+    FILE *fp = fopen_utf8(tmp, "wb");
     if (!fp) return -1;
     bool ok = yyjson_mut_write_fp(fp, doc, YYJSON_WRITE_PRETTY, NULL, &err);
-    fclose(fp);
+    if (ok) fflush(fp);
+    if (fclose(fp) != 0) ok = false;
+    if (ok) {
+        if (rename_utf8(tmp, g_cache_path) != 0) { remove_utf8(tmp); ok = false; }
+    } else {
+        remove_utf8(tmp);
+    }
     return ok ? 0 : -1;
 }
 

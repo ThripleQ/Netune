@@ -74,10 +74,23 @@ static yyjson_doc *json_load_file(const char *path) {
 static int json_save_root(const char *path, yyjson_mut_val *root) {
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
     yyjson_mut_doc_set_root(doc, root);
-    FILE *fp = fopen_utf8(path, "wb");
+    /* Atomic write (tmp + rename): a direct "wb" overwrite can leave a
+       half-written file if the process is killed mid-write, which yyjson
+       then fails to parse on the next start (the whole override set would
+       be lost). rename() within the same directory is atomic, so the file
+       is always either the old complete version or the new complete one. */
+    char tmp[1200];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    FILE *fp = fopen_utf8(tmp, "wb");
     if (!fp) { yyjson_mut_doc_free(doc); return -1; }
     int ok = yyjson_mut_write_fp(fp, doc, YYJSON_WRITE_PRETTY, NULL, NULL) != 0;
-    fclose(fp);
+    if (ok) fflush(fp);
+    if (fclose(fp) != 0) ok = 0;
+    if (ok) {
+        if (rename_utf8(tmp, path) != 0) { remove_utf8(tmp); ok = 0; }
+    } else {
+        remove_utf8(tmp);
+    }
     yyjson_mut_doc_free(doc);
     return ok ? 0 : -1;
 }
