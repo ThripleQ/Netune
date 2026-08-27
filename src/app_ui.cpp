@@ -987,7 +987,14 @@ static void ev_lyric_loaded(const BusEvent *ev, void *data) {
     bool match = res->song_id && cur.id &&
                  strcmp(res->song_id, cur.id) == 0;
 
-    store.set_lyric_pending_id("");
+    /* Clear the in-flight marker only when this result IS the load that is
+       in flight. A stale result from a song we already switched away from
+       (pending now points at the new song) must NOT clear it — doing so
+       would let a later EV_TRACK_CHANGED / EV_PLAYBACK_START for the new
+       song re-submit its lyric load (an extra network round-trip + worker). */
+    if (res->song_id && !store.state().lyric_pending_id.empty() &&
+        store.state().lyric_pending_id == res->song_id)
+        store.set_lyric_pending_id("");
 
     if (match && res->lyrics) {
         Lyrics *old = store.state().lyrics;
