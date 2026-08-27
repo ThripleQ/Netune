@@ -287,7 +287,21 @@ int audio_cache_find(const char *song_id, const char *quality,
                 snprintf(path_out, sz, "%s" PATH_SEP "%s",
                          audio_dir(), g_entries[i].file);
                 if (complete) *complete = g_entries[i].complete;
-                if (segs) *segs = g_entries[i].segs;
+                if (segs) {
+                    /* Deep copy: the caller owns the returned segment list.
+                       A shallow struct copy would hand the caller a pointer
+                       into the index's internal heap array — a subsequent
+                       caller free()/add() would then corrupt the index
+                       (double-free, UAF, or a realloc that leaves the index
+                       entry dangling). Drop any pre-initialized backing
+                       array first so the caller's init() is not leaked. */
+                    cache_seglist_free(segs);
+                    cache_seglist_init(segs);
+                    for (int k = 0; k < g_entries[i].segs.count; k++)
+                        cache_seglist_add(segs,
+                                          g_entries[i].segs.segs[k].start,
+                                          g_entries[i].segs.segs[k].len);
+                }
                 rc = 0;
             }
             break;

@@ -107,10 +107,24 @@ static void cmd_queue_push_play(CmdQueue *q, const Command *cmd) {
         }
     }
     if (q->count >= CMD_QUEUE_SIZE) {
-        /* full of non-PLAY commands: evict the oldest to make room —
-           losing a play is worse than losing any other command */
-        q->head = (q->head + 1) % CMD_QUEUE_SIZE;
-        q->count--;
+        /* full of non-PLAY commands: evict the oldest NON-QUIT to make
+           room — losing a play is worse than losing any other command, but
+           CMD_QUIT must never be dropped (see cmd_queue_push) or the
+           playback thread never exits and pthread_join blocks forever. If
+           the queue is somehow all-QUIT, make no room (the QUITs drain it). */
+        for (int i = 0; i < q->count; i++) {
+            int idx = (q->head + i) % CMD_QUEUE_SIZE;
+            if (q->items[idx].type != CMD_QUIT) {
+                for (int j = i; j < q->count - 1; j++) {
+                    int a = (q->head + j) % CMD_QUEUE_SIZE;
+                    int b = (q->head + j + 1) % CMD_QUEUE_SIZE;
+                    q->items[a] = q->items[b];
+                }
+                q->tail = (q->tail + CMD_QUEUE_SIZE - 1) % CMD_QUEUE_SIZE;
+                q->count--;
+                break;
+            }
+        }
     }
     if (q->count < CMD_QUEUE_SIZE) {
         q->items[q->tail] = *cmd;
@@ -889,11 +903,15 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
                        next play resumes from byte 0 and fills the whole
                        file. */
                     if (seek_sec > avail) {
-                        stream_downloader_destroy(g_downloader);
-                        g_downloader = NULL;
                         StreamDownloader *nd = stream_downloader_create_resume(
                             g_stream_url, g_part_path, target_byte);
                         if (nd && stream_downloader_start(nd) == 0) {
+                            /* Swap in the new downloader ONLY after it is
+                               running: destroying the old one first would
+                               leave no downloader at all if the restart
+                               failed, and the next read would fail instead
+                               of resuming the sequential fill. */
+                            stream_downloader_destroy(g_downloader);
                             g_downloader = nd;
                             /* Byte-seek exactly onto the new downloader's
                                start; the first read there blocks in
@@ -908,8 +926,9 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
                             return;
                         }
                         if (nd) stream_downloader_destroy(nd);
-                        /* restart failed — fall through: re-measure the
-                           watermark and let the clamp/seek below decide */
+                        /* restart failed — the old downloader is still
+                           running; re-measure its watermark and let the
+                           clamp/seek below decide */
                         avail_bytes = growing_avail_bytes();
                         avail = (int)(avail_bytes * 8 / br);
                     }
@@ -928,14 +947,17 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
                    which FFmpeg cannot parse. Bytes the old downloader wrote
                    remain valid on disk — record them so future seeks back
                    into them hit the retained segments. */
-                if (stream_downloader_watermark(g_downloader) > 0)
-                    cache_seglist_add(&g_segs, seq_start,
-                                      stream_downloader_watermark(g_downloader));
-                stream_downloader_destroy(g_downloader);
-                g_downloader = NULL;
                 StreamDownloader *nd = stream_downloader_create_resume(
                     g_stream_url, g_part_path, target_byte);
                 if (nd && stream_downloader_start(nd) == 0) {
+                    /* record the old downloader's covered run as retained
+                       regions before it is destroyed — but only after the
+                       new downloader is running, so a failed restart keeps
+                       the old one alive and the sequential fill continues */
+                    if (stream_downloader_watermark(g_downloader) > 0)
+                        cache_seglist_add(&g_segs, seq_start,
+                                          stream_downloader_watermark(g_downloader));
+                    stream_downloader_destroy(g_downloader);
                     g_downloader = nd;
                     /* Byte-seek exactly onto the new downloader's start. The
                        first read there blocks in growing_read's wait until
@@ -950,10 +972,10 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
                     if (ok)
                         *current_frame = seek_sec * samplerate;
                     return;
-                } else if (nd) {
-                    stream_downloader_destroy(nd);
                 }
-                /* restart failed — fall through to the clamp below */
+                if (nd) stream_downloader_destroy(nd);
+                /* restart failed — the old downloader is still running; fall
+                   through to the clamp below (it keeps the sequential fill) */
                 avail_bytes = growing_avail_bytes();
                 avail = (int)(avail_bytes * 8 / br);
             }
