@@ -109,10 +109,25 @@ static yyjson_doc *json_load_file(const char *path) {
 static int json_save_root(const char *path, yyjson_mut_val *root) {
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
     yyjson_mut_doc_set_root(doc, root);
-    FILE *fp = fopen_utf8(path, "wb");
+    /* Atomic write: write to "<path>.tmp" then rename() over the real file.
+       A direct "wb" overwrite can leave a half-written index if the process
+       is killed mid-write, which yyjson then fails to parse on the next
+       start (the whole cache index would appear empty). rename() within the
+       same directory is atomic, so the index is always either the old
+       complete file or the new complete file — a crash leaves at worst a
+       stray .tmp. */
+    char tmp[1200];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    FILE *fp = fopen_utf8(tmp, "wb");
     if (!fp) { yyjson_mut_doc_free(doc); return -1; }
     int ok = yyjson_mut_write_fp(fp, doc, YYJSON_WRITE_PRETTY, NULL, NULL) != 0;
-    fclose(fp);
+    if (ok) fflush(fp);          /* push user-space buffers out before rename */
+    if (fclose(fp) != 0) ok = 0;
+    if (ok) {
+        if (rename_utf8(tmp, path) != 0) { remove_utf8(tmp); ok = 0; }
+    } else {
+        remove_utf8(tmp);        /* failed write — drop the partial .tmp */
+    }
     yyjson_mut_doc_free(doc);
     return ok ? 0 : -1;
 }
@@ -521,7 +536,8 @@ int audio_cache_reconcile(void) {
             changed = 1;
         }
     }
-    /* leftover .part files are crash residue (see fn comment) */
+    /* leftover .part files and half-written .tmp index files are crash
+       residue (see fn comment) — drop both */
     {
         DIR *d = opendir(audio_dir());
         if (d) {
@@ -529,7 +545,10 @@ int audio_cache_reconcile(void) {
             while ((de = readdir(d)) != NULL) {
                 const char *n = de->d_name;
                 size_t len = strlen(n);
-                if (len > 5 && strcmp(n + len - 5, ".part") == 0) {
+                int crash_residue =
+                    (len > 5 && strcmp(n + len - 5, ".part") == 0) ||
+                    (len > 4 && strcmp(n + len - 4, ".tmp") == 0);
+                if (crash_residue) {
                     char p[1100];
                     snprintf(p, sizeof(p), "%s" PATH_SEP "%s",
                              audio_dir(), n);
