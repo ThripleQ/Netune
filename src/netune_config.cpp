@@ -552,63 +552,42 @@ int run_config(void) {
     /* ── Modal popups (input / confirm / capture) ────── */
     auto render_popup = [&]() -> Element {
         auto &th = st;
+        Elements body;
         if (th.mode == Mode::Input) {
-            Elements body;
-            body.push_back(theme_fg(text("  " + th.input_title) | bold));
+            body.push_back(text(" " + th.input_title) | bold);
             body.push_back(separator());
-            body.push_back(text("  " + th.input_buf + "\u258C"));
+            body.push_back(text(" " + th.input_buf + "\u258C"));
             body.push_back(separator());
-            body.push_back(text("  Enter 确认   ESC 取消") | dim);
-            auto box = theme_border(vbox(std::move(body)) | borderRounded);
-            box = theme_overlay_bg(box);
-            return vbox({filler(), hbox({filler(), box})});
-        }
-        if (th.mode == Mode::Confirm) {
-            Elements body;
-            body.push_back(theme_fg(text("  " + th.confirm_msg) | bold | color(Color::RGB(247,118,142))));
+            body.push_back(text(" Enter 确认   ESC 取消") | dim);
+        } else if (th.mode == Mode::Confirm) {
+            body.push_back(text(" " + th.confirm_msg) | bold);
             body.push_back(separator());
-            body.push_back(text("  y 确认   n/ESC 取消") | dim);
-            auto box = theme_border(vbox(std::move(body)) | borderRounded);
-            box = theme_overlay_bg(box);
-            return vbox({filler(), hbox({filler(), box})});
-        }
-        if (th.mode == Mode::Capture) {
-            Elements body;
-            body.push_back(theme_fg(text("  编辑按键: 按新键=绑定(支持 ctrl/alt), 已有键=取消") | bold));
+            body.push_back(text(" y 确认   n/ESC 取消") | dim);
+        } else if (th.mode == Mode::Capture) {
+            body.push_back(text(" 编辑按键: 按新键=绑定(支持 ctrl/alt), 已有键=取消") | bold);
             body.push_back(separator());
-            body.push_back(text("  当前: " + key_list_str(th.kb_map[th.kb_sel].second)));
-            body.push_back(text("  Backspace 删除最后一个  Enter 完成  ESC 取消") | dim);
-            auto box = theme_border(vbox(std::move(body)) | borderRounded);
-            box = theme_overlay_bg(box);
-            return vbox({filler(), hbox({filler(), box})});
-        }
-        if (th.mode == Mode::ColorEdit) {
+            body.push_back(text(" 当前: " + key_list_str(th.kb_map[th.kb_sel].second)));
+            body.push_back(separator());
+            body.push_back(text(" Backspace 删除最后一个  Enter 完成  ESC 取消") | dim);
+        } else if (th.mode == Mode::ColorEdit) {
             const ColorSlot &slot = kSlots[th.slot_sel];
             ThemeColor &c = th.theme_edit.*(slot.member);
-            Elements body;
-            body.push_back(theme_fg(text(std::string("  编辑颜色 [") + slot.name + "]  当前 " +
-                                theme_color_to_hex(c)) | bold));
+            body.push_back(text(" 编辑颜色 [" + std::string(slot.name) + "]  当前 " +
+                                theme_color_to_hex(c)) | bold);
             body.push_back(separator());
-            Element swatch = c.has_color
-                ? text("  ") | bgcolor(Color::RGB(c.r, c.g, c.b))
-                : text(" · ");
-            body.push_back(hbox({swatch, text("  输入 hex (如 #1a1b26): "),
-                                 text(th.hex_buf + "\u258C")}));
+            body.push_back(text(" 输入 hex (如 #1a1b26), 或 ←/→ 选色板项后回车: " +
+                                th.hex_buf + "\u258C"));
             Elements pal;
             for (int i = 0; i < kPaletteN; i++) {
-                ThemeColor pc = theme_color_from_hex(kPalette[i]);
-                auto p = text("  ");
-                if (i == th.palette_sel)
-                    p = p | bold | inverted;
-                pal.push_back(p | bgcolor(Color::RGB(pc.r, pc.g, pc.b)));
+                auto p = text(" " + kPalette[i] + " ");
+                if (i == th.palette_sel) p = p | inverted;
+                pal.push_back(p);
             }
             body.push_back(hbox(std::move(pal)));
-            body.push_back(text("  ←/→ 选色板  x 无色  Enter 应用  ESC 取消") | dim);
-            auto box = theme_border(vbox(std::move(body)) | borderRounded);
-            box = theme_overlay_bg(box);
-            return vbox({filler(), hbox({filler(), box})});
+            body.push_back(text(" x 无色   Enter 应用   ESC 取消") | dim);
         }
-        return text("");
+        if (body.empty()) return text("");
+        return vbox({filler(), hbox({filler(), vbox(std::move(body)) | border})});
     };
 
 
@@ -617,19 +596,21 @@ int run_config(void) {
         auto &th = st;
         Elements els;
 
-        /* top bar: tabs */
+        /* top bar: tabs (selected inverted, others dimmed; no inner border) */
         Elements tabs;
         for (int i = 0; i < kTabCount; i++) {
             Cat c = kTabs[i];
             bool sel = (th.cat == c);
             auto t = text(" " + cat_name(c) + " ");
-            if (sel) tabs.push_back(t | bold | inverted);
-            else     tabs.push_back(t);
-            if (i < kTabCount - 1) tabs.push_back(text("│") | dim);
+            if (sel) t = t | inverted;
+            else     t = t | dim;
+            tabs.push_back(t);
+            if (i < kTabCount - 1) tabs.push_back(text("  "));
         }
-        els.push_back(hbox(std::move(tabs)) | border);
+        els.push_back(hbox(std::move(tabs)));
 
-        /* body */
+        /* body (single content area; the outer frame draws the one border) */
+        Element body_el = text("");
         if (th.cat == Cat::Playback) {
             const char *loops[] = {"顺序播放", "单曲循环", "列表循环", "随机播放"};
             const char *quals[] = {"超清母带", "沉浸环绕", "高清臻音", "Hi-Res",
@@ -640,13 +621,13 @@ int run_config(void) {
             for (int i = 0; i < 8; i++)
                 if (quality == qkeys[i]) { qidx = i; break; }
             Elements body;
-            body.push_back(text(std::string("  音量:  ") + std::to_string(vol) + "   [<- / ->]"));
-            body.push_back(text(std::string("  循环:  ") + loops[loop_mode % 4] + "   [l 切换]"));
-            body.push_back(text(std::string("  播放音质: ") + quals[qidx] + "   [q 切换]"));
-            body.push_back(text(std::string("  快进步长: ") + std::to_string(seek) + " 秒  [+ / -]"));
+            body.push_back(text("  音量:  " + std::to_string(vol) + "   [← / →]"));
+            body.push_back(text("  循环:  " + std::string(loops[loop_mode % 4]) + "   [l 切换]"));
+            body.push_back(text("  播放音质: " + std::string(quals[qidx]) + "   [q 切换]"));
+            body.push_back(text("  快进步长: " + std::to_string(seek) + " 秒  [+ / -]"));
             body.push_back(text(""));
             body.push_back(text("  修改立即保存到 config.json") | dim);
-            els.push_back(vbox(std::move(body)) | flex | border);
+            body_el = vbox(std::move(body)) | flex;
         } else if (th.cat == Cat::Cache) {
             /* audio cache: live size usage + clear action */
             long long total = audio_cache_total_bytes();
@@ -662,7 +643,7 @@ int run_config(void) {
             body.push_back(text(""));
             body.push_back(text("  d  清空音频缓存") | bold);
             body.push_back(text("  上限通过 config.json 的 cache.audio_limit_mb 调整 (默认 2048 MB)") | dim);
-            els.push_back(vbox(std::move(body)) | flex | border);
+            body_el = vbox(std::move(body)) | flex;
         } else if (th.mode == Mode::KeyEdit || th.mode == Mode::Capture) {
             /* key editor sub-view */
             Elements body;
@@ -679,7 +660,7 @@ int run_config(void) {
             }
             body.push_back(text(""));
             body.push_back(text("  Enter: 绑定  Backspace: 删除最后绑定  ESC: 返回") | dim);
-            els.push_back(vbox(std::move(body)) | frame | flex | border);
+            body_el = vbox(std::move(body)) | frame | flex;
         } else if (th.mode == Mode::ThemeEdit || th.mode == Mode::ColorEdit) {
             /* theme color-slot editor sub-view */
             Elements body;
@@ -689,20 +670,16 @@ int run_config(void) {
                 const ColorSlot &slot = kSlots[i];
                 const ThemeColor &c = th.theme_edit.*(slot.member);
                 bool sel = ((int)i == th.slot_sel);
-                Element swatch = c.has_color
-                ? text("  ") | bgcolor(Color::RGB(c.r, c.g, c.b))
-                : text(" · ");
                 std::string line = "  " + std::string(slot.name) + " = " +
                                    theme_color_to_hex(c);
-                Element row = hbox({swatch, text(line)});
                 if (sel)
-                    body.push_back(hbox({text("> "), row | bold}) | inverted | focus);
+                    body.push_back(hbox({text("> "), text(line) | bold}) | inverted | focus);
                 else
-                    body.push_back(hbox({text("  "), row}));
+                    body.push_back(text(line));
             }
             body.push_back(text(""));
             body.push_back(text("  Enter: 编辑颜色(hex/色板)  ↑/↓: 选择  ESC: 保存返回") | dim);
-            els.push_back(vbox(std::move(body)) | frame | flex | border);
+            body_el = vbox(std::move(body)) | frame | flex;
         } else if (th.cat == Cat::Main) {
             Elements body;
             body.push_back(text("  本地音乐目录 (music_sources.local.dirs)") | bold);
@@ -722,7 +699,7 @@ int run_config(void) {
             body.push_back(text(""));
             body.push_back(text("  a 添加目录   d 删除选中   (修改立即保存, 重启 netune 生效)") | dim);
             body.push_back(text("  目录列表写入 config.json 的 music_sources.local.dirs") | dim);
-            els.push_back(vbox(std::move(body)) | frame | flex | border);
+            body_el = vbox(std::move(body)) | frame | flex;
         } else {
             /* file list */
             Elements body;
@@ -746,14 +723,13 @@ int run_config(void) {
                 else
                     body.push_back(text(line));
             }
-            els.push_back(vbox(std::move(body)) | frame | flex | border);
+            body_el = vbox(std::move(body)) | frame | flex;
         }
 
-        /* notice */
-        if (!th.notice.empty())
-            els.push_back(text("  " + th.notice) | color(Color::Green));
+        /* body into the frame */
+        els.push_back(body_el | flex);
 
-        /* action hints */
+        /* bottom: status + hints (dim, separated by a line) */
         std::string hints;
         switch (th.cat) {
             case Cat::Theme:   hints = "Enter 选用   x 编辑颜色   r 重命名   e 导出   d 删除   i 导入   n 新建模板"; break;
@@ -763,8 +739,14 @@ int run_config(void) {
             case Cat::Playback:hints = "←/→ 音量   l 循环   + / - 快进步长"; break;
             case Cat::Cache:   hints = "d 清空音频缓存"; break;
         }
-        els.push_back(text("  " + hints) | dim);
-        els.push_back(text("  ←/→ 或 1-4 切换分类   q 退出") | dim);
+        Elements bottom;
+        bottom.push_back(th.notice.empty()
+            ? text(" ")
+            : text(" " + th.notice) | bold);
+        bottom.push_back(text(" " + hints) | dim);
+        bottom.push_back(text(" ←/→ 或 1-5 切换分类    q 退出") | dim);
+        els.push_back(separator());
+        els.push_back(vbox(std::move(bottom)));
 
         return dbox({
             vbox(std::move(els)) | flex | border,
