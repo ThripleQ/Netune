@@ -313,10 +313,11 @@ void term_gfx_place_id(uint64_t id, int row0, int col0, int cols, int rows) {
         return;  /* already there */
 
     kitty_delete_img(id);
+    unsigned long pid = next_place_id();
     char seq[160];
     snprintf(seq, sizeof(seq),
              "\x1b_Ga=p,i=%lu,p=%lu,q=2,c=%d,r=%d,C=1\x1b\\",
-             id, next_place_id(), cols, rows);
+             id, pid, cols, rows);
     /* Move the cursor to the top-left cell of the image, then emit the
        placement escape. These go out together; the main loop flushes
        stdout once per frame AFTER update_list_covers, so an internal
@@ -329,16 +330,38 @@ void term_gfx_place_id(uint64_t id, int row0, int col0, int cols, int rows) {
     img->p_cols = cols; img->p_rows = rows;
 }
 
-/* Delete an id's image: free its data + placements and reset its slot. */
+/* Delete an id's image: free its data + placements and reset its slot.
+   Uses UPPERCASE d=I: frees the image data too. This matters when a row
+   that scrolled away re-appears (fast scroll down-then-up): the slot was
+   reset, so the next upload_id() re-issues a=T under the SAME id. If the
+   data had been kept (lowercase d=i), kitty would still hold the old
+   pixels for that id; re-uploading under a still-alive id is ignored by
+   kitty, leaving the OLD cover on screen while the bookkeeping believes a
+   new one is live — the flicker where two covers fight for the bottom
+   row. d=I makes the re-upload unambiguous. (term_gfx_clear_ids keeps
+   using lowercase d=i on purpose: it only hides placements for a modal
+   toggle and the data is re-placed unchanged.)
+
+   The kitty delete is issued REGARDLESS of whether the local img slot is
+   still alive: the slot table is only 64 entries and scroll cycles reuse
+   entries, so img_find(id) can come back NULL even though kitty still
+   holds that id's placement. Relying on img_find to gate the delete let
+   scrolled-away covers survive (their delete was silently skipped) and
+   linger at the stale screen position — the "two covers fighting for the
+   bottom row" flicker. Deleting by id on the terminal always works; the
+   local bookkeeping reset is gated on the slot existing. */
 void term_gfx_delete_id(uint64_t id) {
     if (!term_gfx_active() || id == 0) return;
+    char seq[96];
+    snprintf(seq, sizeof(seq), "\x1b_Ga=d,d=I,i=%lu\x1b\\", id);
+    esc_write(seq);
     TermGfxImg *img = img_find(id);
-    if (!img) return;
-    kitty_delete_img(id);
-    img->id = 0;
-    img->stamp = 0;
-    img->w = img->h = 0;
-    img->placed = 0;
+    if (img) {
+        img->id = 0;
+        img->stamp = 0;
+        img->w = img->h = 0;
+        img->placed = 0;
+    }
 }
 
 /* Hide every multi-image placement (the uploaded data stays in the

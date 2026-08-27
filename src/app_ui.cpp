@@ -1118,29 +1118,58 @@ static void update_list_covers(const AppState &st) {
     const int view_y0 = 1;
     const int view_y1 = scr_h - 4;
 
-    std::vector<uint64_t> want;
-    want.reserve(cover_overlay::slots().size());
-    /* A slot is "in the tree this frame" if its CoverNode got SetBox'd
-       since the previous update pass — i.e. its gen is strictly newer
-       than the boundary we observed last time. The gen only advances when
-       SetBox runs, so:
-         - a layout frame: visible rows get fresh gens (> last_gen), the
-           rows scrolled out of the visible slice STOP being laid out and
-           keep their old gen (<= last_gen) → correctly treated as gone;
-         - an idle frame (no re-layout): g_gen is unchanged, so NOTHING
-           has a gen newer than last_gen. That must NOT delete the placed
-           covers — we simply skip the reconcile and keep the previous
-           placements (the slots still hold valid, current boxes). */
     const uint64_t cur_gen = cover_overlay::gen();
     bool layout_happened = (cur_gen != last_cov_gen);
+
+    /* Only reconcile on a LAYOUT frame (something actually re-laid out the
+       list — a scroll, a resize, new rows). The gen counter only advances
+       inside CoverNode::SetBox(), so:
+         - layout frame: visible rows got fresh gens (> last_cov_gen);
+           rows scrolled out of the visible slice STOP being laid out and
+           keep their old gen (<= last_cov_gen) → treated as gone;
+         - idle frame (no re-layout): NOTHING has a newer gen. We must NOT
+           treat every slot as "in tree" here — a slot that scrolled away
+           still holds its stale box (its old coordinates, e.g. the first
+           row position it last occupied) and re-placing it would paint the
+           stale cover over the row that now actually sits there (the
+           flicker where two covers fight for the bottom row). Idle frames
+           therefore do NOTHING: covers already placed stay on screen, and
+           nothing is deleted. The reconcile happened on the layout frame
+           that produced this state. */
+    if (!layout_happened) {
+        last_cov_gen = cur_gen;
+        return;
+    }
+
+    std::vector<uint64_t> want;
+    want.reserve(cover_overlay::slots().size());
     for (const auto &slot : cover_overlay::slots()) {
         uint64_t id = slot.id;
         if (id == 0) continue;
-        bool in_tree = !layout_happened || (slot.gen > last_cov_gen);
+        bool in_tree = slot.gen > last_cov_gen;
         bool on_screen = slot.y >= view_y0 && slot.y + slot.h <= view_y1 &&
                          slot.x + slot.w >= 0;
         if (!in_tree || !on_screen) continue;
         want.push_back(id);
+    }
+
+    /* Delete images whose row was not laid out in this layout pass
+       (scrolled out of the visible slice / removed / never got a visible
+       slot). */
+    for (uint64_t id : live) {
+        if (std::find(want.begin(), want.end(), id) == want.end())
+            term_gfx_delete_id(id);
+    }
+    live.swap(want);
+
+    /* Now upload + place the survivors. */
+    for (const auto &slot : cover_overlay::slots()) {
+        uint64_t id = slot.id;
+        if (id == 0) continue;
+        bool in_tree = slot.gen > last_cov_gen;
+        bool on_screen = slot.y >= view_y0 && slot.y + slot.h <= view_y1 &&
+                         slot.x + slot.w >= 0;
+        if (!in_tree || !on_screen) continue;
         const CoverData *cd = cover_cache_get(id);
         if (!cd) continue;   /* still loading — place on a later frame */
         term_gfx_upload_id(id, cd);
@@ -1148,16 +1177,6 @@ static void update_list_covers(const AppState &st) {
         term_gfx_place_id(id, slot.y + 1, slot.x + 1, cols, rows_song);
     }
     last_cov_gen = cur_gen;
-
-    /* delete images whose row was not laid out in the latest layout pass
-       (scrolled out of the visible slice / removed / never got a visible
-       slot). On idle frames layout_happened is false and want==live keeps
-       every placement, so nothing is spuriously deleted. */
-    for (uint64_t id : live) {
-        if (std::find(want.begin(), want.end(), id) == want.end())
-            term_gfx_delete_id(id);
-    }
-    live.swap(want);
 }
 
 /* ── Event bus → StateStore bridge ────────────────── */
