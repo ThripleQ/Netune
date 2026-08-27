@@ -330,9 +330,9 @@ int64_t stream_downloader_start_byte(const StreamDownloader *dl) {
 int64_t stream_downloader_total_size(const StreamDownloader *dl) {
     if (!dl) return 0;
     int64_t t;
-    pthread_mutex_lock(&dl->mutex);
+    pthread_mutex_lock(&((StreamDownloader*)dl)->mutex);
     t = dl->total;
-    pthread_mutex_unlock(&dl->mutex);
+    pthread_mutex_unlock(&((StreamDownloader*)dl)->mutex);
     return t;
 }
 
