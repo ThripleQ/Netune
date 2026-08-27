@@ -751,7 +751,7 @@ int run_config(void) {
             body.push_back(text("  hex: " + th.hex_buf + "\u258C"));
             Elements pal;
             for (int i = 0; i < kPaletteN; i++) {
-                auto p = text(" " + kPalette[i] + " ");
+                auto p = text(std::string(" ") + kPalette[i] + " ");
                 if (i == th.palette_sel) p = p | inverted;
                 pal.push_back(p);
             }
