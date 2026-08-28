@@ -788,7 +788,11 @@ int run_config(void) {
             if (nfiles > 0 && oldest > 0) {
                 time_t t = (time_t)oldest;
                 struct tm tm;
+#ifdef _WIN32
+                localtime_s(&tm, &t);
+#else
                 localtime_r(&t, &tm);
+#endif
                 char buf[32];
                 strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tm);
                 oldest_str = buf;
