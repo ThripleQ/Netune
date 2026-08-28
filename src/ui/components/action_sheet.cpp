@@ -251,8 +251,8 @@ Element render_action_sheet(const AppState &s) {
         theme_accent(text(" " + title + " ") | bold),
         separator(),
         theme_fg(vbox(std::move(body))),
-    }) | borderRounded;
-    box = theme_popup_border(box);
+    });
+    box = theme_border_style(box);
     box = theme_overlay_bg(box);
 
     /* Cap the width to the song panel: an over-wide row (long titles)

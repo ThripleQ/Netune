@@ -36,6 +36,10 @@ Element theme_border(Element e);
 /* Popup / action-sheet border color (separate slot) */
 Element theme_popup_border(Element e);
 
+/* Border style for box borders (from theme border_style):
+   sharp(light) / light / heavy / double / dashed / rounded / empty / none */
+Element theme_border_style(Element e);
+
 /* Progress bar unfilled track background */
 Element theme_progress_track(Element e);
 

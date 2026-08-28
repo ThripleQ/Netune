@@ -26,6 +26,7 @@ struct Theme {
     ThemeColor progress_track;/* progress bar unfilled track */
     ThemeColor accent_bg;     /* selection background       */
     ThemeColor border;        /* border / divider lines     */
+    std::string border_style; /* border style: sharp/light/heavy/double/dashed/rounded/empty */
     ThemeColor success;       /* success / online indicator */
     ThemeColor warning;       /* warning / VIP badge        */
     ThemeColor error;         /* error / important          */

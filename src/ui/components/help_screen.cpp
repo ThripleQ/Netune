@@ -162,11 +162,10 @@ Element render_help_screen(const AppState &s, const KeybindingManager &kb) {
         }) | flex,
     });
 
-    auto &theme = ThemeManager::instance().current();
     auto content = vbox(Elements{
         filler(),
         theme_accent(text(" Help ") | bold),
-        theme_popup_border(body | border),
+        theme_popup_border(theme_border_style(body)),
         text(" 按 ? 或 Esc 关闭 ") | dim | center,
         filler(),
     });

@@ -77,6 +77,7 @@ static const char *DEFAULT_THEME_DEFAULT_YAML =
     "  accent: \"#7aa2f7\"\n"
     "  accent_bg: \"#33467c\"\n"
     "  border: \"#292e42\"\n"
+    "  border_style: \"sharp\"\n"
     "  success: \"#9ece6a\"\n"
     "  warning: \"#e0af68\"\n"
     "  error: \"#f7768e\"\n"

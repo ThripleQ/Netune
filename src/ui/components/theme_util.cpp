@@ -143,6 +143,23 @@ Element theme_popup_border(Element e) {
     return e;
 }
 
+/* Border style from the theme's border_style field. The caller decides
+   whether to draw a border at all; this only selects the line style.
+   Unknown/empty → sharp light border (FTXUI `borderLight`, ┌┐ corners;
+   note this FTXUI build's bare `border` is ROUNDED, so we never use it). */
+Element theme_border_style(Element e) {
+    const auto &t = ThemeManager::instance().current();
+    const std::string &s = t.border_style;
+    if      (s == "light")  return e | borderLight;
+    else if (s == "heavy")  return e | borderHeavy;
+    else if (s == "double") return e | borderDouble;
+    else if (s == "dashed") return e | borderDashed;
+    else if (s == "rounded")return e | borderRounded;
+    else if (s == "empty")  return e | borderEmpty;
+    else if (s == "none")   return e;
+    return e | borderLight;   /* sharp */
+}
+
 /* ── Background markers (whole-row) ───────────────────
    VIP/playlist rows tint the row background with the marker color.
    Dark themes: darken the marker so bright text stays readable.

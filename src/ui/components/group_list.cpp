@@ -81,5 +81,6 @@ Element render_group_list(const AppState &s) {
         }
     }
 
-    return theme_border(theme_bg(vbox(std::move(els)) | yframe | size(WIDTH, EQUAL, 18) | border));
+    return theme_border(theme_bg(theme_border_style(
+        vbox(std::move(els)) | yframe | size(WIDTH, EQUAL, 18))));
 }
