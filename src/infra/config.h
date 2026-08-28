@@ -38,6 +38,7 @@ bool        config_has(Config *cfg, const char *key);
    false on failure (e.g. NULL cfg). */
 bool        config_set_int(Config *cfg, const char *key, int value);
 bool        config_set_str(Config *cfg, const char *key, const char *value);
+bool        config_set_bool(Config *cfg, const char *key, bool value);
 bool        config_save(Config *cfg);
 
 

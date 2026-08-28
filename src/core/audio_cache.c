@@ -36,6 +36,8 @@
 #define INDEX_FILE    "audio_cache.json"
 #define LIMIT_KEY     "cache.audio_limit_mb"
 #define DEFAULT_LIMIT_MB 2048
+#define MAX_ENTRIES_KEY "cache.audio_max_entries"
+#define DEFAULT_MAX_ENTRIES 200
 #define ENABLED_KEY   "cache.audio_enabled"
 
 typedef struct {
@@ -251,17 +253,24 @@ static int find_locked(const char *song_id) {
     return -1;
 }
 
-/* Evict least-recently-used files (oldest ts) until total size fits the
-   config cap. Runs on the memory mirror; caller flushes after. */
+/* Evict least-recently-used files (oldest ts) until both the byte cap
+   (cache.audio_limit_mb) and the entry-count cap (cache.audio_max_entries)
+   are satisfied. Runs on the memory mirror; caller flushes after. */
 static void prune_locked(void) {
     Config *cfg = config_global();
     long long limit = (long long)
         (cfg ? config_get_int(cfg, LIMIT_KEY, DEFAULT_LIMIT_MB)
              : DEFAULT_LIMIT_MB) * 1024LL * 1024LL;
+    int max_entries = cfg
+        ? config_get_int(cfg, MAX_ENTRIES_KEY, DEFAULT_MAX_ENTRIES)
+        : DEFAULT_MAX_ENTRIES;
+    if (max_entries < 1) max_entries = DEFAULT_MAX_ENTRIES;
     while (g_count > 0) {
-        long long total = 0;
-        for (int i = 0; i < g_count; i++) total += g_entries[i].size;
-        if (total <= limit) break;
+        if (g_count <= max_entries) {
+            long long total = 0;
+            for (int i = 0; i < g_count; i++) total += g_entries[i].size;
+            if (total <= limit) break;
+        }
         int oldest = 0;
         for (int i = 1; i < g_count; i++)
             if (g_entries[i].ts < g_entries[oldest].ts) oldest = i;
@@ -482,6 +491,59 @@ long long audio_cache_total_bytes(void) {
     for (int i = 0; i < g_count; i++) total += g_entries[i].size;
     pthread_mutex_unlock(&g_mutex);
     return total;
+}
+
+int audio_cache_entry_count(void) {
+    pthread_mutex_lock(&g_mutex);
+    load_locked();
+    int n = g_count;
+    pthread_mutex_unlock(&g_mutex);
+    return n;
+}
+
+long long audio_cache_oldest_ts(void) {
+    pthread_mutex_lock(&g_mutex);
+    load_locked();
+    long long oldest = 0;
+    for (int i = 0; i < g_count; i++)
+        if (oldest == 0 || g_entries[i].ts < oldest) oldest = g_entries[i].ts;
+    pthread_mutex_unlock(&g_mutex);
+    return oldest;
+}
+
+int audio_cache_set_limit_mb(int mb) {
+    if (mb <= 0) return -1;
+    Config *cfg = config_global();
+    if (!cfg) return -1;
+    config_set_int(cfg, LIMIT_KEY, mb);
+    int ok = config_save(cfg) ? 0 : -1;
+    pthread_mutex_lock(&g_mutex);
+    load_locked();
+    prune_locked();          /* evict now so the cache fits the new cap */
+    if (ok == 0) flush_locked();
+    pthread_mutex_unlock(&g_mutex);
+    return ok;
+}
+
+int audio_cache_set_max_entries(int n) {
+    if (n <= 0) return -1;
+    Config *cfg = config_global();
+    if (!cfg) return -1;
+    config_set_int(cfg, MAX_ENTRIES_KEY, n);
+    int ok = config_save(cfg) ? 0 : -1;
+    pthread_mutex_lock(&g_mutex);
+    load_locked();
+    prune_locked();          /* evict now so the cache fits the new count */
+    if (ok == 0) flush_locked();
+    pthread_mutex_unlock(&g_mutex);
+    return ok;
+}
+
+int audio_cache_max_entries(void) {
+    Config *cfg = config_global();
+    int n = cfg ? config_get_int(cfg, MAX_ENTRIES_KEY, DEFAULT_MAX_ENTRIES)
+                : DEFAULT_MAX_ENTRIES;
+    return n > 0 ? n : DEFAULT_MAX_ENTRIES;
 }
 
 /* Reconcile the index against what is actually on disk, recovering from an

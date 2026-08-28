@@ -257,6 +257,23 @@ bool config_set_int(Config *cfg, const char *key, int value) {
     return true;
 }
 
+bool config_set_bool(Config *cfg, const char *key, bool value) {
+    if (!cfg) return false;
+    yyjson_mut_doc *mdoc = config_mut_doc(cfg);
+    if (!mdoc) return false;
+    yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);
+    if (!root) return false;
+
+    const char *leaf_key = NULL;
+    yyjson_mut_val *leaf = NULL;
+    yyjson_mut_val *parent = resolve_mut_path(cfg, mdoc, root, key,
+                                              &leaf_key, &leaf);
+    if (!parent || !leaf_key) return false;
+
+    yyjson_mut_set_bool(leaf, value);
+    return true;
+}
+
 bool config_set_str(Config *cfg, const char *key, const char *value) {
     if (!cfg) return false;
     yyjson_mut_doc *mdoc = config_mut_doc(cfg);

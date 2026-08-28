@@ -23,6 +23,7 @@
 #include <math.h>
 #include <dirent.h>          /* compat shim on Windows (netune target adds src/compat) */
 #include <sys/stat.h>
+#include <time.h>
 
 #include "compat/utf8.h"     /* fopen_utf8/stat_utf8/...: ANSI-codepage-safe file I/O on MSVC */
 
@@ -79,7 +80,7 @@ static const ActionInfo kActions[] = {
     {Action::Quit,         "quit",           "退出"},
 };
 
-enum class Mode { Normal, Input, Confirm, KeyEdit, Capture, ThemeEdit, ColorEdit };
+enum class Mode { Normal, Input, Confirm, KeyEdit, Capture, ThemeEdit, ColorEdit, BorderStyle };
 
 struct CfgFile {
     std::string name;   /* file name (with extension) */
@@ -133,8 +134,26 @@ struct CfgState {
     std::vector<std::string> dirs;
     int dir_sel = 0;
 
+    /* cache page: selected list row */
+    int cache_sel = 0;
+
     std::string notice;
 };
+
+/* ── Border style render (from a style NAME, not the loaded theme) ──
+   Used by the ThemeEdit border-style row and the BorderStyle selector so
+   previews reflect the style being EDITED, not the currently loaded
+   theme. */
+static Element border_style_named(const std::string &s, Element e) {
+    if      (s == "light")  return e | borderLight;
+    else if (s == "heavy")  return e | borderHeavy;
+    else if (s == "double") return e | borderDouble;
+    else if (s == "dashed") return e | borderDashed;
+    else if (s == "rounded")return e | borderRounded;
+    else if (s == "empty")  return e | borderEmpty;
+    else if (s == "none")   return e;
+    return e | borderLight;   /* sharp */
+}
 
 /* ── Theme color slots ──────────────────────────────── */
 struct ColorSlot {
@@ -240,15 +259,19 @@ static ThemeColor pick_cell_color(int hue_idx, int sat_idx, int sat_cols, int va
 static void recompute_picker_geometry(CfgState &th, const Screen &scr) {
     int W = scr.dimx();
     int H = scr.dimy();
-    int sat_cols = (W - 8) / 2;   /* each cell = 2 cols, no border;
-                                      label column + gap ~6, padding ~2 */
+    int sat_cols = (W - 12) / 2;   /* each cell = 2 cols, no border;
+                                      budget: grid axis 5 + symmetric
+                                      right pad 5 + frame border 2 */
     if (sat_cols < 4) sat_cols = 4;
     if (sat_cols > SAT_COLS_MAX) sat_cols = SAT_COLS_MAX;
-    int hue_view = H - 14;   /* fixed vertical overhead + 1 buffer: outer
-                                (tab bar 1 + bottom hints 2 + dbox border 2)
-                                + body fixed (title, separator, hue hint,
-                                separator, brightness bar, hex, tab hint,
-                                frame border 2) */
+    int hue_view = H - 19;   /* fixed vertical overhead: outer (dbox border 2
+                                + tab bar 1 + separator 1 + separator 1 +
+                                bottom hints 4) + top flex 1 + title 1 +
+                                grid (border 2 + hue hint row 1) +
+                                brightness bar (border 2 + cells row 1 +
+                                pct row 1) + hex (border 2 + row 1).
+                                All regions always keep a border (light or
+                                heavy) so focus switching never shifts layout. */
     if (hue_view < HUE_VIEW_MIN) hue_view = HUE_VIEW_MIN;
     if (hue_view > HUE_ROWS) hue_view = HUE_ROWS;
     th.sat_cols = sat_cols;
@@ -282,6 +305,13 @@ static bool write_theme_yaml(const std::string &path, const std::string &name, c
         yaml_document_append_mapping_pair(&doc, colors,
             yaml_document_add_scalar(&doc, NULL, (yaml_char_t*)slot.key, (int)strlen(slot.key), YAML_PLAIN_SCALAR_STYLE),
             yaml_document_add_scalar(&doc, NULL, (yaml_char_t*)hex.c_str(), (int)hex.size(), YAML_PLAIN_SCALAR_STYLE));
+    }
+    /* border style (sharp/light/heavy/double/dashed/rounded/empty/none) */
+    {
+        std::string bs = t.border_style.empty() ? "sharp" : t.border_style;
+        yaml_document_append_mapping_pair(&doc, colors,
+            yaml_document_add_scalar(&doc, NULL, (yaml_char_t*)"border_style", 12, YAML_PLAIN_SCALAR_STYLE),
+            yaml_document_add_scalar(&doc, NULL, (yaml_char_t*)bs.c_str(), (int)bs.size(), YAML_PLAIN_SCALAR_STYLE));
     }
     yaml_emitter_dump(&em, &doc);
     yaml_document_delete(&doc);
@@ -621,8 +651,10 @@ static std::string key_list_str(const std::vector<std::string> &keys) {
 int run_config(void) {
     auto screen = ScreenInteractive::Fullscreen();
     CfgState st;
+    bool want_quit = false;   /* Ctrl+C — breaks the manual loop below */
 
     Config *cfg = config_load((data_root() + "/config.json").c_str());
+    config_set_global(cfg);   /* so audio_cache_* and cache settings share it */
     st.cur_theme = cfg ? config_get_str(cfg, "ui.theme", "default") : "default";
     /* Load the applied theme so the manager's own chrome (background, text,
        popups) uses the same theme system as the main app, not hardcoded RGB. */
@@ -711,20 +743,69 @@ int run_config(void) {
             body.push_back(text("  修改立即保存到 config.json") | dim);
             body_el = vbox(std::move(body)) | flex;
         } else if (th.cat == Cat::Cache) {
-            /* audio cache: live size usage + clear action */
+            /* audio cache: list-style rows (↑/↓ select, Enter/←/→ operate) */
             long long total = audio_cache_total_bytes();
             Config *gcfg = config_global();
+            int enabled = gcfg
+                ? config_get_bool(gcfg, "cache.audio_enabled", true) : 1;
             int limit_mb = gcfg
                 ? config_get_int(gcfg, "cache.audio_limit_mb", 2048) : 2048;
+            int nfiles = audio_cache_entry_count();
+            int max_entries = audio_cache_max_entries();
+            long long oldest = audio_cache_oldest_ts();
+            auto row = [&](int idx, Element e) {
+                if (idx == th.cache_sel)
+                    return hbox({text("> "), e | inverted}) | focus;
+                return hbox({text("  "), e});
+            };
             Elements body;
             body.push_back(text("  音频缓存 (播放时自动缓存, 透明可重建)") | bold);
             body.push_back(separator());
-            body.push_back(text("  占用:  " + fmt_capacity(total) +
-                                "  /  上限 " + std::to_string(limit_mb) + " MB"));
-            body.push_back(text("  目录:  " + std::string(audio_cache_dir())));
+            /* row 0: on/off */
+            Element toggle = hbox({
+                text(enabled ? "[✓] 缓存: 开启" : "[ ] 缓存: 关闭"),
+            });
+            if (enabled) toggle = toggle | theme_success;
+            else toggle = toggle | theme_error;
+            body.push_back(row(0, toggle));
+            body.push_back(text("   Enter 或 ←/→ 切换开启/关闭") | dim);
+            body.push_back(separator());
+            /* row 1: capacity usage + limit */
+            long long limit_b = (long long)limit_mb * 1024 * 1024;
+            float frac = limit_b > 0
+                ? (float)((double)total / (double)limit_b) : 0.0f;
+            if (frac > 1.0f) frac = 1.0f;
+            body.push_back(row(1, hbox({
+                text("占用 "),
+                gauge(frac) | flex,
+                text(" " + fmt_capacity(total) + " / " +
+                     std::to_string(limit_mb) + " MB"),
+            })));
+            body.push_back(text("   ←/→ 调整上限 (256..8192 MB, 立即生效)") | dim);
+            body.push_back(separator());
+            /* row 2: entry count limit + LRU oldest */
+            std::string oldest_str = "(空)";
+            if (nfiles > 0 && oldest > 0) {
+                time_t t = (time_t)oldest;
+                struct tm tm;
+                localtime_r(&t, &tm);
+                char buf[32];
+                strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M", &tm);
+                oldest_str = buf;
+            }
+            body.push_back(row(2, hbox({
+                text("条目 " + std::to_string(nfiles) + " / " +
+                     std::to_string(max_entries) + " 个   最旧: " +
+                     oldest_str),
+            })));
+            body.push_back(text("   ←/→ 调整数量上限 (20..1600 个)") | dim);
+            body.push_back(text("   目录: " + std::string(audio_cache_dir())) | dim);
+            body.push_back(separator());
+            /* row 3: clear */
+            body.push_back(row(3, text("清空音频缓存")));
+            body.push_back(text("   Enter 确认, 按 LRU 自动淘汰最旧") | dim);
             body.push_back(text(""));
-            body.push_back(text("  d  清空音频缓存") | bold);
-            body.push_back(text("  上限通过 config.json 的 cache.audio_limit_mb 调整 (默认 2048 MB)") | dim);
+            body.push_back(text("   ↑/↓ 选择行  Enter 操作  (修改立即保存)") | dim);
             body_el = vbox(std::move(body)) | flex;
         } else if (th.mode == Mode::KeyEdit || th.mode == Mode::Capture) {
             /* key editor sub-view */
@@ -746,7 +827,7 @@ int run_config(void) {
         } else if (th.mode == Mode::ColorEdit) {
             /* full-screen 2D gradient picker: 纵=色相(滚动) 横=饱和度,
                亮度在底部固定条上, 不参与滚动 */
-            const ColorSlot &slot = kSlots[th.slot_sel];
+            const ColorSlot &slot = kSlots[th.slot_sel - 1];
             const ThemeColor &cur = th.theme_edit.*(slot.member);
             ThemeColor cell = pick_cell_color(th.pick_hue, th.pick_sat, th.sat_cols, th.pick_val);
             Elements body;
@@ -773,7 +854,12 @@ int run_config(void) {
             title.push_back(text(" " + theme_color_to_hex(preview)) | dim);
             body.push_back(hbox(std::move(title)));
             body.push_back(separator());
-            /* scrollable grid: hue row label | sat 0% → 100% */
+            /* scrollable grid: hue row label | sat 0% → 100%.
+               The label column (the "axis") sits to the LEFT of the cells;
+               an equal-width empty column on the right keeps the cells
+               themselves centered, so the color table (not the axis) is
+               what lands in the middle of the screen. */
+            constexpr int AXIS = 5;   /* label ("355°" = 4 cols) + gap (1) */
             Elements rows;
             for (int j = 0; j < th.hue_view; j++) {
                 int hue_idx = th.hue_top + j;
@@ -788,40 +874,56 @@ int run_config(void) {
                     Color rgb = Color::RGB(c.r, c.g, c.b);
                     bool sel = (i == th.pick_sat && hue_idx == th.pick_hue);
                     if (sel) {
-                        /* selected cell: invert so its swatch reads as a
-                           bright "frame" without a border element — borders
-                           would give every cell 3 rows (min_y += 2), and
-                           hue_view such cells would overflow the terminal. */
-                        line.push_back(text("  ") | bgcolor(rgb) | inverted);
+                        /* selected cell: keep the exact background color and
+                           mark it with a "[]" bracket in a luma-contrasting
+                           fg (the region-level heavy border shows focus) */
+                        int luma = 299 * (int)c.r + 587 * (int)c.g + 114 * (int)c.b;
+                        Color fg = (luma > 140000) ? Color::Black : Color::White;
+                        line.push_back(text("[]") | bgcolor(rgb) | color(fg));
                     } else {
                         line.push_back(text("  ") | bgcolor(rgb));
                     }
                 }
+                line.push_back(text(std::string(AXIS, ' ')));
                 rows.push_back(hbox(std::move(line)));
             }
-            body.push_back(vbox(std::move(rows)));
             int hue_end = th.hue_top + th.hue_view - 1;
             if (hue_end > HUE_ROWS - 1) hue_end = HUE_ROWS - 1;
             int ang_top = (HUE_ROWS - 1 - th.hue_top) * 5;
             int ang_bot = (HUE_ROWS - 1 - hue_end) * 5;
+            /* every region keeps a border (light when unfocused, heavy when
+               focused) so the space for the frame is always reserved and
+               switching focus only changes the border weight — the layout
+               never shifts */
             Element huehint = text("  色相 " + std::to_string(ang_top) +
                                     "°–" + std::to_string(ang_bot) +
-                                    "° / 355°   (↑/↓ 或 PgUp/PgDn 滚动)");
+                                    "° / 355°");
             if (th.pick_focus == 0) huehint = huehint | inverted;
-            body.push_back(huehint | dim);
-            body.push_back(separator());
+            Element gridframe = vbox({
+                    vbox(std::move(rows)),
+                    huehint | dim,
+                })
+                | (th.pick_focus == 0 ? borderHeavy : borderLight);
+            body.push_back(hbox({filler(),
+                                 gridframe,
+                                 filler()}));
+            if (th.pick_focus == 0) huehint = huehint | inverted;
+            /* hue hint stays outside the framed core so a wide terminal text
+               can never widen the frame and push the grid off-center */
             /* brightness bar (fixed, never scrolls): width follows the grid's
                saturation columns so the bar lines up with the 2D grid */
             int bw = th.sat_cols;
-            int vmin = 51;   /* 0.2 * 255 */
+            int vmin = 0;   /* dark end reaches pure black */
             int bpos = (int)((th.pick_val - vmin) / (double)(255 - vmin) *
                              (bw - 1) + 0.5);
             if (bpos < 0) bpos = 0;
             if (bpos > bw - 1) bpos = bw - 1;
             Elements barcells;
-            /* 5-space label slot + 1 gap mirrors each grid row's label so
-               the bar's cells line up exactly under the 2D grid's cells */
-            barcells.push_back(text("     ") | dim);
+            /* label slot + gap mirror each grid row's label (AXIS = 5:
+               "355°" = 4 cols + 1 gap) so the bar's cells line up exactly
+               under the 2D grid's cells; the trailing AXIS-width pad mirrors
+               the grid's right pad so both share the same cell column range */
+            barcells.push_back(text("    ") | dim);
             barcells.push_back(text(" "));
             for (int i = 0; i < bw; i++) {
                 double frac = (bw > 1) ? i / (double)(bw - 1) : 0.0;
@@ -832,32 +934,40 @@ int run_config(void) {
                            v / 255.0, &r, &g, &b);
                 Color rgb = Color::RGB((uint8_t)r, (uint8_t)g, (uint8_t)b);
                 if (i == bpos) {
-                    barcells.push_back(text("  ") | bgcolor(rgb) | inverted);
+                    int luma = 299 * r + 587 * g + 114 * b;
+                    Color fg = (luma > 140000) ? Color::Black : Color::White;
+                    barcells.push_back(text("[]") | bgcolor(rgb) | color(fg));
                 } else {
                     barcells.push_back(text("  ") | bgcolor(rgb));
                 }
             }
-            /* percent + keys live on their own line below the bar (appending
-               them to the bar row would widen it past the grid and overflow
-               narrow terminals) */
-            Element pctline = text("      亮度 " +
+            barcells.push_back(text(std::string(AXIS, ' ')));
+            Element pctline = text("  亮度 " +
                                     std::to_string(th.pick_val * 100 / 255) +
-                                    "%   [ ] 调节");
+                                    "%");
             if (th.pick_focus == 1) pctline = pctline | inverted;
-            body.push_back(hbox(std::move(barcells)));
-            body.push_back(pctline | dim);
-            /* hex input (indented to the grid's first cell column) */
-            Element hexline = text("      hex: " + th.hex_buf + "\u258C   (回车应用)");
+            Element barrow = vbox({
+                    hbox(std::move(barcells)),
+                    hbox({text(std::string(AXIS, ' ')), pctline | dim}),
+                })
+                | (th.pick_focus == 1 ? borderHeavy : borderLight);
+            /* hex input (also bordered; sized to the same width as the
+               grid/bar so the three boxes line up horizontally) */
+            Element hexline = text("   hex: " + th.hex_buf + "\u258C");
             if (th.pick_focus == 2) hexline = hexline | inverted;
-            body.push_back(hexline | dim);
-            body.push_back(text("      Tab 切换焦点(二维表/亮度/hex)   方向键按焦点操作   [ ] 亮度  PgUp/PgDn 翻页  Enter 应用  x 无色  ESC 返回") | dim);
-            /* auto-layout: the picker body is centered both horizontally
-               and vertically — hbox fillers center the fixed-width grid/bar
-               in the terminal width, vbox fillers center it in the height */
+            int hexw = AXIS * 2 + th.sat_cols * 2;
+            Element hexframe = hexline | size(WIDTH, EQUAL, hexw)
+                | (th.pick_focus == 2 ? borderHeavy : borderLight);
+            /* title+grid region centered; brightness bar / hex below. Every
+               region keeps its own border (light/heavy) so switching focus
+               never shifts the layout; the outer frame was dropped to save
+               height */
             body_el = vbox({text("") | flex,
-                            hbox({filler(), vbox(std::move(body)) | frame,
+                            hbox({filler(),
+                                  vbox(std::move(body)),
                                   filler()}),
-                            text("") | flex}) | flex;
+                            hbox({filler(), barrow, filler()}),
+                            hbox({filler(), hexframe, filler()})}) | flex;
         } else if (th.mode == Mode::ThemeEdit) {
             /* theme color-slot editor sub-view: each slot row shows a real
                swatch (bgcolor of its RGB) next to the name + hex, so opening
@@ -865,10 +975,27 @@ int run_config(void) {
             Elements body;
             body.push_back(text("  编辑主题: " + th.theme_editing + "   (ESC 保存返回)") | bold);
             body.push_back(separator());
+            {
+                /* first row: border style selector (kept at the top so it is
+                   always visible even on short terminals) */
+                int bs_idx = 0;
+                bool sel = (th.slot_sel == bs_idx);
+                std::string cur = th.theme_edit.border_style.empty()
+                    ? "sharp" : th.theme_edit.border_style;
+                if (sel)
+                    body.push_back(hbox({text("> "),
+                                         border_style_named(cur,
+                                             text("  边框样式  " + cur))}) |
+                                   inverted | focus);
+                else
+                    body.push_back(hbox({text("  "),
+                                         border_style_named(cur,
+                                             text("  边框样式  " + cur))}));
+            }
             for (size_t i = 0; i < sizeof(kSlots)/sizeof(kSlots[0]); i++) {
                 const ColorSlot &slot = kSlots[i];
                 const ThemeColor &c = th.theme_edit.*(slot.member);
-                bool sel = ((int)i == th.slot_sel);
+                bool sel = ((int)i + 1 == th.slot_sel);
                 Element swatch;
                 if (c.has_color) {
                     int luma = 299 * (int)c.r + 587 * (int)c.g + 114 * (int)c.b;
@@ -889,6 +1016,36 @@ int run_config(void) {
             }
             body.push_back(text(""));
             body.push_back(text("  Enter: 编辑颜色  ↑/↓: 选择  ESC: 保存返回") | dim);
+            body_el = vbox(std::move(body)) | frame | flex;
+        } else if (th.mode == Mode::BorderStyle) {
+            /* border style selector: pick from the supported styles */
+            static const char *kStyles[] = {
+                "sharp", "light", "heavy", "double",
+                "dashed", "rounded", "empty", "none",
+            };
+            static const int kNumStyles = 8;
+            std::string cur = th.theme_edit.border_style.empty()
+                ? "sharp" : th.theme_edit.border_style;
+            int cur_idx = 0;
+            for (int i = 0; i < kNumStyles; i++)
+                if (cur == kStyles[i]) { cur_idx = i; break; }
+            Elements body;
+            body.push_back(text("  边框样式   (" +
+                                std::string(th.theme_editing) + ")") | bold);
+            body.push_back(separator());
+            for (int i = 0; i < kNumStyles; i++) {
+                bool sel = (i == cur_idx);
+                std::string name = kStyles[i];
+                Element preview = border_style_named(
+                    name, text("  " + name + "  "));
+                if (sel)
+                    body.push_back(hbox({text("> "), preview}) |
+                                   inverted | focus);
+                else
+                    body.push_back(hbox({text("  "), preview}));
+            }
+            body.push_back(text(""));
+            body.push_back(text("  ←/→ 或 ↑/↓ 选择   Enter 应用   ESC 返回") | dim);
             body_el = vbox(std::move(body)) | frame | flex;
         } else if (th.cat == Cat::Main) {
             Elements body;
@@ -983,6 +1140,14 @@ int run_config(void) {
     main |= CatchEvent([&](Event event) -> bool {
         recompute_picker_geometry(st, screen);
         if (event.is_mouse()) return true;
+        if (event == Event::CtrlC) {
+            /* Ctrl+C = quit everywhere (including sub-views).
+               FTXUI's posted exit task can stall the loop, so flag it
+               directly and let the manual loop below break out. */
+            want_quit = true;
+            screen.ExitLoopClosure()();
+            return true;
+        }
 
         auto key_of = [&]() -> std::string {
             if (event.is_character()) return event.character();
@@ -1020,7 +1185,7 @@ int run_config(void) {
                 } else if (st.pick_focus == 1) {
                     /* brightness only: left/down darker, right/up brighter */
                     if (k == "left" || k == "down")
-                        st.pick_val = st.pick_val > 51 ? st.pick_val - 8 : 51;
+                        st.pick_val = st.pick_val > 0 ? st.pick_val - 8 : 0;
                     else
                         st.pick_val = st.pick_val <= 247 ? st.pick_val + 8 : 255;
                     st.hex_buf.clear();
@@ -1045,7 +1210,7 @@ int run_config(void) {
             /* brightness: [ and ] step 5/255 (~2%), ignored while typing hex */
             if (st.pick_focus != 2) {
                 if (k == "[") {
-                    st.pick_val = st.pick_val > 51 ? st.pick_val - 5 : 51;
+                    st.pick_val = st.pick_val > 0 ? st.pick_val - 5 : 0;
                     st.hex_buf.clear();
                     return true;
                 }
@@ -1058,9 +1223,9 @@ int run_config(void) {
                 return true;   /* swallow brackets while typing hex */
             }
             if (k == "x") {
-                st.theme_edit.*(kSlots[st.slot_sel].member) = ThemeColor{};
+                st.theme_edit.*(kSlots[st.slot_sel - 1].member) = ThemeColor{};
                 st.dirty_theme = true;
-                st.notice = std::string("已设置 ") + kSlots[st.slot_sel].name + " = 无色";
+                st.notice = std::string("已设置 ") + kSlots[st.slot_sel - 1].name + " = 无色";
                 st.hex_buf.clear();
                 st.mode = Mode::ThemeEdit;
                 return true;
@@ -1081,9 +1246,9 @@ int run_config(void) {
                         st.hex_buf.clear();
                         return true;
                     }
-                    st.theme_edit.*(kSlots[st.slot_sel].member) = nc;
+                    st.theme_edit.*(kSlots[st.slot_sel - 1].member) = nc;
                     st.dirty_theme = true;
-                    st.notice = std::string("已设置 ") + kSlots[st.slot_sel].name +
+                    st.notice = std::string("已设置 ") + kSlots[st.slot_sel - 1].name +
                                 " = " + theme_color_to_hex(nc);
                     st.hex_buf.clear();
                     st.mode = Mode::ThemeEdit;
@@ -1091,9 +1256,9 @@ int run_config(void) {
                 }
                 /* no hex typed -> apply the grid cursor color */
                 ThemeColor nc = pick_cell_color(st.pick_hue, st.pick_sat, st.sat_cols, st.pick_val);
-                st.theme_edit.*(kSlots[st.slot_sel].member) = nc;
+                st.theme_edit.*(kSlots[st.slot_sel - 1].member) = nc;
                 st.dirty_theme = true;
-                st.notice = std::string("已设置 ") + kSlots[st.slot_sel].name +
+                st.notice = std::string("已设置 ") + kSlots[st.slot_sel - 1].name +
                             " = " + theme_color_to_hex(nc);
                 st.mode = Mode::ThemeEdit;
                 return true;
@@ -1122,14 +1287,20 @@ int run_config(void) {
             }
             if (k == "up" || k == "down" || k == "j" || k == "k") {
                 int dir = (k == "up" || k == "k") ? -1 : 1;
-                int n = (int)(sizeof(kSlots)/sizeof(kSlots[0]));
+                int n = (int)(sizeof(kSlots)/sizeof(kSlots[0])) + 1;  /* + border style */
                 st.slot_sel = (st.slot_sel + dir + n) % n;
                 return true;
             }
             if (k == "enter" || k == "\r") {
+                if (st.slot_sel == 0) {
+                    /* border style selector */
+                    st.mode = Mode::BorderStyle;
+                    st.notice.clear();
+                    return true;
+                }
                 st.hex_buf.clear();
                 /* place the 2D cursor on the slot's current color */
-                const ThemeColor &c = st.theme_edit.*(kSlots[st.slot_sel].member);
+                const ThemeColor &c = st.theme_edit.*(kSlots[st.slot_sel - 1].member);
                 if (c.has_color) {
                     double h, s, v;
                     rgb_to_hsv(c.r, c.g, c.b, &h, &s, &v);
@@ -1153,6 +1324,43 @@ int run_config(void) {
                 st.mode = Mode::ColorEdit;
                 st.pick_focus = 0;   /* start on the 2D grid */
                 st.notice.clear();
+                return true;
+            }
+            return true;
+        }
+
+        /* ── Border style selector ── */
+        if (st.mode == Mode::BorderStyle) {
+            static const char *kStyles[] = {
+                "sharp", "light", "heavy", "double",
+                "dashed", "rounded", "empty", "none",
+            };
+            static const int kNumStyles = 8;
+            std::string k = key_of();
+            if (event == Event::Escape) { st.mode = Mode::ThemeEdit; return true; }
+            if (k == "left" || k == "right" || k == "up" || k == "down" ||
+                k == "h" || k == "l" || k == "j" || k == "k") {
+                int dir = (k == "left" || k == "h" || k == "up" || k == "k") ? -1 : 1;
+                std::string cur = st.theme_edit.border_style.empty()
+                    ? "sharp" : st.theme_edit.border_style;
+                int idx = 0;
+                for (int i = 0; i < kNumStyles; i++)
+                    if (cur == kStyles[i]) { idx = i; break; }
+                idx = (idx + dir + kNumStyles) % kNumStyles;
+                st.theme_edit.border_style = kStyles[idx];
+                st.notice = "边框样式 = " + st.theme_edit.border_style;
+                return true;
+            }
+            if (k == "enter" || k == "\r") {
+                /* Enter confirms: write to disk now (dirty flag also kept so
+                   a later ESC in ThemeEdit still saves) */
+                st.dirty_theme = true;
+                bool ok = write_theme_yaml(
+                    dir_of(Cat::Theme) + "/" + st.theme_editing,
+                    st.theme_editing, st.theme_edit);
+                st.notice = (ok ? "已保存边框样式 = " : "保存失败: ") +
+                            st.theme_edit.border_style;
+                st.mode = Mode::ThemeEdit;
                 return true;
             }
             return true;
@@ -1387,12 +1595,17 @@ int run_config(void) {
                     config_set_int(cfg, "audio.volume", vol);
                     config_save(cfg);
                 }
+                return true;
             }
-            return true;
+            /* cache page handles ←/→ itself (row-aware); don't swallow */
+            if (st.cat != Cat::Cache)
+                return true;
         }
         if (k == "up" || k == "down" || k == "j" || k == "k") {
             int dir = (k == "up" || k == "k") ? -1 : 1;
-            if (st.cat == Cat::Main) {
+            if (st.cat == Cat::Cache) {
+                st.cache_sel = (st.cache_sel + dir + 4) % 4;
+            } else if (st.cat == Cat::Main) {
                 int n = (int)st.dirs.size();
                 if (n > 0) st.dir_sel = (st.dir_sel + dir + n) % n;
             } else {
@@ -1414,6 +1627,73 @@ int run_config(void) {
             st.mode = Mode::Confirm;
             st.notice.clear();
             return true;
+        }
+        if (st.cat == Cat::Cache) {
+            Config *gcfg = config_global();
+            if (event == Event::Return || k == "\r" || k == "enter") {
+                if (st.cache_sel == 3) {
+                    /* clear cache (confirm popup) */
+                    st.confirm_kind = 3;
+                    st.confirm_msg = "确认清空所有音频缓存? (y/n)";
+                    st.mode = Mode::Confirm;
+                    st.notice.clear();
+                } else if (st.cache_sel == 0 && gcfg) {
+                    /* toggle on/off */
+                    int cur = config_get_bool(gcfg, "cache.audio_enabled", true) ? 1 : 0;
+                    config_set_bool(gcfg, "cache.audio_enabled", cur ? false : true);
+                    config_save(gcfg);
+                    st.notice = cur ? "缓存已关闭" : "缓存已开启";
+                }
+                return true;
+            }
+            if (k == "left" || k == "right" || k == "h" || k == "l") {
+                int dir = (k == "left" || k == "h") ? -1 : 1;
+                if (st.cache_sel == 0 && gcfg) {
+                    /* toggle on/off */
+                    int cur = config_get_bool(gcfg, "cache.audio_enabled", true) ? 1 : 0;
+                    config_set_bool(gcfg, "cache.audio_enabled", cur ? false : true);
+                    config_save(gcfg);
+                    st.notice = cur ? "缓存已关闭" : "缓存已开启";
+                } else if (st.cache_sel == 1) {
+                    /* step the capacity limit: 256→512→1024→1536→2048→4096→8192 */
+                    static const int kLimits[] = {256, 512, 1024, 1536, 2048,
+                                                  3072, 4096, 6144, 8192};
+                    int n = (int)(sizeof(kLimits)/sizeof(kLimits[0]));
+                    int cur = gcfg
+                        ? config_get_int(gcfg, "cache.audio_limit_mb", 2048) : 2048;
+                    int idx = 0, best = 0;
+                    for (int i = 0; i < n; i++) {
+                        if (kLimits[i] == cur) { idx = i; break; }
+                        if (abs(kLimits[i] - cur) < abs(kLimits[best] - cur)) best = i;
+                    }
+                    /* if cur not on the ladder, snap to nearest first */
+                    if (idx == 0 && kLimits[0] != cur) idx = best;
+                    idx = (idx + dir + n) % n;
+                    int mb = kLimits[idx];
+                    int rc = audio_cache_set_limit_mb(mb);
+                    st.notice = rc == 0
+                        ? "缓存上限 = " + std::to_string(mb) + " MB (已按 LRU 清理)"
+                        : "设置上限失败";
+                } else if (st.cache_sel == 2) {
+                    /* step the entry-count limit */
+                    static const int kEntryLimits[] = {20, 50, 100, 200, 400,
+                                                       800, 1600};
+                    int n = (int)(sizeof(kEntryLimits)/sizeof(kEntryLimits[0]));
+                    int cur = audio_cache_max_entries();
+                    int idx = 0, best = 0;
+                    for (int i = 0; i < n; i++) {
+                        if (kEntryLimits[i] == cur) { idx = i; break; }
+                        if (abs(kEntryLimits[i] - cur) < abs(kEntryLimits[best] - cur)) best = i;
+                    }
+                    if (idx == 0 && kEntryLimits[0] != cur) idx = best;
+                    int ne = kEntryLimits[(idx + dir + n) % n];
+                    int rc = audio_cache_set_max_entries(ne);
+                    st.notice = rc == 0
+                        ? "条目上限 = " + std::to_string(ne) + " 个 (已按 LRU 清理)"
+                        : "设置条目上限失败";
+                }
+                return true;
+            }
         }
         if (k == "d" && st.cat == Cat::Cache) {
             st.confirm_kind = 3;
@@ -1530,7 +1810,11 @@ int run_config(void) {
     });
 
     ftxui::Loop loop(&screen, main);
-    loop.Run();
+    /* manual loop instead of loop.Run(): Run() can stall after an exit
+       request (the posted exit task may never be processed), so we check
+       the Ctrl+C flag on every iteration */
+    while (!loop.HasQuitted() && !want_quit)
+        loop.RunOnceBlocking();
     screen.ExitLoopClosure()();
     return 0;
 }

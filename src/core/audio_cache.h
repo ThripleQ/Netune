@@ -72,6 +72,25 @@ int  audio_cache_clear(void);
 /* Total bytes currently cached (sum of index sizes). */
 long long audio_cache_total_bytes(void);
 
+/* Number of cache index entries. */
+int audio_cache_entry_count(void);
+
+/* Unix timestamp of the least-recently-used (oldest) entry; 0 if empty. */
+long long audio_cache_oldest_ts(void);
+
+/* Apply a new capacity limit (MB): write cache.audio_limit_mb to the
+   config, then immediately LRU-prune so the cache fits the new cap.
+   0 = ok. */
+int audio_cache_set_limit_mb(int mb);
+
+/* Apply a new entry-count limit: write cache.audio_max_entries to the
+   config, then immediately LRU-prune so the cache fits the new count.
+   0 = ok. */
+int audio_cache_set_max_entries(int n);
+
+/* Current entry-count limit from the config (default 200). */
+int audio_cache_max_entries(void);
+
 /* Reconcile the index against what is actually on disk after an unclean
    shutdown: drops entries whose file is missing / empty / truncated below
    the recorded prefix, and deletes leftover .part files (none are in the
