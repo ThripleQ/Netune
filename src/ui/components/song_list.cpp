@@ -302,7 +302,7 @@ Element render_song_list(const AppState &s) {
             if (term_gfx_active() && !in_downloads) {
                 bool active_sel = (sel && s.active_panel == 1 && !s.top_search_active);
                 int cw = cover_overlay::cols();
-                int txt_w = avail_w - cw - 2;  /* 2-col selection pad */
+                int txt_w = avail_w - cw - 1;  /* 1-col gap: cover sits closer to the text */
                 if (txt_w < 5) txt_w = 5;
                 Element cover_el = cover_overlay::coverPlaceholder((int)i, song.cover_url);
                 std::string t1 = fit_text(title, txt_w);
@@ -327,7 +327,7 @@ Element render_song_list(const AppState &s) {
                 Element vip_el;
                 if (is_vip) vip_el = text(" VIP");
 
-                Element pad_el = text("  ");
+                Element pad_el = text(" ");
 
                 if (active_sel) {
                     /* Selected: a TWO-ROW solid colour block covering the
@@ -371,7 +371,7 @@ Element render_song_list(const AppState &s) {
                     bg1 = (bg1 | flex) | bgcolor(bgc);
                     bg2 = (bg2 | flex) | bgcolor(bgc);
                     els.push_back(hbox({cover_el, pad_el, bg1}) | focus);
-                    els.push_back(hbox({text(std::string((size_t)cw + 2, ' ')),
+                    els.push_back(hbox({text(std::string((size_t)cw + 1, ' ')),
                                         bg2}));
                     continue;
                 }
@@ -383,7 +383,7 @@ Element render_song_list(const AppState &s) {
                 /* second row: artist (dim, indented under the title) with the
                    VIP badge after the artist name */
                 Element r2 = hbox({text(std::string((size_t)cw, ' ')),
-                                   text("  "), theme_artist(artist_el)});
+                                   text(" "), theme_artist(artist_el)});
                 if (vip_el) r2 = hbox({r2, vip_el | theme_vip});
                 els.push_back(r2);
                 continue;
