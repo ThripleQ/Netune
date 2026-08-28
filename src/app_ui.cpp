@@ -374,6 +374,19 @@ struct SearchLoadResult {
     int        count;
 };
 
+/* Enter a new list/menu layer: push a nav snapshot so Esc can return.
+   restore=true arranges for the right-panel list to be restored on pop
+   (used when descending into a playlist's songs from a playlist list).
+   Every "enter a layer" code path goes through here so the push↔pop
+   pairing stays symmetric and Esc-back works on any list. */
+static void nav_enter(bool restore_playlist) {
+    auto &st = StateStore::instance();
+    if (restore_playlist)
+        st.nav_push_restore_playlist();
+    else
+        st.nav_push();
+}
+
 static void do_netease_search(const char *query, bool push_nav) {
     if (!query || !query[0]) return;
     std::string q(query);
@@ -381,7 +394,7 @@ static void do_netease_search(const char *query, bool push_nav) {
     /* Check cache first */
     auto it = g_ns_cache.find(q);
     if (it != g_ns_cache.end()) {
-        if (push_nav) StateStore::instance().nav_push();
+        if (push_nav) nav_enter(false);
         StateStore::instance().set_playlist(it->second, 0);
         StateStore::instance().set_active_panel(1);
         StateStore::instance().set_search_active(false);
@@ -389,7 +402,7 @@ static void do_netease_search(const char *query, bool push_nav) {
         return;
     }
 
-    if (push_nav) StateStore::instance().nav_push();
+    if (push_nav) nav_enter(false);
     StateStore::instance().set_loading(true);
 
     std::thread([q]() {
@@ -458,7 +471,7 @@ static bool netease_search_apply_cache(const std::string &q) {
     auto it = g_ns_cache.find(q);
     if (it == g_ns_cache.end()) return false;
     if (!store.state().top_search_pushed) {
-        store.nav_push_restore_playlist();
+        nav_enter(true);   /* restore semantics: Esc lands back on the pre-search list */
         store.set_top_search_pushed(true);
     }
     store.set_playlist(it->second, 0);
@@ -641,7 +654,7 @@ static void activate_netease_menu_item(int idx) {
     } else if (type == 300) {
         /* account page: submenu of the logged-in user.
            nav_push so Esc (and the snapshot) can restore the main menu */
-        StateStore::instance().nav_push();
+        nav_enter(false);
         StateStore::instance().set_netease_menu({
             {"<< \u8FD4\u56DE", -1, ""},
             {"\u6211\u7684\u6B4C\u5355", 301, ""},
@@ -653,7 +666,7 @@ static void activate_netease_menu_item(int idx) {
         StateStore::instance().set_netease_selected(0);
     } else if (type == 301) {
         /* my playlists */
-        StateStore::instance().nav_push();
+        nav_enter(false);
         StateStore::instance().set_loading(true);
         std::thread([]() {
             SongInfo *pl = NULL; int pc = 0;
@@ -677,7 +690,7 @@ static void activate_netease_menu_item(int idx) {
         }).detach();
     } else if (type == 302 || type == 4) {
         /* liked songs (account page 302 / main menu 4) */
-        StateStore::instance().nav_push();
+        nav_enter(false);
         StateStore::instance().set_loading(true);
         std::thread([]() {
             SongInfo *ms = NULL; int mc = 0;
@@ -728,7 +741,7 @@ static void activate_netease_menu_item(int idx) {
         /* my purchased: submenu of purchased singles + digital albums */
         if (!g_ne->is_logged_in()) { start_login(); }
         else {
-            StateStore::instance().nav_push();
+            nav_enter(false);
             StateStore::instance().set_netease_menu({
                 {"<< \u8FD4\u56DE", -1, ""},
                 {"\u5DF2\u8D2D\u5355\u66F2", 307, ""},
@@ -738,7 +751,7 @@ static void activate_netease_menu_item(int idx) {
         }
     } else if (type == 307) {
         /* purchased single tracks */
-        StateStore::instance().nav_push();
+        nav_enter(false);
         StateStore::instance().set_loading(true);
         std::thread([]() {
             SongInfo *songs = NULL; int sc = 0;
@@ -761,7 +774,7 @@ static void activate_netease_menu_item(int idx) {
         }).detach();
     } else if (type == 308) {
         /* purchased digital albums */
-        StateStore::instance().nav_push();
+        nav_enter(false);
         StateStore::instance().set_loading(true);
         std::thread([]() {
             SongInfo *songs = NULL; int sc = 0;
@@ -785,7 +798,7 @@ static void activate_netease_menu_item(int idx) {
     } else if (!pl_id.empty()) {
         /* entering a playlist's songs from a playlist list — push with
            playlist restore so Esc lands back on the playlist list */
-        StateStore::instance().nav_push_restore_playlist();
+        nav_enter(true);
         StateStore::instance().set_current_playlist_id(pl_id);
         StateStore::instance().set_detail_playlist_mine(
             !cur.playlist.empty() && cur.playlist[cur.selected_index].mine == 1);
@@ -827,7 +840,7 @@ static void activate_netease_menu_item(int idx) {
             (type == 0 || type == 6 || type == 7)) {
             start_login();  /* these need a session */
         } else {
-            StateStore::instance().nav_push();
+            nav_enter(false);
             StateStore::instance().set_loading(true);
             std::thread([type]() {
                 SongInfo *songs = NULL; int sc = 0;
@@ -860,7 +873,7 @@ static void activate_netease_menu_item(int idx) {
         if (!g_ne->is_logged_in()) {
             start_login();
         } else {
-            StateStore::instance().nav_push();
+            nav_enter(false);
             StateStore::instance().set_loading(true);
             std::thread([type]() {
                 SongInfo *pl = NULL; int pc = 0;
@@ -887,7 +900,7 @@ static void activate_netease_menu_item(int idx) {
         if (!g_ne->is_logged_in()) {
             start_login();
         } else {
-            StateStore::instance().nav_push();
+            nav_enter(false);
             StateStore::instance().set_loading(true);
             std::thread([]() {
                 SongInfo *songs = NULL; int sc = 0;
@@ -3180,7 +3193,7 @@ int run_app(int argc, char **argv) {
                        right (Esc returns to the group list). */
                     if (cur.group_index >= 0 &&
                         cur.group_index < (int)cur.groups.size()) {
-                        StateStore::instance().nav_push();
+                        nav_enter(false);
                         StateStore::instance().set_group_index(cur.group_index);
                         StateStore::instance().set_active_panel(1);
                     }
@@ -3196,7 +3209,7 @@ int run_app(int argc, char **argv) {
             if (cur.active_panel == 1) {
                 const auto &song = cur.playlist[cur.selected_index];
                 if (song.is_playlist) {
-                    StateStore::instance().nav_push_restore_playlist();
+                    nav_enter(true);
                     StateStore::instance().set_current_playlist_id(song.id ? song.id : "");
                     StateStore::instance().set_detail_playlist_mine(song.mine == 1);
                     StateStore::instance().set_loading(true);
