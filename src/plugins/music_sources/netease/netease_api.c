@@ -502,7 +502,8 @@ int netease_search_playlists(const char *kw, SongInfo **out, int *count) {
         SongInfo *s = &(*out)[oi];
         memset(s,0,sizeof(*s));
         s->source    = strdup("netease");
-        s->cover_url = strdup("");
+        const char *cv = jget_str(v, "coverImgUrl");
+        s->cover_url = (cv && cv[0]) ? strdup(cv) : strdup("");
         s->aux_label = strdup("歌单");
         s->is_playlist = 1;
         int64_t sid = jget_sint64(v, "id");
@@ -601,7 +602,8 @@ int netease_daily_playlists(SongInfo **out, int *count) {
         SongInfo *s = &(*out)[oi];
         memset(s,0,sizeof(*s));
         s->source    = strdup("netease");
-        s->cover_url = strdup("");
+        const char *cv = jget_str(v, "picUrl");
+        s->cover_url = (cv && cv[0]) ? strdup(cv) : strdup("");
         s->aux_label = strdup("歌单");
         s->is_playlist = 1;
         int64_t sid = jget_sint64(v, "id");
@@ -834,7 +836,9 @@ int netease_toplist(SongInfo **out, int *count) {
         SongInfo *s = &(*out)[oi];
         memset(s,0,sizeof(*s));
         s->source    = strdup("netease");
-        s->cover_url = strdup("");
+        const char *cv = jget_str(v, "coverImgUrl");
+        if (!cv || !cv[0]) cv = jget_str(v, "picUrl");
+        s->cover_url = (cv && cv[0]) ? strdup(cv) : strdup("");
         s->aux_label = strdup("歌单");
         s->is_playlist = 1;
         int64_t sid = jget_sint64(v, "id");
@@ -847,6 +851,31 @@ int netease_toplist(SongInfo **out, int *count) {
     *count = oi;
     yyjson_doc_free(doc);
     return oi > 0 ? 0 : -1;
+}
+
+/* ── Fetch a playlist's cover URL by id ─────────────── */
+int netease_playlist_cover(const char *pl_id, char *url, size_t url_sz) {
+    if (url_sz == 0) return -1;
+    *url = 0;
+    char *esc = shell_escape(pl_id);
+    char *j = run("%s playlist-cover %s%s", CLI, esc, STDERR_REDIRECT);
+    free(esc);
+    if (!j) return -1;
+    yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
+    free(j);
+    if (!doc) return -1;
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    const char *cv = root ? jget_str(root, "coverImgUrl") : NULL;
+    int rv;
+    if (!cv || !cv[0]) {
+        rv = 1;  /* no cover */
+    } else if (snprintf(url, url_sz, "%s", cv) < (int)url_sz) {
+        rv = 0;
+    } else {
+        rv = -1;
+    }
+    yyjson_doc_free(doc);
+    return rv;
 }
 
 /* ── Playlists ────────────────────────────────────── */
@@ -873,7 +902,8 @@ int netease_playlists(bool favorited, SongInfo **out, int *count) {
         SongInfo *s = &(*out)[oi];
         memset(s,0,sizeof(*s));
         s->source    = strdup("netease");
-        s->cover_url = strdup("");
+        const char *cv = jget_str(v, "coverImgUrl");
+        s->cover_url = (cv && cv[0]) ? strdup(cv) : strdup("");
         s->aux_label = strdup("歌单");
         s->is_playlist = 1;
         int64_t sid = jget_sint64(v, "id");
@@ -932,7 +962,8 @@ int netease_menu_songs(int type, int limit, SongInfo **out, int *count) {
             SongInfo *s = &(*out)[oi];
             memset(s,0,sizeof(*s));
             s->source    = strdup("netease");
-            s->cover_url = strdup("");
+            const char *cv = jget_str(v, "picUrl");
+            s->cover_url = (cv && cv[0]) ? strdup(cv) : strdup("");
             s->aux_label = strdup("歌单");
         s->is_playlist = 1;
             int64_t sid = jget_sint64(v, "id");

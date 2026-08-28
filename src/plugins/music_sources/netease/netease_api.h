@@ -35,6 +35,9 @@ bool netease_is_logged_in(void);
 int  netease_playlists(bool favorited, SongInfo **out, int *count);
 int  netease_playlist_songs(const char *id,        /* songs in a playlist */
                             SongInfo **out, int *count);
+/* Fetch a playlist's cover URL by its id (netease-cli playlist <id>,
+   playlist.coverImgUrl). Fills url. 0 = ok, 1 = no cover, -1 = failed. */
+int  netease_playlist_cover(const char *pl_id, char *url, size_t url_sz);
 int  netease_liked_songs(SongInfo **out, int *count);   /* liked songs */
 int  netease_menu_songs(int type, int limit,            /* daily etc */
                         SongInfo **out, int *count);
