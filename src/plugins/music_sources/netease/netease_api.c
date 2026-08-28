@@ -340,7 +340,7 @@ static void fill(SongInfo *s, yyjson_val *song) {
     s->aux_label         = strdup("");
 
     int64_t sid = jget_sint64(song, "id");
-    char idbuf[32]; snprintf(idbuf, sizeof(idbuf), "%ld", (long)sid);
+    char idbuf[32]; snprintf(idbuf, sizeof(idbuf), "%lld", (long long)sid);
     s->id = strdup(idbuf);
     const char *name = jget_str(song, "name"); s->title = name ? strdup(name) : strdup("");
 
@@ -441,7 +441,7 @@ int netease_search(const char *kw, int l, int o, NSSearchResult *out) {
         if (!yyjson_is_obj(v)) continue;
         NSSong *r = &out->songs[oi]; oi++;
 
-        int64_t sid = jget_sint64(v, "id"); char bid[32]; snprintf(bid, sizeof(bid), "%ld", (long)sid); r->id = strdup(bid);
+        int64_t sid = jget_sint64(v, "id"); char bid[32]; snprintf(bid, sizeof(bid), "%lld", (long long)sid); r->id = strdup(bid);
         const char *nm  = jget_str(v, "name"); r->title = nm ? strdup(nm) : strdup("");
 
         /* artist from ar[0].name */
@@ -508,7 +508,7 @@ int netease_search_playlists(const char *kw, SongInfo **out, int *count) {
         s->is_playlist = 1;
         int64_t sid = jget_sint64(v, "id");
         char id_str[32];
-        snprintf(id_str, sizeof(id_str), "%ld", (long)sid);
+        snprintf(id_str, sizeof(id_str), "%lld", (long long)sid);
         s->id = strdup(id_str);
         const char *nm = jget_str(v, "name"); s->title = nm ? strdup(nm) : strdup("");
         oi++;
@@ -608,7 +608,7 @@ int netease_daily_playlists(SongInfo **out, int *count) {
         s->is_playlist = 1;
         int64_t sid = jget_sint64(v, "id");
         char id_str[32];
-        snprintf(id_str, sizeof(id_str), "%ld", (long)sid);
+        snprintf(id_str, sizeof(id_str), "%lld", (long long)sid);
         s->id = strdup(id_str);
         const char *nm = jget_str(v, "name"); s->title = nm ? strdup(nm) : strdup("");
         oi++;
@@ -794,7 +794,7 @@ int netease_playlist_create(const char *name, char *new_id, size_t id_sz) {
         yyjson_val *pl = body ? jget_obj(body, "playlist") : NULL;
         int64_t pid = pl ? jget_sint64(pl, "id") : 0;
         if (pid > 0)
-            snprintf(new_id, id_sz, "%ld", (long)pid);
+            snprintf(new_id, id_sz, "%lld", (long long)pid);
     }
     yyjson_doc_free(doc);
     return code == 200 ? 0 : -1;
@@ -843,7 +843,7 @@ int netease_toplist(SongInfo **out, int *count) {
         s->is_playlist = 1;
         int64_t sid = jget_sint64(v, "id");
         char id_str[32];
-        snprintf(id_str, sizeof(id_str), "%ld", (long)sid);
+        snprintf(id_str, sizeof(id_str), "%lld", (long long)sid);
         s->id = strdup(id_str);
         const char *nm = jget_str(v, "name"); s->title = nm ? strdup(nm) : strdup("");
         oi++;
@@ -908,7 +908,7 @@ int netease_playlists(bool favorited, SongInfo **out, int *count) {
         s->is_playlist = 1;
         int64_t sid = jget_sint64(v, "id");
         char id_str[32];
-        snprintf(id_str, sizeof(id_str), "%ld", (long)sid);
+        snprintf(id_str, sizeof(id_str), "%lld", (long long)sid);
         s->id = strdup(id_str);
         const char *nm  = jget_str(v, "name"); s->title = nm  ? strdup(nm)  : strdup("");
         oi++;
@@ -968,7 +968,7 @@ int netease_menu_songs(int type, int limit, SongInfo **out, int *count) {
         s->is_playlist = 1;
             int64_t sid = jget_sint64(v, "id");
             char id_str[32];
-            snprintf(id_str, sizeof(id_str), "%ld", (long)sid);
+            snprintf(id_str, sizeof(id_str), "%lld", (long long)sid);
             s->id = strdup(id_str);
             const char *nm  = jget_str(v, "name"); s->title = nm  ? strdup(nm)  : strdup("");
             oi++;
