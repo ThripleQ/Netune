@@ -591,7 +591,16 @@ FFStream* ffstream_open_growing(const char *path, ffstream_wait_fn wait,
     s->fmt->flags |= AVFMT_FLAG_CUSTOM_IO;   /* we manage rec_pb's lifetime */
     s->fmt->max_analyze_duration = 10 * AV_TIME_BASE;
     if (avformat_open_input(&s->fmt, path, NULL, NULL) < 0) goto fail;
-    if (avio_seek(s->rec_pb, 0, SEEK_SET) < 0) goto fail;
+    /* Do NOT rewind the AVIO to 0 here. After read_header the demuxer has
+       already positioned the stream at the start of the payload (the WAV
+       demuxer seeks to data_offset, the MP3 demuxer past the ID3 tag) and
+       expects packet reads to continue from there. Rewinding to byte 0
+       instead feeds the container header to the decoder as PCM: a WAV
+       gains 44 bytes / block_align bogus frames at the front (11 frames for
+       s16 stereo) and an MP3 ~1000+ frames, all of it audible garbage at
+       playback start. Verified with netune_test/test_grow over wav/mp3/m4a;
+       formats whose demuxer re-seeks per packet (flac, mp4) are unaffected
+       either way, so keeping the demuxer's position is the safe default. */
     if (setup_decoder(s, sr, ch, dur) < 0) goto fail;
     return s;
 
