@@ -1019,23 +1019,99 @@ static void ev_lyric_loaded(const BusEvent *ev, void *data) {
 }
 
 /* ── Start cover download (shows spinner, clears old cover) ──── */
+/* ── Lyric/now-playing cover request bookkeeping ─────────
+   cover_load() shells out to curl, so it runs on a worker and the artwork
+   comes back over EV_COVER_LOADED. Three things used to leave the lyric
+   cover wrong on screen:
+     - a failed download published nothing, so `cover_loading` stayed true
+       and the panel kept spinning until the next track change;
+     - a refused threadpool_submit was ignored (and leaked the url), with
+       the same stuck spinner;
+     - a late result for a song the user had already skipped past was applied
+       to whatever was playing now, painting the previous cover over it.
+   The request/result pair carries the song id so stale results are dropped,
+   and the worker always publishes — success or failure — so the spinner
+   always stops. */
+typedef struct {
+    char *url;
+    char *song_id;   /* request identity; NULL when the source has no id */
+} CoverRequest;
+
+typedef struct {
+    CoverData cd;      /* owns .pixels — the event callback takes it over */
+    char     *song_id; /* owned by the event callback */
+    int       failed;
+} CoverLoadResult;
+
+/* Song whose cover is on screen (or being fetched): re-entering the lyric
+   view must not clear it and re-download just to flash the spinner again.
+   Reset on every track change, where the cover is cleared too. */
+static std::string g_cover_loaded_song;
+static std::string g_cover_pending_song;
+
 /* ── Cover downloaded in background thread ─────────── */
 static void cover_download_worker(void *arg) {
-    char *url = (char*)arg;
-    CoverData cd = {NULL, 0, 0, 0, 0};
-    if (url && cover_load(url, &cd) == 0)
-        event_bus_publish(EV_COVER_LOADED, &cd, sizeof(CoverData));
-    free(url);
+    CoverRequest *req = (CoverRequest*)arg;
+    if (!req) return;
+    CoverLoadResult res;
+    memset(&res, 0, sizeof res);
+    res.song_id = req->song_id;   /* ownership moves into the result */
+    req->song_id = NULL;
+    if (cover_load(req->url, &res.cd) != 0) {
+        /* Publish the failure too: the callback needs it to clear the
+           spinner (a missing cover is not a loading state). */
+        res.failed = 1;
+        cover_free(&res.cd);
+    }
+    if (event_bus_publish(EV_COVER_LOADED, &res, sizeof res) != 0) {
+        /* bus gone (shutdown): nothing will consume the payload — the
+           worker still owns it and must release it. */
+        cover_free(&res.cd);
+        free(res.song_id);
+    }
+    free(req->url);
+    free(req);
 }
 
 /* ── Start cover download (shows spinner, clears old cover) ──── */
 static void start_cover_download(const char *url) {
     if (!url || !url[0]) return;
+    const SongInfo &cs = StateStore::instance().state().current_song;
+    std::string id = cs.id ? cs.id : "";
+
+    if (!id.empty() && (id == g_cover_pending_song ||
+                        (id == g_cover_loaded_song &&
+                         StateStore::instance().state().cover.pixels)))
+        return;   /* already have it, or a fetch for it is in flight */
+
+    CoverRequest *req = (CoverRequest*)calloc(1, sizeof(*req));
+    if (!req) return;
+    req->url = strdup(url);
+    req->song_id = id.empty() ? NULL : strdup(id.c_str());
+    if (!req->url || (id.size() && !req->song_id)) {
+        free(req->url);
+        free(req->song_id);
+        free(req);
+        return;
+    }
+
     CoverData empty = {NULL, 0, 0, 0, 0};
     StateStore::instance().set_cover(empty);
     StateStore::instance().set_cover_loading(true);
-    char *u = strdup(url);
-    if (u) threadpool_submit(g_thread_pool, cover_download_worker, u);
+    g_cover_pending_song = id;
+    if (!g_thread_pool ||
+        threadpool_submit(g_thread_pool, cover_download_worker, req) != 0) {
+        /* No pool (startup / shutdown) or the queue refused the task: stop
+           the spinner instead of leaving the lyric cover spinning forever. */
+        free(req->url);
+        free(req->song_id);
+        free(req);
+        g_cover_pending_song.clear();
+        StateStore::instance().set_cover_loading(false);
+        LOG_WARN("cover: could not queue a download for %s", url);
+        return;
+    }
+    LOG_INFO("cover: loading %s", url);
 }
 
 /* ── Spectrum update event (from playback thread) ──── */
@@ -1049,10 +1125,35 @@ static void ev_spectrum(const BusEvent *ev, void *data) {
 /* ── Cover loaded event (from background thread) ───── */
 static void ev_cover_loaded(const BusEvent *ev, void *data) {
     (void)data;
-    if (ev->data && ev->data_size == sizeof(CoverData)) {
-        CoverData *cd = (CoverData*)ev->data;
-        StateStore::instance().set_cover(*cd);
+    if (!ev->data || ev->data_size != sizeof(CoverLoadResult)) return;
+    CoverLoadResult *res = (CoverLoadResult*)ev->data;
+    auto &store = StateStore::instance();
+    const char *cur = store.state().current_song.id;
+
+    /* Drop the artwork when the user already moved on — applying it would
+       paint the previous song's cover over the new one. */
+    bool stale = res->song_id && (!cur || strcmp(res->song_id, cur) != 0);
+    if (stale) {
+        cover_free(&res->cd);
+        if (g_cover_pending_song == res->song_id) g_cover_pending_song.clear();
+        free(res->song_id);
+        return;
     }
+
+    if (!res->failed && res->cd.pixels) {
+        store.set_cover(res->cd);   /* takes ownership of .pixels */
+        g_cover_loaded_song = res->song_id ? res->song_id : "";
+        LOG_INFO("cover: loaded %dx%d", res->cd.width, res->cd.height);
+    } else {
+        cover_free(&res->cd);
+        g_cover_loaded_song.clear();  /* re-entering the view may retry */
+        LOG_WARN("cover: no artwork for %s",
+                 res->song_id ? res->song_id : "(unknown song)");
+    }
+    store.set_cover_loading(false);
+    if (res->song_id && g_cover_pending_song == res->song_id)
+        g_cover_pending_song.clear();
+    free(res->song_id);
 }
 
 /* ── Song-list cover cache event (from cover_cache worker) ── */
@@ -1694,6 +1795,9 @@ static void ev_track_changed(const BusEvent *ev, void *data) {
     CoverData empty = {NULL, 0, 0, 0, 0};
     StateStore::instance().set_cover(empty);
     StateStore::instance().set_cover_loading(false);
+    /* the cleared cover belongs to no song now: allow the new one to load */
+    g_cover_loaded_song.clear();
+    g_cover_pending_song.clear();
     if (StateStore::instance().state().lyric_mode)
         start_cover_download(StateStore::instance().state().current_song.cover_url);
 }
