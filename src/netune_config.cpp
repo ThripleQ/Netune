@@ -528,8 +528,13 @@ static bool write_keybindings_yaml(const std::string &path,
     yaml_document_initialize(&doc, NULL, NULL, NULL, 1, 1);
     int root = yaml_document_add_mapping(&doc, NULL, YAML_BLOCK_MAPPING_STYLE);
     int kb = yaml_document_add_mapping(&doc, NULL, YAML_BLOCK_MAPPING_STYLE);
+    /* Length must be strlen() — passing one byte too many (12 for the
+       11-char "keybindings") made libyaml emit the key WITH the trailing
+       NUL as an escape: `"keybindings\0":`. The written file was then
+       malformed for every other YAML reader (ours survived only because
+       strcmp stops at the embedded NUL). */
     yaml_document_append_mapping_pair(&doc, root,
-        yaml_document_add_scalar(&doc, NULL, (yaml_char_t*)"keybindings", 12, YAML_PLAIN_SCALAR_STYLE),
+        yaml_document_add_scalar(&doc, NULL, (yaml_char_t*)"keybindings", (int)strlen("keybindings"), YAML_PLAIN_SCALAR_STYLE),
         kb);
     for (auto &e : entries) {
         int seq = yaml_document_add_sequence(&doc, NULL, YAML_BLOCK_SEQUENCE_STYLE);
