@@ -416,14 +416,11 @@ static void do_netease_search(const char *query, bool push_nav) {
         std::vector<SongInfo> vec;
         vec.reserve(nr.count + 16);
         for (int i = 0; i < nr.count; i++) {
+            /* 用 ne_song_from_ns()（netease_ext.h）而不是手抄字段：这条路径
+               曾经漏掉 cover_url，导致只有"搜索网易云"的结果没有封面（列表
+               行与歌词页封面都空）。映射只有一份，不会再漏字段。 */
             SongInfo si = {};
-            si.id       = strdup(nr.songs[i].id);
-            si.source   = strdup("netease");
-            si.title    = strdup(nr.songs[i].title ? nr.songs[i].title : "");
-            si.artist   = strdup(nr.songs[i].artist ? nr.songs[i].artist : "");
-            si.album    = strdup(nr.songs[i].album ? nr.songs[i].album : "");
-            si.duration_sec = nr.songs[i].dur_ms / 1000;
-            si.fee          = nr.songs[i].fee;
+            ne_song_from_ns(&si, &nr.songs[i]);
             vec.push_back(si);
         }
         g_ne->search_free(&nr);

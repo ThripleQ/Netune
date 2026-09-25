@@ -14,8 +14,9 @@ void netease_shutdown(void);
 const char* netease_account_name(void);
 
 /* ── Search ────────────────────────────────────────── */
-/* ⚠️ 加字段后同步修改: netease_api.c(fill/search), netease_source.c(ns_search) */
-/*    app.cpp 手动构造 NSSong 的地方 */
+/* ⚠️ 加字段后同步修改: netease_api.c(fill/search)、netease_ext.h(ne_song_from_ns)
+       —— NSSong→SongInfo 的映射只有一份（ne_song_from_ns），不要在手写
+       SongInfo 的地方再抄一遍字段。 */
 
 int  netease_search(const char *kw, int limit, int offset, NSSearchResult *out);
 void netease_search_free(NSSearchResult *r);

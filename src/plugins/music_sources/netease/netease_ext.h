@@ -4,6 +4,8 @@ extern "C" {
 #endif
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
 #include "core/music_source.h"
 
 /* netease_ext.h — 网易云特化接口。
@@ -121,6 +123,43 @@ typedef struct NeteaseExt {
     /* lyric */
     int  (*lyric)(const char *song_id, char **buf);
 } NeteaseExt;
+
+/* ── NSSong → SongInfo ──────────────────────────────────
+ *
+ * 网易云搜索结果行 → 通用 SongInfo 的唯一映射点。
+ *
+ * 放在本头（static inline）是因为有两个调用方必须产出逐字段一致的结果：
+ * 通用插件适配层 netease_source.c:ns_search()，以及应用层
+ * app_ui.cpp:do_netease_search()（"搜索网易云" 入口）。应用层过去自己手抄
+ * 了一遍字段赋值，漏掉了 cover_url —— 于是只走这条路径的搜索结果（列表行
+ * 和歌词页封面）永远没有封面。字段映射只保留这一份，两边不会再漂移。
+ */
+
+/* NULL 安全复制，与 music_source.c 的 sdup 语义一致：字段永远非 NULL，
+   调用方（UI/字符串比较）无需再判空。 */
+static inline char *ne_song_dup(const char *s) {
+    if (!s) s = "";
+    size_t n = strlen(s) + 1;
+    char *p = (char *)malloc(n);
+    if (p) memcpy(p, s, n);
+    return p;
+}
+
+/* 把一行 NSSong 填成一个已分配的 SongInfo（先清零，dst 原内容不释放）。 */
+static inline void ne_song_from_ns(SongInfo *dst, const NSSong *src) {
+    if (!dst) return;
+    memset(dst, 0, sizeof(*dst));
+    if (!src) return;
+    dst->id          = ne_song_dup(src->id);
+    dst->source      = ne_song_dup("netease");
+    dst->title       = ne_song_dup(src->title);
+    dst->artist      = ne_song_dup(src->artist);
+    dst->album       = ne_song_dup(src->album);
+    dst->cover_url   = ne_song_dup(src->cover_url);
+    dst->aux_label   = ne_song_dup("");
+    dst->duration_sec = src->dur_ms / 1000;
+    dst->fee          = src->fee;
+}
 
 /* 获取网易云特化接口（由 netease_source 注册，进程生命周期内有效） */
 const NeteaseExt *netease_ext(void);
