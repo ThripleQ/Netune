@@ -110,6 +110,10 @@ find_package(Threads REQUIRED)
 # the minimum version. Otherwise build a minimal FFmpeg from source.
 # NETUNE_PREFER_SYSTEM_FFMPEG=OFF: always build FFmpeg from source.
 option(NETUNE_PREFER_SYSTEM_FFMPEG "Prefer system FFmpeg over building from source" ON)
+# Regression tests for the streaming / audio-cache core (netune_test/).
+# Off by default so a normal build stays lean; the tests link the real core
+# sources and need libcurl (the downloader has no useful stub mode).
+option(NETUNE_BUILD_TESTS "Build netune_test (streaming + audio-cache regression suite)" OFF)
 
 # Try to locate a system FFmpeg that is new enough. FFmpeg 5.1 introduced
 # ch_layout / swr_alloc_set_opts2 used by this project.
@@ -624,6 +628,16 @@ if(WIN32 AND NOT NETUNE_NETEASE_CLI_GO)
       POST_EXCLUDE_REGEXES ".*system32/.*|.*syswow64/.*")
 else()
   install(CODE "install(PROGRAMS \"${NETEASE_CLI_OUT}\" DESTINATION bin OPTIONAL)")
+endif()
+
+
+# ── Tests (opt-in) ────────────────────────────────────
+# netune_test/ builds the streaming/cache regression suite against the real
+# core sources. Kept at the end so every dependency target it links
+# (yyjson, FFmpeg, CURL, Threads) already exists.
+if(NETUNE_BUILD_TESTS)
+  enable_testing()
+  add_subdirectory(netune_test)
 endif()
 
 
