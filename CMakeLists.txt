@@ -556,11 +556,23 @@ else()
   # Same binary name & stdout protocol as the Go build. For local
   # development override the source with
   #   -DFETCHCONTENT_SOURCE_DIR_LIBNETEASE=C:/path/to/libnetease
-  message(STATUS "netease-cli: building libnetease (C) port")
+  #
+  # Pinned to an exact commit instead of the floating `main`, matching the
+  # version discipline used for FTXUI/yyjson above: a given netune revision
+  # then always builds against the same backend, and a libnetease change on
+  # main can never silently alter a netune build. libnetease ships no
+  # release tags, hence a raw commit hash — bump it deliberately.
+  #
+  # GIT_SHALLOW must stay OFF here. CMake clones shallow with
+  # `--depth 1 --no-single-branch`, which carries only the branch *tips*;
+  # a pinned commit would stop resolving the moment main moves past it, so
+  # the pin is only safe with a full clone. The repository is ~2.4 MB, so
+  # the extra history costs little.
+  set(NETUNE_LIBNETEASE_TAG 03371f1295e5f583f13cc9417bb8db0dab58e10b)  # main @ 2026-10-10
+  message(STATUS "netease-cli: building libnetease (C) port @ ${NETUNE_LIBNETEASE_TAG}")
   FetchContent_Declare(libnetease
     GIT_REPOSITORY https://github.com/ThripleQ/libnetease.git
-    GIT_TAG        main
-    GIT_SHALLOW    TRUE
+    GIT_TAG        ${NETUNE_LIBNETEASE_TAG}
   )
   FetchContent_MakeAvailable(libnetease)
 
