@@ -215,7 +215,15 @@ static void prefetch_start(FFStream *s) {
 
 static void recorder_close_io(FFStream *s) {
     if (s->rec_inner) { avio_close(s->rec_inner); s->rec_inner = NULL; }
-    if (s->rec_pb)    { avio_context_free(&s->rec_pb); s->rec_pb = NULL; }
+    if (s->rec_pb) {
+        /* avio_alloc_context never owns the user buffer and
+           avio_context_free() frees only the context. Note the probe may
+           have swapped in its own buffer via ffio_rewind_with_probe_data(),
+           freeing the original — so free whichever buffer is current. */
+        av_freep(&s->rec_pb->buffer);
+        avio_context_free(&s->rec_pb);
+        s->rec_pb = NULL;
+    }
 }
 
 /* Stop recording. Unless already committed, the .part file is deleted

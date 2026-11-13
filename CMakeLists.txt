@@ -166,11 +166,14 @@ function(netune_build_ffmpeg_from_source out_target)
 
   # Create placeholder directories/files so that CMake's configure-time
   # validation of IMPORTED targets succeeds. The real files are produced by
-  # the ExternalProject build step.
+  # the ExternalProject build step. Only create when missing: file(WRITE)
+  # would TRUNCATE libraries already built by a previous configure/build.
   file(MAKE_DIRECTORY ${FFMPEG_INSTALL_DIR}/include)
   file(MAKE_DIRECTORY ${FFMPEG_INSTALL_DIR}/lib)
   foreach(_lib avformat avcodec swresample avutil)
-    file(WRITE ${FFMPEG_INSTALL_DIR}/lib/lib${_lib}.so "")
+    if(NOT EXISTS ${FFMPEG_INSTALL_DIR}/lib/lib${_lib}.so)
+      file(WRITE ${FFMPEG_INSTALL_DIR}/lib/lib${_lib}.so "")
+    endif()
   endforeach()
 
   ExternalProject_Add(ffmpeg_external
@@ -266,7 +269,6 @@ set(INFRA_SOURCES
   src/infra/config.c
   src/infra/config_paths.c
   src/infra/path.c
-  src/infra/ring_buffer.c
   src/infra/thread_pool.c
   src/infra/defaults.cpp
 )
@@ -568,7 +570,7 @@ else()
   # a pinned commit would stop resolving the moment main moves past it, so
   # the pin is only safe with a full clone. The repository is ~2.4 MB, so
   # the extra history costs little.
-  set(NETUNE_LIBNETEASE_TAG 03371f1295e5f583f13cc9417bb8db0dab58e10b)  # main @ 2026-10-10
+  set(NETUNE_LIBNETEASE_TAG d1f526b21faad93ddc107627abf3f2b0c6cf23e5)  # main @ 2026-10-24
   message(STATUS "netease-cli: building libnetease (C) port @ ${NETUNE_LIBNETEASE_TAG}")
   FetchContent_Declare(libnetease
     GIT_REPOSITORY https://github.com/ThripleQ/libnetease.git
@@ -628,13 +630,13 @@ endif()
 if(NETUNE_FFMPEG_INSTALL_RPATH)
   set_target_properties(netune PROPERTIES INSTALL_RPATH "${NETUNE_FFMPEG_INSTALL_RPATH}")
 endif()
-install(TARGETS netune RUNTIME DESTINATION bin CONFIGURATIONS Release)
+install(TARGETS netune RUNTIME DESTINATION bin)
 # netease-cli: install(PROGRAMS) rejects generator expressions, so wrap in
 # install(CODE). On Windows the C backend additionally ships the CLI's
 # runtime DLLs (libcurl/zlib) next to it via RUNTIME_DEPENDENCIES.
 if(WIN32 AND NOT NETUNE_NETEASE_CLI_GO)
   install(TARGETS netease-cli
-    RUNTIME DESTINATION bin CONFIGURATIONS Release
+    RUNTIME DESTINATION bin
     RUNTIME_DEPENDENCIES
       PRE_EXCLUDE_REGEXES "api-ms-|ext-ms-"
       POST_EXCLUDE_REGEXES ".*system32/.*|.*syswow64/.*")

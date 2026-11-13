@@ -1,7 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 extern "C" {
@@ -248,6 +251,16 @@ public:
     static StateStore& instance();
     const AppState& state() const { return state_; }
 
+    /* AppState is owned by the UI thread: only the UI thread may read it
+       without synchronisation. Worker threads that need to mutate state call
+       the normal setters — those defer themselves onto the UI thread via
+       drain_pending(), which the render loop calls once per frame. */
+    void mark_ui_thread(void);
+    void drain_pending(void);
+    /* Run fn on the UI thread (inline when already there). The only safe way
+       for a worker to read AppState as part of a state update. */
+    void post(std::function<void()> fn);
+
     /* selection validation */
     void validate_selection(void);
 
@@ -367,8 +380,14 @@ public:
     void clear_nav_stack(void);
 
 private:
-    StateStore() = default;
+    StateStore() : ui_thread_(std::this_thread::get_id()) {}
+    bool on_ui_thread(void) const;
+    void defer(std::function<void()> fn);
+
     AppState state_;
+    std::thread::id ui_thread_;
+    std::mutex pending_mutex_;
+    std::vector<std::function<void()>> pending_;
 
     /* shared core of queue_advance/next/prev (+1 next / -1 prev) */
     int queue_step(int dir);

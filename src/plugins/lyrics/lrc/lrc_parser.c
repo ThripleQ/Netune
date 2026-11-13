@@ -10,6 +10,10 @@
 /*
  * LRC format: [mm:ss.xx]text  or  [mm:ss]text
  * Multiple timestamps per line: [00:01.00][00:30.00]text
+ *
+ * The fraction is centiseconds by convention, but files in the wild use
+ * 1–3 digits; interpret by digit count instead of assuming hundredths
+ * (a naive "%d" made ".52" 52 ms instead of 520 ms).
  */
 static int parse_line(const char *line, LyricLine *out, int cap) {
     int n = 0;
@@ -19,13 +23,34 @@ static int parse_line(const char *line, LyricLine *out, int cap) {
 
     while (*p) {
         if (*p == '[') {
-            p++;
-            int m = 0, s = 0, ms = 0;
-            if (sscanf(p, "%d:%d.%d", &m, &s, &ms) >= 2) {
-                if (nt < 64) times[nt++] = (m * 60 + s) * 1000 + ms;
-                /* skip past the timestamp */
-                while (*p && *p != ']') p++;
-                if (*p == ']') p++;
+            const char *q = p + 1;
+            int m = 0, s = 0, used = 0;
+            if (sscanf(q, "%d:%d%n", &m, &s, &used) == 2) {
+                q += used;
+                int frac = 0, fd = 0;
+                if (*q == '.') {
+                    q++;
+                    while (*q >= '0' && *q <= '9') {
+                        if (fd < 9) frac = frac * 10 + (*q - '0');
+                        fd++;
+                        q++;
+                    }
+                }
+                /* skip to the closing bracket */
+                while (*q && *q != ']') q++;
+                if (*q == ']' && nt < 64) {
+                    int ms;
+                    if (fd == 0)      ms = 0;
+                    else if (fd == 1) ms = frac * 100;
+                    else if (fd == 2) ms = frac * 10;
+                    else {
+                        for (; fd > 3; fd--) frac /= 10;
+                        ms = frac;
+                    }
+                    if (m >= 0 && s >= 0 && ms >= 0)
+                        times[nt++] = (m * 60 + s) * 1000 + ms;
+                }
+                p = (*q == ']') ? q + 1 : q;
                 continue;
             }
         }
@@ -66,7 +91,12 @@ static int cmp_line(const void *a, const void *b) {
 Lyrics* lyric_parse(const char *lrc_text) {
     if (!lrc_text || !lrc_text[0]) return NULL;
 
-    /* first pass: count lines */
+    /* UTF-8 BOM would hide the first "[mm:ss]" from the parser. */
+    if ((unsigned char)lrc_text[0] == 0xEF &&
+        (unsigned char)lrc_text[1] == 0xBB &&
+        (unsigned char)lrc_text[2] == 0xBF)
+        lrc_text += 3;
+
     int capacity = 256;
     LyricLine *lines = (LyricLine*)calloc((size_t)capacity, sizeof(LyricLine));
     if (!lines) return NULL;
@@ -76,6 +106,20 @@ Lyrics* lyric_parse(const char *lrc_text) {
     while (*p) {
         const char *nl = strchr(p, '\n');
         size_t len = nl ? (size_t)(nl - p) : strlen(p);
+
+        /* One source line can expand to up to 64 timestamped lines; grow
+           instead of silently truncating long lyrics at 256 entries. */
+        if (count + 64 > capacity) {
+            int ncap = capacity * 2;
+            while (ncap < count + 64) ncap *= 2;
+            LyricLine *grown = (LyricLine*)realloc(
+                lines, (size_t)ncap * sizeof(LyricLine));
+            if (!grown) break;
+            memset(grown + capacity, 0,
+                   (size_t)(ncap - capacity) * sizeof(LyricLine));
+            lines = grown;
+            capacity = ncap;
+        }
 
         /* copy line to tmp buffer */
         char *tmp = (char*)malloc(len + 1);
@@ -135,9 +179,10 @@ Lyrics* lrc_load_file(const char *path) {
     FILE *f = fopen_utf8(path, "rb");
     if (!f) return NULL;
 
-    fseek(f, 0, SEEK_END);
+    if (fseek(f, 0, SEEK_END) != 0) { fclose(f); return NULL; }
     long sz = ftell(f);
-    if (sz <= 0) { fclose(f); return NULL; }
+    /* Reject empty files and runaway "lyrics" (e.g. a video misnamed .lrc). */
+    if (sz <= 0 || sz > 8 * 1024 * 1024) { fclose(f); return NULL; }
     rewind(f);
 
     char *buf = (char*)malloc((size_t)sz + 1);

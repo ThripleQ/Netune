@@ -24,6 +24,10 @@
 
 /* ── Constants ──────────────────────────────────────── */
 #define FRAMES_PER_CHUNK 4096
+/* Decoders write interleaved PCM (frames × channels), so the scratch buffer
+   is sized for the widest layout we accept instead of hard-coding stereo —
+   a 5.1/7.1 FLAC or WAV used to overrun a 2-channel buffer. */
+#define MAX_AUDIO_CHANNELS 8
 #define PROGRESS_INTERVAL_MS 16
 /* Minimum prefix a background downloader must fetch before the playback
    thread opens the .part for FFmpeg probing (probe needs a few KB; 64KB
@@ -297,15 +301,32 @@ static void cache_keep_partial(FFStream *ffstream) {
            restart can leave holes (the old downloader stopped, the new one
            starts further ahead) and even a downloader that reached EOF does
            not prove the gaps were ever filled — so this check applies
-           regardless of whether the download finished cleanly. */
+           regardless of whether the download finished cleanly.
+           The size MUST come from the remote total (Content-Length /
+           Content-Range), never from the .part file: the file only ever
+           contains what was written so far, so comparing against st_size
+           made every interrupted download look complete. */
+        int64_t dl_total = stream_downloader_total_size(g_downloader);
+        int64_t keep_now = stream_downloader_watermark(g_downloader);
+        int dl_done = stream_downloader_done(g_downloader) &&
+                      !stream_downloader_failed(g_downloader);
         int complete = 0;
         {
             struct stat st;
             if (g_part_path && stat_utf8(g_part_path, &st) == 0 &&
                 st.st_size > 0 && segs.count == 1 &&
-                segs.segs[0].start == 0 &&
-                segs.segs[0].len >= (int64_t)st.st_size)
-                complete = 1;
+                segs.segs[0].start == 0) {
+                if (dl_total > 0) {
+                    if (segs.segs[0].len >= dl_total &&
+                        st.st_size >= dl_total)
+                        complete = 1;
+                } else if (dl_done && keep_now > 0 &&
+                           segs.segs[0].len >= (int64_t)st.st_size) {
+                    /* Unknown length (chunked): a clean EOF plus one
+                       contiguous prefix covering the whole file. */
+                    complete = 1;
+                }
+            }
         }
         stream_downloader_destroy(g_downloader);
         g_downloader = NULL;
@@ -603,6 +624,15 @@ static int open_stream(const char *path,
                     return 1;
                 }
                 int dur_sec = 0;
+                /* Publish the retained regions BEFORE the probe: FFmpeg reads
+                   through wait_more_data during avformat_open_input, and the
+                   callback serves positions already on disk from g_segs.
+                   Assigning it only after a successful open made every probe
+                   read before the downloader's resume point fail (pos 0 is
+                   below seq_start), so prefix caches could never replay. */
+                g_reuse_cache = 1;
+                g_segs = cache_segs;      /* ownership moves to g_segs */
+                cache_segs.segs = NULL;
                 /* assign g_downloader BEFORE the probe so wait_more_data
                    (called during probe reads) always sees the live downloader
                    via the global, never a stale/freed opaque */
@@ -614,6 +644,9 @@ static int open_stream(const char *path,
                 if (!*ffstream) {
                     stream_downloader_destroy(dl);
                     g_downloader = NULL;
+                    cache_seglist_free(&g_segs);
+                    cache_seglist_init(&g_segs);
+                    g_reuse_cache = 0;
                     LOG_WARN("Partial cache replay: growing open failed %s",
                              path);
                     if (open_cached_local(cache_path, decoder, samplerate,
@@ -630,9 +663,6 @@ static int open_stream(const char *path,
                 *total_frames = (int64_t)dur_sec * (*samplerate);
                 g_rec_active = 1;
                 g_part_path = strdup(cache_path);
-                g_reuse_cache = 1;
-                g_segs = cache_segs;   /* retained on-disk valid regions */
-                cache_segs.segs = NULL;  /* ownership moved to g_segs */
                 snprintf(g_stream_url, sizeof g_stream_url, "%s", url);
                 ffstream_set_growing_total(
                     *ffstream, stream_downloader_total_size(dl));
@@ -919,7 +949,7 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
                                target. */
                             int ok = (ffstream_seek_bytes(ffstream,
                                                           target_byte) == 0);
-                            if (ok != 0)
+                            if (!ok)
                                 ok = (ffstream_seek(ffstream, seek_sec) == 0);
                             if (ok)
                                 *current_frame = seek_sec * samplerate;
@@ -964,7 +994,7 @@ static void do_seek(FFStream *ffstream, Decoder *decoder, int samplerate,
                        the downloader covers it — a clean resume with no
                        dead zone and no clamp-back to the old prefix. */
                     int ok = (ffstream_seek_bytes(ffstream, target_byte) == 0);
-                    if (ok != 0)
+                    if (!ok)
                         /* demuxer without AVSEEK_FLAG_BYTE support — fall
                            back to the timestamp seek (rare; only used if
                            the byte seek rejects the offset) */
@@ -1091,7 +1121,7 @@ static void* playback_thread(void *arg) {
     int     total_frames  = -1;
 
     int16_t *pcm_buf = (int16_t*)malloc(
-        (size_t)FRAMES_PER_CHUNK * 2 * sizeof(int16_t));
+        (size_t)FRAMES_PER_CHUNK * MAX_AUDIO_CHANNELS * sizeof(int16_t));
     if (!pcm_buf) {
         LOG_ERROR("OOM in playback thread");
         return NULL;
@@ -1317,9 +1347,15 @@ static void* playback_thread(void *arg) {
                 }
             }
 
-            /* Decode next chunk */
-            int frames = ffstream ? ffstream_decode(ffstream, pcm_buf, FRAMES_PER_CHUNK)
-                                    : decoder_decode(decoder, pcm_buf, FRAMES_PER_CHUNK);
+            /* Decode next chunk. pcm_buf holds FRAMES_PER_CHUNK frames of
+               MAX_AUDIO_CHANNELS; a stream with more channels gets fewer
+               frames per call so the interleaved write still fits. */
+            int decode_frames = FRAMES_PER_CHUNK;
+            int stream_ch = channels > 0 ? channels : 2;
+            if (stream_ch > MAX_AUDIO_CHANNELS)
+                decode_frames = FRAMES_PER_CHUNK * MAX_AUDIO_CHANNELS / stream_ch;
+            int frames = ffstream ? ffstream_decode(ffstream, pcm_buf, decode_frames)
+                                    : decoder_decode(decoder, pcm_buf, decode_frames);
             if (frames <= 0) {
                 /* end of stream — finalize the recording as a cache entry.
                    In growing-file mode the decode only reports EOF after

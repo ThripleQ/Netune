@@ -36,19 +36,32 @@ static int run_case(const char *fixture, const char *label) {
     NT_EXPECT(expect > 0, "%s: local decode produced no frames", label);
     int64_t src_size = nt_file_size(fixture);
 
-    HttpRangeServer *srv = hrs_start(fixture);
-    NT_EXPECT(srv != NULL, "%s: could not start the range server", label);
-    char url[256];
-    hrs_url(srv, url, sizeof(url));
-
     char *dir = nt_tmpdir("download");
     NT_EXPECT(dir != NULL, "tmpdir");
     char part[4096];
     snprintf(part, sizeof(part), "%s/cache.part", dir);
 
+    HttpRangeServer *srv = hrs_start(fixture);
+    if (!srv) {
+        fprintf(stderr, "  FAIL %s: could not start the range server\n", label);
+        nt_rmtree(dir); free(dir);
+        return NT_FAIL;
+    }
+    char url[256];
+    hrs_url(srv, url, sizeof(url));
+
     StreamDownloader *dl = stream_downloader_create(url, part);
-    NT_EXPECT(dl != NULL, "%s: stream_downloader_create failed", label);
-    NT_EXPECT(stream_downloader_start(dl) == 0, "%s: start failed", label);
+    if (!dl) {
+        fprintf(stderr, "  FAIL %s: stream_downloader_create failed\n", label);
+        hrs_stop(srv); nt_rmtree(dir); free(dir);
+        return NT_FAIL;
+    }
+    if (stream_downloader_start(dl) != 0) {
+        fprintf(stderr, "  FAIL %s: start failed\n", label);
+        stream_downloader_destroy(dl);
+        hrs_stop(srv); nt_rmtree(dir); free(dir);
+        return NT_FAIL;
+    }
 
     /* wait for the response headers so declared_total is the true size */
     int64_t total = 0;
@@ -62,7 +75,12 @@ static int run_case(const char *fixture, const char *label) {
 
     int sr = 0, ch = 0, dur = 0;
     FFStream *s = ffstream_open_growing(part, dl_wait, dl, total, &sr, &ch, &dur);
-    NT_EXPECT(s != NULL, "%s: ffstream_open_growing failed", label);
+    if (!s) {
+        fprintf(stderr, "  FAIL %s: ffstream_open_growing failed\n", label);
+        stream_downloader_destroy(dl);
+        hrs_stop(srv); nt_rmtree(dir); free(dir);
+        return NT_FAIL;
+    }
     int64_t got = nt_decode_all(s);
     ffstream_close(s);
 
@@ -78,10 +96,11 @@ static int run_case(const char *fixture, const char *label) {
              (long long)stream_downloader_watermark(dl), (long long)src_size);
     NT_CHECK(ok, nt_files_equal(part, fixture),
              "%s: .part is not byte-identical to the source", label);
+    int reqs = hrs_request_count(srv);
     stream_downloader_destroy(dl);
     hrs_stop(srv);
     printf("  %s: %lld frames, %lld bytes, %d requests\n",
-           label, (long long)got, (long long)src_size, hrs_request_count(srv) >= 0 ? 0 : 0);
+           label, (long long)got, (long long)src_size, reqs);
     nt_rmtree(dir);
     free(dir);
     return ok ? NT_OK : NT_FAIL;

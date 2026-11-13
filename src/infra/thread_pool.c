@@ -47,6 +47,11 @@ static void* worker_loop(void *arg) {
         tp->head = node->next;
         if (!tp->head) tp->tail = NULL;
         tp->pending--;
+        /* threadpool_destroy() waits on this cond until the queue drains;
+           without the broadcast a worker that empties the queue never wakes
+           it, so shutdown hangs whenever a task is still queued. */
+        if (tp->pending == 0)
+            pthread_cond_broadcast(&tp->cond);
 
         pthread_mutex_unlock(&tp->mutex);
 

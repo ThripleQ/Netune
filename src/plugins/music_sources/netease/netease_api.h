@@ -78,6 +78,9 @@ char* netease_download_song(const char *song_id, const char *level,
                             char *used_level, size_t used_sz,
                             netease_download_progress prog, void *ud);
 
+/* Abort an in-flight netease_download_song() (best effort, thread-safe). */
+void netease_download_cancel(void);
+
 /* Single-level entitlement probe (check-quality): *granted=1 only when the
    play endpoint would serve `level` (standard/higher/exhigh/lossless/hires)
    for this song. 0 = ok, *granted set; -1 = probe failed. */

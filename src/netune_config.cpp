@@ -369,6 +369,15 @@ static std::string basename_of(const std::string &p) {
     return (slash == std::string::npos) ? p : p.substr(slash + 1);
 }
 
+/* Names typed in the manager must stay inside the selected category
+   directory — a path separator would let "rename"/"new template" write
+   outside the config tree. */
+static bool safe_entry_name(const std::string &n) {
+    return !n.empty() && n != "." && n != ".." &&
+           n.find('/') == std::string::npos &&
+           n.find('\\') == std::string::npos;
+}
+
 static bool copy_file(const std::string &src, const std::string &dst) {
     FILE *in = fopen_utf8(src.c_str(), "rb");
     if (!in) return false;
@@ -1430,6 +1439,12 @@ int run_config(void) {
                         ? "已清空音频缓存 (" + std::to_string(removed) + " 个文件)"
                         : "音频缓存已是空的";
                 } else {
+                    if (st.files.empty() || st.sel < 0 ||
+                        st.sel >= (int)st.files.size()) {
+                        st.notice = "没有可操作的文件";
+                        st.mode = Mode::Normal;
+                        return true;
+                    }
                     std::string target = dir_of(st.cat) + "/" + st.files[st.sel].name;
                     if (st.confirm_kind == 0) {
                         if (remove_utf8(target.c_str()) == 0) {
@@ -1489,9 +1504,15 @@ int run_config(void) {
                 /* switch on the current popup intent (stored in input_title tag) */
                 std::string action = st.input_title;
                 std::string dir = dir_of(st.cat);
-                std::string src = dir + "/" + st.files[st.sel].name;
                 if (action == "重命名") {
+                    if (!safe_entry_name(name)) { st.notice = "文件名无效"; return true; }
+                    if (st.files.empty() || st.sel < 0 ||
+                        st.sel >= (int)st.files.size()) {
+                        st.notice = "没有可重命名的文件";
+                        return true;
+                    }
                     if (name.find('.') == std::string::npos) name += ".yaml";
+                    std::string src = dir + "/" + st.files[st.sel].name;
                     std::string dst = dir + "/" + name;
                     if (src == dst) return true;
                     if (rename_utf8(src.c_str(), dst.c_str()) == 0) {
@@ -1501,6 +1522,12 @@ int run_config(void) {
                         st.notice = "重命名失败";
                     }
                 } else if (action == "导出到路径") {
+                    if (st.files.empty() || st.sel < 0 ||
+                        st.sel >= (int)st.files.size()) {
+                        st.notice = "没有可导出的文件";
+                        return true;
+                    }
+                    std::string src = dir + "/" + st.files[st.sel].name;
                     if (copy_file(src, name)) st.notice = "已导出: " + name;
                     else st.notice = "导出失败";
                 } else if (action == "导入文件路径") {
@@ -1525,6 +1552,7 @@ int run_config(void) {
                         }
                     }
                 } else if (action == "新建模板") {
+                    if (!safe_entry_name(name)) { st.notice = "文件名无效"; return true; }
                     if (name.find('.') == std::string::npos) name += ".yaml";
                     std::string dst = dir + "/" + name;
                     bool ok = false;
@@ -1575,12 +1603,14 @@ int run_config(void) {
         /* ── Normal mode ── */
         std::string k = key_of();
 
-        if (k == "q" || k == "ctrl+c") {
+        if (k == "ctrl+c" || (k == "q" && st.cat != Cat::Playback)) {
             if (cfg) {
                 config_set_int(cfg, "audio.volume", vol);
                 config_set_int(cfg, "playback.loop_mode", loop_mode);
                 config_set_int(cfg, "playback.seek_step_sec", seek);
                 config_free(cfg);
+                cfg = NULL;
+                config_set_global(NULL);  /* no dangling global after free */
             }
             screen.ExitLoopClosure()();
             return true;

@@ -62,8 +62,15 @@ static int sdl_write_blocking(const uint8_t *data, size_t bytes) {
         LOG_WARN("SDL queue audio failed: %s", SDL_GetError());
         return -1;
     }
-    /* Keep the buffer small-ish by waiting if too much queued */
+    /* Keep the queue bounded, but never block forever: a paused/stalled
+       device never drains, which would deadlock the playback thread. */
+    Uint32 start = SDL_GetTicks();
     while (SDL_GetQueuedAudioSize(g_dev) > 65536) {
+        if (SDL_GetAudioDeviceStatus(g_dev) != SDL_AUDIO_PLAYING) break;
+        if (SDL_GetTicks() - start > 2000) {
+            LOG_WARN("SDL audio queue stalled (device not consuming)");
+            break;
+        }
         SDL_Delay(8);
     }
     /* return FRAME count (not bytes) — playback progress counts frames */

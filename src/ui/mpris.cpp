@@ -11,6 +11,7 @@
 #include <dbus/dbus.h>
 #include <pthread.h>
 #include <string.h>
+#include <time.h>
 
 #include <string>
 
@@ -34,10 +35,32 @@ static std::string g_playback_status = "Stopped";  /* Playing/Paused/Stopped */
 static std::string g_track_id;                     /* mpris:trackid suffix */
 static std::string g_title, g_artist, g_album, g_art_url;
 static int64_t g_length_us = 0;
-static int64_t g_position_us = 0;
+static int64_t g_position_us = 0;                  /* base position at sync */
+static int64_t g_position_mono_us = 0;             /* CLOCK_MONOTONIC at sync */
 static int      g_volume_pct = 80;                 /* 0..100 */
 static bool     g_muted = false;
 static int      g_loop_mode = 0;                   /* 0=None 1=Track 2=Playlist 3=Shuffle */
+
+static int64_t mono_now_us(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+}
+
+/* Player position at query time. g_position_us is a snapshot taken by
+   mpris_sync() (at most one frame old); while playing, extrapolate from the
+   monotonic clock so clients polling Position see a smooth, current value
+   instead of one that jumps once per progress event. Caller holds g_mutex. */
+static int64_t position_us_locked(void) {
+    int64_t pos = g_position_us;
+    if (g_playback_status == "Playing") {
+        int64_t elapsed = mono_now_us() - g_position_mono_us;
+        if (elapsed > 0) pos += elapsed;
+        if (g_length_us > 0 && pos > g_length_us) pos = g_length_us;
+    }
+    if (pos < 0) pos = 0;
+    return pos;
+}
 
 /* ── D-Bus helpers ─────────────────────────────────── */
 
@@ -227,7 +250,7 @@ static void handle_get(DBusMessage *msg) {
     loop       = (g_loop_mode == 1) ? "Track" :
                  (g_loop_mode == 2) ? "Playlist" : "None";
     art_url    = g_art_url;
-    position_us = g_position_us;
+    position_us = position_us_locked();
     volume_pct = g_volume_pct;
     muted      = g_muted;
     pthread_mutex_unlock(&g_mutex);
@@ -354,7 +377,7 @@ static void handle_seek(DBusMessage *msg) {
         dbus_message_iter_get_basic(&in, &offset_us);
     }
     pthread_mutex_lock(&g_mutex);
-    int target_sec = (int)((g_position_us + offset_us) / 1000000);
+    int target_sec = (int)((position_us_locked() + offset_us) / 1000000);
     pthread_mutex_unlock(&g_mutex);
     if (target_sec < 0) target_sec = 0;
     mpris_publish_cmd(MPRIS_CMD_SEEK, target_sec);
@@ -803,7 +826,8 @@ void mpris_sync(const void *state_ptr) {
     std::string album    = st.current_song.album ? st.current_song.album : "";
     std::string art_url  = st.current_song.cover_url ? st.current_song.cover_url : "";
     int64_t length_us = (int64_t)st.total_time_sec * 1000000;
-    int64_t pos_us    = (int64_t)st.current_time_sec * 1000000;
+    int64_t pos_us    = (int64_t)st.current_time_ms * 1000;
+    if (pos_us < 0) pos_us = 0;
 
     /* Detect changes while holding the lock */
     bool status_changed = false, track_changed = false, volume_changed = false,
@@ -823,6 +847,7 @@ void mpris_sync(const void *state_ptr) {
     g_art_url    = art_url;
     g_length_us  = length_us;
     g_position_us = pos_us;
+    g_position_mono_us = mono_now_us();
     g_volume_pct = st.volume;
     g_muted      = st.muted;
     g_loop_mode  = (int)st.loop_mode;

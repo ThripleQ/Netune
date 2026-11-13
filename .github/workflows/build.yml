@@ -1,7 +1,7 @@
 ﻿name: Build
 
 permissions:
-  contents: write
+  contents: read
 
 on:
   push:
@@ -23,7 +23,7 @@ jobs:
             cmake pkg-config \
             libasound2-dev libpulse-dev libsdl2-dev \
             libavformat-dev libavcodec-dev libswresample-dev \
-            libyaml-dev libcurl4-openssl-dev
+            libyaml-dev libcurl4-openssl-dev ffmpeg
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -32,8 +32,11 @@ jobs:
 
       - name: Build
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DNETUNE_BUILD_TESTS=ON
           cmake --build build -j$(nproc)
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
 
       - name: Strip
         run: strip build/netune
@@ -125,6 +128,8 @@ jobs:
     if: github.event_name == 'release'
     needs: [linux, windows]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v4
 

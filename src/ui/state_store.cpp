@@ -16,6 +16,33 @@ StateStore& StateStore::instance() {
     return s;
 }
 
+void StateStore::mark_ui_thread(void) {
+    ui_thread_ = std::this_thread::get_id();
+}
+
+bool StateStore::on_ui_thread(void) const {
+    return std::this_thread::get_id() == ui_thread_;
+}
+
+void StateStore::defer(std::function<void()> fn) {
+    std::lock_guard<std::mutex> lk(pending_mutex_);
+    pending_.push_back(std::move(fn));
+}
+
+void StateStore::post(std::function<void()> fn) {
+    if (on_ui_thread()) fn();
+    else defer(std::move(fn));
+}
+
+void StateStore::drain_pending(void) {
+    std::vector<std::function<void()>> batch;
+    {
+        std::lock_guard<std::mutex> lk(pending_mutex_);
+        batch.swap(pending_);
+    }
+    for (auto &fn : batch) fn();
+}
+
 /* ── Selection validation ──────────────────────────────
    After any mutation that could leave the selection
    pointing at nothing, clamp to the nearest valid target.
@@ -311,6 +338,10 @@ void StateStore::set_netease_selected(int idx) {
 
 void StateStore::set_login_state(int st, const std::string &status,
                                    const std::string &qr) {
+    if (!on_ui_thread()) {
+        defer([this, st, status, qr]() { set_login_state(st, status, qr); });
+        return;
+    }
     state_.login_state = st;
     state_.login_status = status;
     state_.login_qr = qr;
@@ -325,6 +356,10 @@ void StateStore::set_login_net_error(int on) {
 }
 
 void StateStore::set_qr_gfx_ready(int ready) {
+    if (!on_ui_thread()) {
+        defer([this, ready]() { set_qr_gfx_ready(ready); });
+        return;
+    }
     state_.qr_gfx_ready = ready;
 }
 
@@ -339,6 +374,10 @@ void StateStore::set_show_help(bool show) {
 }
 
 void StateStore::set_action_sheet(bool open, int selected) {
+    if (!on_ui_thread()) {
+        defer([this, open, selected]() { set_action_sheet(open, selected); });
+        return;
+    }
     state_.action_sheet_open = open;
     state_.action_sheet_selected = selected;
     /* NOTE: must NOT reset action_sheet_active here — j/k navigation inside
@@ -349,6 +388,10 @@ void StateStore::set_action_sheet(bool open, int selected) {
 }
 
 void StateStore::set_action_sheet_active(int active) {
+    if (!on_ui_thread()) {
+        defer([this, active]() { set_action_sheet_active(active); });
+        return;
+    }
     state_.action_sheet_active = active;
 }
 
@@ -369,6 +412,21 @@ void StateStore::set_action_sheet_ctx(const std::string &ctx) {
 }
 
 void StateStore::set_action_sheet_pls(const std::vector<SongInfo> &pls) {
+    if (!on_ui_thread()) {
+        /* Deep-copy before deferring: the caller's vector (and its SongInfo
+           strings) may be gone by the next frame. */
+        std::vector<SongInfo> copy;
+        for (const auto &s : pls) {
+            SongInfo c = {};
+            song_info_copy(&c, &s);
+            copy.push_back(c);
+        }
+        defer([this, copy = std::move(copy)]() mutable {
+            for (auto &s : state_.action_sheet_pls) song_info_free(&s);
+            state_.action_sheet_pls = std::move(copy);
+        });
+        return;
+    }
     for (auto &s : state_.action_sheet_pls)
         song_info_free(&s);
     state_.action_sheet_pls.clear();
@@ -381,6 +439,10 @@ void StateStore::set_action_sheet_pls(const std::vector<SongInfo> &pls) {
 
 void StateStore::set_action_sheet_quality(const std::string &song_id,
                                           const std::vector<int> &ok) {
+    if (!on_ui_thread()) {
+        defer([this, song_id, ok]() { set_action_sheet_quality(song_id, ok); });
+        return;
+    }
     /* Adopt the NEW song id whenever a picker is opened (non-empty id), so
        a probe for the previous song can never clobber the current picker.
        This also resets the id between songs — without it the id stayed
@@ -395,6 +457,10 @@ void StateStore::set_action_sheet_quality(const std::string &song_id,
 
 void StateStore::set_action_sheet_quality_br(const std::string &song_id,
                                              const std::vector<int> &br) {
+    if (!on_ui_thread()) {
+        defer([this, song_id, br]() { set_action_sheet_quality_br(song_id, br); });
+        return;
+    }
     if (!song_id.empty())
         state_.action_sheet_quality_id = song_id;
     if (state_.action_sheet_quality_id != song_id) return;
@@ -402,6 +468,10 @@ void StateStore::set_action_sheet_quality_br(const std::string &song_id,
 }
 
 void StateStore::set_action_sheet_quality_probing(bool p) {
+    if (!on_ui_thread()) {
+        defer([this, p]() { set_action_sheet_quality_probing(p); });
+        return;
+    }
     state_.action_sheet_quality_probing = p;
 }
 
@@ -424,6 +494,10 @@ void StateStore::set_detail_playlist_mine(bool v) {
 }
 
 void StateStore::set_song_detail(const std::vector<std::string> &lines) {
+    if (!on_ui_thread()) {
+        defer([this, lines]() { set_song_detail(lines); });
+        return;
+    }
     state_.song_detail_lines = lines;
 }
 
@@ -592,6 +666,10 @@ bool StateStore::nav_pop(void) {
         for (auto &s : ns.playlist)
             song_info_free(&s);
     } else if (ns.restore_playlist) {
+        /* move-assign overwrites the old vector without freeing its
+           SongInfo strings — release them first or they leak per pop. */
+        for (auto &s : state_.playlist)
+            song_info_free(&s);
         state_.playlist = std::move(ns.playlist);
         state_.active_panel = 1;  /* land on the restored playlist list */
         /* keep the highlight on the playlist that was just entered */

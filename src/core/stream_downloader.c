@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 #include <errno.h>
 #include <pthread.h>
 #include <time.h>
@@ -86,10 +87,23 @@ static size_t dl_write_cb(char *ptr, size_t size, size_t nmemb, void *ud) {
     return w;
 }
 
+/* Case-insensitive header-name prefix test (header names are ASCII). */
+static int hdr_is(const char *buf, size_t n, const char *name) {
+    size_t m = strlen(name);
+    if (n < m) return 0;
+    for (size_t i = 0; i < m; i++) {
+        if (tolower((unsigned char)buf[i]) != (int)name[i]) return 0;
+    }
+    return 1;
+}
+
 /* Response-status line parser for the resume (Range) downloader: if the
    server ignores the Range header and answers 200, flag range_denied so
-   the write callback aborts. A later 206 (redirect chain) clears it. Runs
-   on the download thread, before any body bytes. */
+   the write callback aborts. A later 206 (redirect chain) clears it.
+   Also captures the full file size from Content-Range (bytes N-M/T):
+   curl's dltotal for a Range request is only the remaining body length,
+   which must not be reported as the stream's total size. Runs on the
+   download thread, before any body bytes. */
 static size_t dl_range_status_cb(char *buffer, size_t size, size_t nitems,
                                  void *ud) {
     StreamDownloader *dl = (StreamDownloader*)ud;
@@ -106,14 +120,25 @@ static size_t dl_range_status_cb(char *buffer, size_t size, size_t nitems,
             dl->range_denied = denied;
             pthread_mutex_unlock(&dl->mutex);
         }
+    } else if (hdr_is(buffer, n, "Content-Range:")) {
+        const char *slash = memchr(buffer, '/', n);
+        if (slash) {
+            long long total = strtoll(slash + 1, NULL, 10);
+            if (total > 0) {
+                pthread_mutex_lock(&dl->mutex);
+                dl->total = total;
+                pthread_mutex_unlock(&dl->mutex);
+            }
+        }
     }
     return n;
 }
 
 /* Progress callback: returning non-zero aborts the transfer. Used so
    stream_downloader_destroy() can stop a slow download promptly. Also
-   captures the Content-Length from curl's dltotal (0 for chunked bodies)
-   so callers can size the stream / compute seek byte offsets. */
+   captures the total size from curl's dltotal (0 for chunked bodies) so
+   callers can size the stream / compute seek byte offsets. For a Range
+   request dltotal is the remaining body, so add the start offset. */
 static int dl_xferinfo_cb(void *ud, curl_off_t dltotal, curl_off_t dlnow,
                           curl_off_t ultotal, curl_off_t ulnow) {
     (void)dlnow; (void)ultotal; (void)ulnow;
@@ -121,8 +146,12 @@ static int dl_xferinfo_cb(void *ud, curl_off_t dltotal, curl_off_t dlnow,
     int stop;
     pthread_mutex_lock(&dl->mutex);
     stop = dl->stop;
-    if (dltotal > 0 && dl->total <= 0)
-        dl->total = (int64_t)dltotal;
+    if (dltotal > 0 && dl->total <= 0) {
+        if (dl->start_byte > 0 && !dl->range_denied)
+            dl->total = dl->start_byte + (int64_t)dltotal;
+        else
+            dl->total = (int64_t)dltotal;
+    }
     pthread_mutex_unlock(&dl->mutex);
     return stop ? 1 : 0;
 }

@@ -28,6 +28,10 @@
 #define PATH_SEP "/"
 #endif
 
+/* Clears the cached purchased-track list (defined with the list below);
+   login changes and logout must not keep another account's entitlements. */
+static void purchased_forget(void);
+
 /* ── netease-cli binary resolution ───────────────────
    Priority: (1) netease-cli sitting next to the netune executable
    (that is where CMake builds it — build/netease-cli), (2) PATH.
@@ -271,7 +275,15 @@ static char *run_createprocess(const char *cmd) {
 
 static char *run(const char *fmt, ...) {
     char cmd[4096]; va_list ap;
-    va_start(ap, fmt); vsnprintf(cmd, sizeof(cmd), fmt, ap); va_end(ap);
+    va_start(ap, fmt);
+    int n = vsnprintf(cmd, sizeof(cmd), fmt, ap);
+    va_end(ap);
+    /* A truncated command line would silently run a different command
+       (dropped arguments), so treat overflow as an error. */
+    if (n < 0 || n >= (int)sizeof(cmd)) {
+        LOG_ERROR("netease-cli command too long (%d bytes)", n);
+        return NULL;
+    }
 #ifdef _WIN32
     /* drop the cmd.exe-style stderr redirect; run_createprocess()
        already routes the child's stderr to NUL */
@@ -285,7 +297,11 @@ static char *run(const char *fmt, ...) {
     /* Wrap in `timeout` so a hung netease-cli (network requests have no
        internal deadline) can never freeze the UI thread. */
     char tcmd[4096 + 64];
-    snprintf(tcmd, sizeof(tcmd), "timeout 8 %s", cmd);
+    int tn = snprintf(tcmd, sizeof(tcmd), "timeout 8 %s", cmd);
+    if (tn < 0 || tn >= (int)sizeof(tcmd)) {
+        LOG_ERROR("netease-cli wrapped command too long");
+        return NULL;
+    }
     FILE *fp = popen(tcmd, "r"); if (!fp) return NULL;
     size_t cap = 8192, len = 0; char *b = malloc(cap); if (!b) { pclose(fp); return NULL; }
     while (!feof(fp)) {
@@ -410,7 +426,6 @@ const char* netease_account_name(void) { return g_name[0]?g_name:NULL; }
 
 /* ── Search ────────────────────────────────────────── */
 int netease_search(const char *kw, int l, int o, NSSearchResult *out) {
-    (void)o;
     memset(out,0,sizeof(*out)); if(!kw)return -1;
     char *esc = shell_escape(kw);
     char *j=run("%s search %s%s",CLI,esc,STDERR_REDIRECT);
@@ -428,7 +443,11 @@ int netease_search(const char *kw, int l, int o, NSSearchResult *out) {
     if (!songs) { yyjson_doc_free(doc); return 0; }
 
     size_t n = yyjson_arr_size(songs);
-    int max = (l > 0 && (size_t)l < n) ? l : (int)n;
+    /* libnetease's CLI always requests the first 100 rows; honour a caller's
+       offset locally so paging past the first page still advances. */
+    size_t skip = (o > 0) ? (size_t)o : 0;
+    size_t avail = (skip < n) ? n - skip : 0;
+    int max = (l > 0 && (size_t)l < avail) ? l : (int)avail;
     if (max == 0) { yyjson_doc_free(doc); return 0; }
 
     out->songs = calloc((size_t)max, sizeof(NSSong));
@@ -439,6 +458,7 @@ int netease_search(const char *kw, int l, int o, NSSearchResult *out) {
     int oi = 0;
     while ((v = yyjson_arr_iter_next(&iter)) && oi < max) {
         if (!yyjson_is_obj(v)) continue;
+        if (skip > 0) { skip--; continue; }
         NSSong *r = &out->songs[oi]; oi++;
 
         int64_t sid = jget_sint64(v, "id"); char bid[32]; snprintf(bid, sizeof(bid), "%lld", (long long)sid); r->id = strdup(bid);
@@ -665,7 +685,7 @@ int netease_qr_poll(const char *uk) {
     yyjson_val *root = yyjson_doc_get_root(doc);
     long long c = root ? jget_int(root, "code") : 0;
     yyjson_doc_free(doc);
-    if(c==803){char*n=run("%s account-name%s",CLI,STDERR_REDIRECT);if(n){size_t l=strlen(n);if(l>0&&n[l-1]=='\n')n[l-1]=0;if(strcmp(n,"error")!=0&&strcmp(n,"未登录")!=0)snprintf(g_name,sizeof(g_name),"%s",n);free(n);}return 0;}
+    if(c==803){char*n=run("%s account-name%s",CLI,STDERR_REDIRECT);if(n){size_t l=strlen(n);if(l>0&&n[l-1]=='\n')n[l-1]=0;if(strcmp(n,"error")!=0&&strcmp(n,"未登录")!=0)snprintf(g_name,sizeof(g_name),"%s",n);free(n);}purchased_forget();return 0;}
     if(c==800)return 2;
     if(c==802)return 3;
     return 1;
@@ -682,6 +702,7 @@ int netease_login_refresh(void) {
     yyjson_val *root = yyjson_doc_get_root(doc);
     long long c = root ? jget_int(root, "code") : 0;
     yyjson_doc_free(doc);
+    if (c == 200) purchased_forget();  /* account may have changed */
     return c == 200 ? 0 : -1;
 }
 
@@ -694,12 +715,17 @@ int netease_logout(void) {
     if (!home || !home[0]) return -1;
     char path[1024];
     snprintf(path, sizeof(path), "%s/.cache/netune/cookies.txt", home);
+    int rc;
     if (remove_utf8(path) == 0) {
         g_name[0] = 0;
-        return 0;
+        rc = 0;
+    } else {
+        /* file already gone counts as logged out */
+        rc = g_name[0] ? -1 : 0;
     }
-    /* file already gone counts as logged out */
-    return g_name[0] ? -1 : 0;
+    /* Never serve the previous account's purchased list after logging out. */
+    if (rc == 0) purchased_forget();
+    return rc;
 }
 
 /* ── Like / subscribe / toplist ───────────────────── */
@@ -996,8 +1022,10 @@ int netease_song_url(const char *id, const char *level, char *url, size_t sz) {
     if (!id || !url || sz == 0) return -1;
     const char *lvl = (level && level[0]) ? level : "standard";
     char *esc = shell_escape(id);
-    char *j = run("%s song-url %s %s%s", CLI, esc, lvl, STDERR_REDIRECT);
+    char *esc_lv = shell_escape(lvl);
+    char *j = run("%s song-url %s %s%s", CLI, esc, esc_lv, STDERR_REDIRECT);
     free(esc);
+    free(esc_lv);
     if (!j) return -1;
     yyjson_doc *doc = yyjson_read(j, strlen(j), 0);
     free(j);
@@ -1182,6 +1210,15 @@ static char *g_purchased_ids[1024];
 static int   g_purchased_n = 0;
 static int   g_purchased_loaded = 0;  /* 0 = not fetched, 1 = fetched ok, -1 = failed */
 
+static void purchased_forget(void) {
+    for (int i = 0; i < g_purchased_n; i++) {
+        free(g_purchased_ids[i]);
+        g_purchased_ids[i] = NULL;
+    }
+    g_purchased_n = 0;
+    g_purchased_loaded = 0;
+}
+
 /* Refresh the cached purchased-track id list. 0 = ok, -1 = failed. */
 int netease_purchased_refresh(void) {
     for (int i = 0; i < g_purchased_n; i++) { free(g_purchased_ids[i]); g_purchased_ids[i] = NULL; }
@@ -1247,8 +1284,9 @@ int netease_purchased_refresh(void) {
                     g_purchased_n++;
                 }
             }
+            int has_more = jget_int(d2d, "hasMore") != 0;
             yyjson_doc_free(d2);
-            if (jget_int(d2d, "hasMore") == 0) break;
+            if (!has_more) break;
         }
     }
     yyjson_doc_free(doc);
@@ -1368,6 +1406,10 @@ int netease_album_songs(const char *album_id, SongInfo **out, int *count) {
     return r;
 }
 
+/* Set by netease_download_cancel(): lets the download worker abort a
+   transfer that is already running (queue shutdown, app exit). */
+static volatile int g_dl_cancel = 0;
+
 #ifdef HAVE_LIBCURL
 #include <curl/curl.h>
 /* Progress relay: curl hands us a single pointer (clientp) per transfer,
@@ -1376,6 +1418,7 @@ int netease_album_songs(const char *album_id, SongInfo **out, int *count) {
    download total when curl reports dltotal=0 (some CDN responses are
    chunked, so the XFERINFO total is unknown until the body is drained). */
 typedef struct { netease_download_progress prog; void *ud; long long total_hdr; } DlProgRelay;
+
 static size_t dl_header_cb(char *buffer, size_t size, size_t nitems, void *userdata) {
     DlProgRelay *r = (DlProgRelay*)userdata;
     size_t n = size * nitems;
@@ -1388,6 +1431,7 @@ static size_t dl_header_cb(char *buffer, size_t size, size_t nitems, void *userd
 static int dl_xferinfo_cb(void *clientp, curl_off_t dltotal, curl_off_t dlnow,
                           curl_off_t ultotal, curl_off_t ulnow) {
     (void)ultotal; (void)ulnow;
+    if (g_dl_cancel) return 1;   /* abort the transfer */
     DlProgRelay *r = (DlProgRelay *)clientp;
     if (r && r->prog) {
         long long total = (long long)dltotal;
@@ -1398,11 +1442,16 @@ static int dl_xferinfo_cb(void *clientp, curl_off_t dltotal, curl_off_t dlnow,
 }
 #endif
 
+void netease_download_cancel(void) {
+    g_dl_cancel = 1;
+}
+
 char* netease_download_song(const char *id, const char *level,
                             const char *title, const char *artist,
                             char *used_level, size_t used_sz,
                             netease_download_progress prog, void *ud) {
     if (!id) return NULL;
+    g_dl_cancel = 0;   /* fresh transfer: clear any earlier cancel */
 
     /* Official download endpoint applies to the high tiers; the lower
        tiers (standard/higher/exhigh) are served by the same stream the
@@ -1516,6 +1565,7 @@ char* netease_download_song(const char *id, const char *level,
         curl_easy_setopt(h, CURLOPT_URL, dl_url);
         curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(h, CURLOPT_MAXREDIRS, 8L);
+        curl_easy_setopt(h, CURLOPT_FAILONERROR, 1L);
         curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 15L);
         curl_easy_setopt(h, CURLOPT_TIMEOUT, 120L);
         curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
@@ -1526,9 +1576,20 @@ char* netease_download_song(const char *id, const char *level,
         curl_easy_setopt(h, CURLOPT_XFERINFODATA, &relay);
         curl_easy_setopt(h, CURLOPT_XFERINFOFUNCTION, dl_xferinfo_cb);
         CURLcode rc = curl_easy_perform(h);
+        long http_code = 0;
+        curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &http_code);
         curl_easy_cleanup(h);
         fclose(fp);
-        if (rc != CURLE_OK) { remove_utf8(path); return NULL; }
+        /* Success means a real 2xx audio body, not just "curl returned 0":
+           CDNs can otherwise leave an HTML error page as the "song". */
+        struct stat st;
+        long long fsz = (stat_utf8(path, &st) == 0)
+                        ? (long long)st.st_size : 0;
+        if (rc != CURLE_OK || http_code < 200 || http_code >= 300 ||
+            fsz < 1024) {
+            remove_utf8(path);
+            return NULL;
+        }
         return strdup(path);
     }
     curl_easy_cleanup(h);
@@ -1538,11 +1599,15 @@ char* netease_download_song(const char *id, const char *level,
     char *esc_url = shell_escape_cmd(dl_url);
     char *esc_path = shell_escape_cmd(path);
     char cmd[4096];
-    snprintf(cmd, sizeof(cmd), "curl -sL --max-time 120 %s -o %s", esc_url, esc_path);
+    int cn = snprintf(cmd, sizeof(cmd), "curl -fsSL --max-time 120 %s -o %s",
+                      esc_url, esc_path);
     free(esc_url);
     free(esc_path);
+    if (cn < 0 || cn >= (int)sizeof(cmd)) { remove_utf8(path); return NULL; }
     int rc = system(cmd);
-    if (rc != 0) { remove_utf8(path); return NULL; }
+    struct stat st;
+    long long fsz = (stat_utf8(path, &st) == 0) ? (long long)st.st_size : 0;
+    if (rc != 0 || fsz < 1024) { remove_utf8(path); return NULL; }
     return strdup(path);
 #endif
 }

@@ -92,7 +92,10 @@ using namespace ftxui;
 static KeybindingManager g_keybindings;
 static threadpool_t *g_thread_pool = NULL;
 
-static volatile bool g_running = true;
+static std::atomic<bool> g_running{true};
+/* Frame interval chosen by the UI thread from the current AppState; the
+   render timer thread only reads this atomic (it must never touch AppState). */
+static std::atomic<int> g_frame_interval_ms{200};
 
 /* ── Event → key name ────────────────────────────────
    Maps a raw FTXUI event to the canonical key name used by
@@ -224,7 +227,7 @@ static std::string event_to_key_name(const ftxui::Event &event) {
    seek_accum / seek_target / seek_last_ms / last_resize_* /
    top_search_pushed) — they were file-level globals before. */
 
-static void on_signal(int sig) { (void)sig; g_running = false; }
+static void on_signal(int sig) { (void)sig; g_running.store(false); }
 
 /* ── Login state ────────────────────────────────────── */
 static std::string g_login_unikey;
@@ -234,8 +237,33 @@ static int         g_login_poll_tick = 0;
    background when the QR screen opens; the render loop places it over
    the login layout when ready. */
 static CoverData    g_login_qr = {0};
-static volatile int g_login_qr_ready = 0;
-static uint64_t     g_login_qr_stamp = 0;
+static std::atomic<int>      g_login_qr_ready{0};
+static std::atomic<uint64_t> g_login_qr_stamp{0};
+/* Async QR poll: every netease-cli call can block for seconds, so polling
+   runs on a worker and the UI thread collects the result on a later frame.
+   g_login_gen invalidates results belonging to a previous QR code. */
+static std::mutex             g_login_poll_mutex;
+static bool                   g_login_poll_ready = false;
+static int                    g_login_poll_result = -1;
+static unsigned               g_login_poll_gen = 0;
+static std::atomic<int>       g_login_poll_busy{0};
+static std::atomic<unsigned>  g_login_gen{0};
+/* Guards g_login_qr: the detached QR-image worker publishes pixels while
+   the UI thread uploads them, and a new login request frees them. */
+static std::mutex            g_login_qr_mutex;
+
+/* Async QR-key fetch: qr_key()/qr_render() shell out to netease-cli and can
+   block for seconds, so they run on a worker; the render loop collects the
+   result and starts the QR image fetch. */
+static std::mutex             g_login_start_mutex;
+static bool                   g_login_start_ready = false;
+static int                    g_login_start_rc = -1;
+static std::string            g_login_start_unikey;
+static std::string            g_login_start_qrtext;
+static std::string            g_login_start_qrurl;
+static unsigned               g_login_start_gen = 0;
+static std::atomic<int>       g_login_start_busy{0};
+static std::atomic<int>       g_login_start_pending{0};
 
 /* Minimal base64 decoder (the qr-image command emits base64 PNG) */
 static std::vector<uint8_t> b64_decode(const char *s) {
@@ -270,61 +298,83 @@ static std::string gen_qr(const char *url) {
     return s;
 }
 
-/* Start the QR login flow using netease-cli */
-static void start_login(void) {
-    StateStore::instance().set_login_state(1, "Contacting server...", "");
-    char unikey[128] = {0};
-    char qr_url[512] = {0};
-    if (g_ne->qr_key(unikey, sizeof(unikey), qr_url, sizeof(qr_url)) == 0
-        && unikey[0]) {
-        g_login_unikey = unikey;
-        g_login_poll_tick = 0;
-        LOG_INFO("LOGIN KEY: url_len=%zu url='%.120s'", strlen(qr_url), qr_url);
-        std::string qr = gen_qr(qr_url);
-        int qr_nl = 0;
-        for (size_t i = 0; i < qr.size(); i++)
-            if (qr[i] == '\n') qr_nl++;
-        LOG_INFO("LOGIN QR: text_len=%zu lines=%d head='%.40s' mid='%.40s' tail='%.40s'",
-                 qr.size(), qr_nl, qr.c_str(),
-                 qr.size() > 200 ? qr.c_str() + 200 : "",
-                 qr.size() > 80 ? qr.c_str() + qr.size() - 80 : "");
-        StateStore::instance().set_login_state(2,
-            "Scan with Netease Music App", qr);
-        /* unikey is valid for ~2 minutes; count down from there */
-        StateStore::instance().set_login_deadline((long)time(NULL) + 120);
-        StateStore::instance().set_login_net_error(0);
-
-        /* Fetch the high-resolution QR image in the background for
-           terminals with kitty graphics support. */
-        g_login_qr_ready = 0;
-        StateStore::instance().set_qr_gfx_ready(0);
+/* Fetch the high-resolution QR image in the background for terminals with
+   kitty graphics support. */
+static void fetch_login_qr_image(const std::string &url) {
+    g_login_qr_ready = 0;
+    StateStore::instance().set_qr_gfx_ready(0);
+    uint64_t qr_gen;
+    {
+        std::lock_guard<std::mutex> lk(g_login_qr_mutex);
         if (g_login_qr.pixels) {
             free(g_login_qr.pixels);
             g_login_qr.pixels = NULL;
         }
-        std::string qr_url_copy = qr_url;
-        std::thread([](std::string url) {
-            char *b64 = g_ne->qr_image(url.c_str());
-            if (!b64) return;
-            std::vector<uint8_t> png = b64_decode(b64);
-            free(b64);
-            if (png.empty()) return;
-            int w = 0, h = 0, ch = 0;
-            uint8_t *px = stbi_load_from_memory(png.data(), (int)png.size(),
-                                                &w, &h, &ch, 3);
-            if (!px) return;
+        qr_gen = ++g_login_qr_stamp;
+    }
+    std::thread([gen = qr_gen](std::string url) {
+        char *b64 = g_ne->qr_image(url.c_str());
+        if (!b64) return;
+        std::vector<uint8_t> png = b64_decode(b64);
+        free(b64);
+        if (png.empty()) return;
+        int w = 0, h = 0, ch = 0;
+        uint8_t *px = stbi_load_from_memory(png.data(), (int)png.size(),
+                                            &w, &h, &ch, 3);
+        if (!px) return;
+        {
+            std::lock_guard<std::mutex> lk(g_login_qr_mutex);
+            /* A newer login request (or shutdown) invalidates this result;
+               publishing it would resurrect a stale QR or touch dead state. */
+            if (!g_running || gen != g_login_qr_stamp.load()) {
+                free(px);
+                return;
+            }
+            if (g_login_qr.pixels) free(g_login_qr.pixels);
             g_login_qr.pixels = px;
             g_login_qr.width = w;
             g_login_qr.height = h;
             g_login_qr.channels = 3;
-            g_login_qr.stamp = ++g_login_qr_stamp;
+            g_login_qr.stamp = gen;
             g_login_qr_ready = 1;
-            StateStore::instance().set_qr_gfx_ready(1);
-        }, qr_url_copy).detach();
-    } else {
-        StateStore::instance().set_login_state(-1,
-            "Failed to get QR code", "");
+        }
+        StateStore::instance().set_qr_gfx_ready(1);
+    }, url).detach();
+}
+
+/* Start the QR login flow. The blocking netease-cli calls run on a worker;
+   start_login() returns immediately so the UI keeps rendering "Contacting
+   server..." instead of freezing on the network. */
+static void start_login(void) {
+    unsigned gen = g_login_gen.fetch_add(1) + 1;
+    StateStore::instance().set_login_state(1, "Contacting server...", "");
+    if (g_login_start_busy.exchange(1) != 0) {
+        /* Another request is in flight; invalidate its result and run this
+           one as soon as that worker releases the slot. */
+        g_login_start_pending.store(1);
+        return;
     }
+    std::thread([gen]() {
+        char unikey[128] = {0};
+        char qr_url[512] = {0};
+        int rc = g_ne->qr_key(unikey, sizeof(unikey), qr_url, sizeof(qr_url));
+        std::string qr;
+        if (rc == 0 && unikey[0]) qr = gen_qr(qr_url);
+        {
+            std::lock_guard<std::mutex> lk(g_login_start_mutex);
+            /* A newer start_login() or shutdown invalidates this result. */
+            if (g_running && gen == g_login_gen.load()) {
+                g_login_start_rc = (rc == 0 && unikey[0]) ? 0 : -1;
+                g_login_start_unikey = unikey;
+                g_login_start_qrtext = std::move(qr);
+                g_login_start_qrurl = qr_url;
+                g_login_start_gen = gen;
+                g_login_start_ready = true;
+            }
+        }
+        g_login_start_busy.store(0);
+        if (g_login_start_pending.exchange(0)) start_login();
+    }).detach();
 }
 
 /* Update netease menu after successful login */
@@ -1721,7 +1771,10 @@ static void load_lyrics_for_current_song(void) {
             return;  /* already loading this song's lyrics */
         char *dup = strdup(song.id);
         if (!dup || !g_thread_pool) { free(dup); return; }
-        threadpool_submit(g_thread_pool, lyric_load_worker, dup);
+        if (threadpool_submit(g_thread_pool, lyric_load_worker, dup) != 0) {
+            free(dup);
+            return;
+        }
         store.set_lyric_pending_id(song.id);
         /* Cover is now loaded lazily when entering lyric mode */
         return;
@@ -1822,6 +1875,10 @@ int run_app(int argc, char **argv) {
         printf("Netune v2.0.0 — Terminal music player\nUsage: %s [--config] [config.json]\n", argv[0]);
         return 0;
     }
+
+    /* AppState is UI-thread-owned; record this thread before any worker
+       starts so deferred worker writes can be routed back here. */
+    StateStore::instance().mark_ui_thread();
 
     /* One-time startup wiring (log / config / cache / event bus /
        thread pool / download queue) lives in app_bootstrap. */
@@ -1954,27 +2011,8 @@ int run_app(int argc, char **argv) {
     std::atomic<bool> timer_active{true};
     std::thread refresh_timer([&]() {
         while (timer_active.load()) {
-            auto &st = StateStore::instance().state();
-            /* Animation frame interval. Windows keeps 33ms (~30fps):
-               conhost renders each frame slowly, so 60fps only burned CPU
-               without visible smoothness. Linux/macOS keep the original
-               16ms (60fps) — terminal rendering there is fast enough.
-               The action sheet (Ctrl+X) also gets fast frames so its
-               status query / state flips feel responsive. */
-#ifdef _WIN32
-            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open || st.action_sheet_quality_probing || !st.downloads.empty())
-                      ? 33 : 200;
-#else
-            /* marquee-scrolling selected row needs smooth frames even
-               when idle — otherwise the 130ms/column scroll jumps 1-2
-               columns per 200ms idle frame (visible stutter) */
-            bool marquee_row = (st.active_panel == 1 &&
-                                !st.playlist.empty() &&
-                                !st.top_search_active);
-            int ms = (st.playback_state == PlaybackState::Playing || st.loading || st.cover_loading || st.action_sheet_open || st.action_sheet_quality_probing || !st.downloads.empty() || marquee_row)
-                      ? 16 : 200;
-#endif
-            std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(g_frame_interval_ms.load()));
             screen.RequestAnimationFrame();
         }
     });
@@ -2019,15 +2057,78 @@ int run_app(int argc, char **argv) {
 
     auto component = Renderer([&]() -> Element {
         event_bus_poll();
+        /* Apply state mutations posted by worker threads before anything
+           reads AppState this frame. */
+        state.drain_pending();
 #ifndef _WIN32
         mpris_sync(&state.state());
 #endif
         consume_seek();
         const AppState &s = state.state();
 
+        /* Frame pacing for the render timer. Windows keeps 33ms (~30fps):
+           conhost renders each frame slowly, so 60fps only burned CPU
+           without visible smoothness. Linux/macOS keep 16ms (60fps).
+           The marquee needs smooth frames even when idle, otherwise the
+           130ms/column scroll jumps 1-2 columns per 200ms frame. */
+#ifdef _WIN32
+        int frame_ms = (s.playback_state == PlaybackState::Playing ||
+                        s.loading || s.cover_loading || s.action_sheet_open ||
+                        s.action_sheet_quality_probing || !s.downloads.empty())
+                       ? 33 : 200;
+#else
+        bool marquee_row = (s.active_panel == 1 && !s.playlist.empty() &&
+                            !s.top_search_active);
+        int frame_ms = (s.playback_state == PlaybackState::Playing ||
+                        s.loading || s.cover_loading || s.action_sheet_open ||
+                        s.action_sheet_quality_probing || !s.downloads.empty() ||
+                        marquee_row)
+                       ? 16 : 200;
+#endif
+        g_frame_interval_ms.store(frame_ms);
+
         state.set_song_panel_width(Terminal::Size().dimx - 22);
         state.set_screen_height(Terminal::Size().dimy);
         state.set_top_row_width(Terminal::Size().dimx);
+
+        /* Collect an async start_login() result. A generation mismatch or a
+           closed overlay (Esc) means the request is stale — drop it. */
+        bool s_start = false; int s_rc = -1; unsigned s_gen = 0;
+        std::string s_unikey, s_qrtext, s_qrurl;
+        {
+            std::lock_guard<std::mutex> lk(g_login_start_mutex);
+            if (g_login_start_ready) {
+                s_start = true;
+                s_rc = g_login_start_rc;
+                s_gen = g_login_start_gen;
+                s_unikey = std::move(g_login_start_unikey);
+                s_qrtext = std::move(g_login_start_qrtext);
+                s_qrurl = std::move(g_login_start_qrurl);
+                g_login_start_unikey.clear();
+                g_login_start_qrtext.clear();
+                g_login_start_qrurl.clear();
+                g_login_start_ready = false;
+            }
+        }
+        if (s_start && s.login_state == 1 && s_gen == g_login_gen.load()) {
+            if (s_rc == 0) {
+                g_login_unikey = std::move(s_unikey);
+                g_login_poll_tick = 0;
+                int qr_nl = 0;
+                for (char c : s_qrtext) if (c == '\n') qr_nl++;
+                LOG_INFO("LOGIN QR: text_len=%zu lines=%d head='%.40s'",
+                         s_qrtext.size(), qr_nl, s_qrtext.c_str());
+                StateStore::instance().set_login_state(2,
+                    "Scan with Netease Music App", s_qrtext);
+                /* unikey is valid for ~2 minutes; count down from there */
+                StateStore::instance().set_login_deadline((long)time(NULL) + 120);
+                StateStore::instance().set_login_net_error(0);
+                fetch_login_qr_image(s_qrurl);
+            } else {
+                StateStore::instance().set_login_state(-1,
+                    "Failed to get QR code", "");
+            }
+        }
 
         /* Login polling: wall-clock based (the render loop runs at
            200ms/frame when idle — tick counting would slow polling to
@@ -2040,22 +2141,18 @@ int run_app(int argc, char **argv) {
                     std::chrono::steady_clock::now() - login_done_at).count() >= 10000)
                 StateStore::instance().set_login_state(0, "", "");
         }
-        if (s.login_state == 2 &&
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - last_poll).count() >=
-                /* poll every 2s before the scan; once scanned (802)
-                   speed up to 1s for a snappy confirm */
-                (s.login_status.find("Scanned") != std::string::npos ? 1000 : 2000)) {
-            last_poll = std::chrono::steady_clock::now();
-            /* A window too small to render the QR also pauses polling:
-               the "network error" banner is driven by poll failures and
-               must not be triggered by a small terminal. */
-            int qneed_w = 0, qneed_h = 0;
-            bool qr_fits =
-                qr_min_dims(s.login_qr, &qneed_w, &qneed_h) &&
-                s.top_row_width >= qneed_w && s.screen_height >= qneed_h;
-            if (qr_fits) {
-            int rc = g_ne->qr_poll(g_login_unikey.c_str());
+        /* Collect a poll finished by the worker (checked every frame). */
+        int rc = -1; bool have = false; unsigned rgen = 0;
+        {
+            std::lock_guard<std::mutex> lk(g_login_poll_mutex);
+            if (g_login_poll_ready) {
+                rc = g_login_poll_result;
+                rgen = g_login_poll_gen;
+                g_login_poll_ready = false;
+                have = true;
+            }
+        }
+        if (have && s.login_state == 2 && rgen == g_login_gen.load()) {
             LOG_INFO("LOGIN POLL: rc=%d", rc);
             if (rc == 0) {
                 /* 803: authorized, login successful */
@@ -2089,7 +2186,38 @@ int run_app(int argc, char **argv) {
                 /* -1: poll failed (network/cli) — show it, keep retrying */
                 StateStore::instance().set_login_net_error(1);
             }
-            }  /* if (qr_fits) */
+        }
+        if (s.login_state == 2 &&
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - last_poll).count() >=
+                /* poll every 2s before the scan; once scanned (802)
+                   speed up to 1s for a snappy confirm */
+                (s.login_status.find("Scanned") != std::string::npos ? 1000 : 2000)) {
+            /* A window too small to render the QR also pauses polling:
+               the "network error" banner is driven by poll failures and
+               must not be triggered by a small terminal. */
+            int qneed_w = 0, qneed_h = 0;
+            bool qr_fits =
+                qr_min_dims(s.login_qr, &qneed_w, &qneed_h) &&
+                s.top_row_width >= qneed_w && s.screen_height >= qneed_h;
+            if (qr_fits && g_login_poll_busy.load() == 0) {
+                last_poll = std::chrono::steady_clock::now();
+                /* claim the single poll slot; the worker releases it */
+                if (g_login_poll_busy.exchange(1) == 0) {
+                    std::string uk = g_login_unikey;
+                    unsigned gen = g_login_gen.load();
+                    std::thread([uk, gen]() {
+                        int r = g_ne->qr_poll(uk.c_str());
+                        {
+                            std::lock_guard<std::mutex> lk(g_login_poll_mutex);
+                            g_login_poll_result = r;
+                            g_login_poll_gen = gen;
+                            g_login_poll_ready = true;
+                        }
+                        g_login_poll_busy.store(0);
+                    }).detach();
+                }
+            }
         }
 
         Element main;
@@ -2494,15 +2622,23 @@ int run_app(int argc, char **argv) {
                             state.set_action_sheet(true, 0);
                             std::thread([]() {
                                 SongInfo *pls = NULL; int pc = 0;
+                                std::vector<SongInfo> vec;
                                 if (g_ne->playlists(false, &pls, &pc) == 0 && pc > 0) {
-                                    std::vector<SongInfo> vec;
-                                    for (int i = 0; i < pc; i++)
-                                        vec.push_back(pls[i]);
-                                    free(pls);
-                                    StateStore::instance().set_action_sheet_pls(vec);
-                                } else {
-                                    StateStore::instance().set_action_sheet_pls({});
+                                    for (int i = 0; i < pc; i++) {
+                                        SongInfo c = {};
+                                        song_info_copy(&c, &pls[i]);
+                                        vec.push_back(c);
+                                    }
                                 }
+                                if (pls) {
+                                    for (int i = 0; i < pc; i++)
+                                        song_info_free(&pls[i]);
+                                    free(pls);
+                                }
+                                /* setter deep-copies before returning, so our
+                                   copies can be released right away */
+                                StateStore::instance().set_action_sheet_pls(vec);
+                                for (auto &s : vec) song_info_free(&s);
                             }).detach();
                         } else if (idx == 2) {
                             /* download → quality picker (menu 4). Levels are
@@ -2565,16 +2701,21 @@ int run_app(int argc, char **argv) {
                                 /* a tier that turned out hidden (no source)
                                    must not keep the selection: park on the
                                    first visible one so the `>` marker is
-                                   immediately on a real entry. */
-                                const auto &st = StateStore::instance().state();
-                                int sel = st.action_sheet_selected;
-                                if ((size_t)sel < res.size() && res[sel] == -2) {
+                                   immediately on a real entry. Reads and
+                                   writes run on the UI thread, where the
+                                   current selection is safe to inspect. */
+                                StateStore::instance().post([res]() {
+                                    auto &ss = StateStore::instance();
+                                    int sel = ss.state().action_sheet_selected;
+                                    if (sel < 0 || (size_t)sel >= res.size() ||
+                                        res[sel] != -2)
+                                        return;
                                     int target = 0;
-                                    for (; target < NQ_LEVELS; target++)
-                                        if ((size_t)target >= res.size() ||
-                                            res[target] != -2) break;
-                                    StateStore::instance().set_action_sheet(true, target);
-                                }
+                                    for (int t = 0; t < (int)res.size(); t++) {
+                                        if (res[t] != -2) { target = t; break; }
+                                    }
+                                    ss.set_action_sheet(true, target);
+                                });
                                 StateStore::instance().set_action_sheet_quality_probing(false);
                             }).detach();
                         } else if (idx == 3) {
@@ -2640,15 +2781,17 @@ int run_app(int argc, char **argv) {
                                    tier that the server would downgrade. Fall
                                    back to any visible tier if none is. */
                                 int first_vis = -1;
+                                bool picked = false;
                                 for (int i = 0; i < NQ_LEVELS; i++) {
                                     if (res[i] == -2) continue;
                                     if (first_vis < 0) first_vis = i;
                                     if (res[i] == 1 || res[i] == 0) {
                                         StateStore::instance().set_action_sheet(true, i);
+                                        picked = true;
                                         break;
                                     }
                                 }
-                                if (first_vis >= 0)
+                                if (!picked && first_vis >= 0)
                                     StateStore::instance().set_action_sheet(
                                         true, first_vis);
                             }).detach();
@@ -3603,7 +3746,7 @@ int run_app(int argc, char **argv) {
                 static auto qr_gfx_last = std::chrono::steady_clock::time_point{};
                 static int qr_ldx = -1, qr_ldy = -1, qr_lrows = -1;
                 static uint64_t qr_lstamp = 0;
-                if (g_login_qr_ready && st.login_state == 2) {
+                if (g_login_qr_ready.load() && st.login_state == 2) {
                     int rows = st.screen_height - 8;
                     if (rows < 4) rows = 4;
                     if (rows > 12) rows = 12;
@@ -3614,6 +3757,7 @@ int run_app(int argc, char **argv) {
                     auto now = std::chrono::steady_clock::now();
                     int tdimx = Terminal::Size().dimx;
                     int tdimy = Terminal::Size().dimy;
+                    std::lock_guard<std::mutex> lk(g_login_qr_mutex);
                     bool changed = !qr_gfx_placed ||
                                    tdimx != qr_ldx ||
                                    tdimy != qr_ldy ||
@@ -3650,9 +3794,26 @@ int run_app(int argc, char **argv) {
     }
 
     LOG_INFO("Shutting down");
+    g_running.store(false);  /* stops detached QR worker from publishing */
+    {
+        std::lock_guard<std::mutex> lk(g_login_qr_mutex);
+        if (g_login_qr.pixels) {
+            free(g_login_qr.pixels);
+            g_login_qr.pixels = NULL;
+        }
+        g_login_qr_ready = 0;
+    }
     timer_active.store(false);
     refresh_timer.join();
+    /* Stop producers before consumers: downloads and pool workers must not
+       publish into (or write config for) sources that are about to shut
+       down. stop() also cancels the in-flight curl transfer. */
+    DownloadQueue::instance().stop();
+    if (g_thread_pool) threadpool_destroy(g_thread_pool);
     event_bus_publish(EV_APP_SHUTDOWN, NULL, 0);
+    /* publish only enqueues — drain once so subscribers (playback) see it
+       before the bus is torn down. */
+    event_bus_poll();
 #ifndef _WIN32
     mpris_shutdown();
 #endif
@@ -3660,8 +3821,6 @@ int run_app(int argc, char **argv) {
     music_source_manager_shutdown();
     netease_search_cache_free();
     cover_cache_clear();
-    if (g_thread_pool) threadpool_destroy(g_thread_pool);
-    DownloadQueue::instance().stop();
     event_bus_shutdown();
     config_free(cfg);
     log_shutdown();

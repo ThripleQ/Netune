@@ -2,6 +2,7 @@
 #include "infra/log.h"
 #include "infra/config.h"
 #include <stdlib.h>
+#include <pthread.h>
 
 #define MAX_BACKENDS 4
 
@@ -15,6 +16,11 @@ static AudioOutput       *g_active_ao = NULL;
    cycles so the setting is kept across track switches; -1 = not set yet
    (will be initialized from config on first output creation). */
 static int g_last_volume = -1;
+
+/* Protects g_active_ao and every AudioOutput::volume read/write. The UI
+   thread changes volume while the playback thread may destroy the output;
+   without this the UI could dereference a freed AudioOutput. */
+static pthread_mutex_t g_ao_lock = PTHREAD_MUTEX_INITIALIZER;
 
 int audio_output_register_backend(AudioOutputBackend *backend) {
     if (!backend || !backend->name) return -1;
@@ -106,6 +112,7 @@ AudioOutput* audio_output_create(int sample_rate, int channels) {
     }
     ao->sample_rate = sample_rate;
     ao->channels = channels;
+    pthread_mutex_lock(&g_ao_lock);
     if (g_last_volume < 0) {
         /* first output: take the volume from config */
         g_last_volume = gcfg ? config_get_int(gcfg, "audio.volume", 80) : 80;
@@ -114,6 +121,7 @@ AudioOutput* audio_output_create(int sample_rate, int channels) {
     }
     ao->volume = g_last_volume;
     g_active_ao = ao;
+    pthread_mutex_unlock(&g_ao_lock);
 
     /* Start the device immediately.  SDL opens audio devices paused, so
        without this call the backend never produces sound and the write
@@ -126,10 +134,12 @@ AudioOutput* audio_output_create(int sample_rate, int channels) {
 
 void audio_output_destroy(AudioOutput *ao) {
     if (!ao) return;
+    pthread_mutex_lock(&g_ao_lock);
+    if (g_active_ao == ao) g_active_ao = NULL;
+    pthread_mutex_unlock(&g_ao_lock);
     if (g_active && g_active->shutdown)
         g_active->shutdown();
     g_active = NULL;
-    g_active_ao = NULL;
     free(ao);
     LOG_DEBUG("Audio output destroyed");
 }
@@ -143,7 +153,11 @@ int audio_output_write(AudioOutput *ao, const int16_t *pcm, int frames) {
 
     size_t bytes = (size_t)frames * ao->channels * sizeof(int16_t);
 
-    if (ao->volume < 100) {
+    pthread_mutex_lock(&g_ao_lock);
+    int vol = ao->volume;
+    pthread_mutex_unlock(&g_ao_lock);
+
+    if (vol < 100) {
         size_t samples = (size_t)frames * ao->channels;
         /* ensure scratch buffer is big enough */
         if (samples > g_scale_cap) {
@@ -155,7 +169,6 @@ int audio_output_write(AudioOutput *ao, const int16_t *pcm, int frames) {
         /* Integer scaling: (pcm * volume) / 100 stays within the int16 range
            (|pcm| <= 32767, volume <= 100 → |product| <= 3276700, fits int32),
            so no clamping is needed and we avoid per-sample double math. */
-        int vol = ao->volume;
         for (size_t i = 0; i < samples; i++)
             g_scale_buf[i] = (int16_t)((int32_t)pcm[i] * vol / 100);
         return g_active->write((const uint8_t*)g_scale_buf, bytes);
@@ -201,22 +214,28 @@ int audio_output_resume(AudioOutput *ao) {
 int audio_output_set_volume(int vol) {
     if (vol < 0) vol = 0;
     if (vol > 100) vol = 100;
+    pthread_mutex_lock(&g_ao_lock);
     g_last_volume = vol;
     if (g_active_ao) g_active_ao->volume = vol;
+    pthread_mutex_unlock(&g_ao_lock);
     return 0;
 }
 
 int audio_output_get_volume(void) {
-    if (g_active_ao) return g_active_ao->volume;
-    return g_last_volume;   /* -1 if never initialized/set */
+    pthread_mutex_lock(&g_ao_lock);
+    int v = g_active_ao ? g_active_ao->volume : g_last_volume;
+    pthread_mutex_unlock(&g_ao_lock);
+    return v;   /* -1 if never initialized/set */
 }
 
 /* Seed the remembered volume before any output exists (called at startup
    from the config value). Later audio_output_set_volume() calls override it. */
 void audio_output_set_initial_volume(int vol) {
+    pthread_mutex_lock(&g_ao_lock);
     if (g_last_volume < 0) {
         if (vol < 0) vol = 0;
         if (vol > 100) vol = 100;
         g_last_volume = vol;
     }
+    pthread_mutex_unlock(&g_ao_lock);
 }

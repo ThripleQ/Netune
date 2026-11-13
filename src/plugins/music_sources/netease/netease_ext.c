@@ -51,6 +51,7 @@ static const NeteaseExt g_ext = {
     .album_songs        = netease_album_songs,
 
     .download_song      = netease_download_song,
+    .download_cancel    = netease_download_cancel,
     .check_quality      = netease_check_quality,
     .download_url       = netease_download_url,
 

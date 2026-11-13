@@ -93,7 +93,10 @@ static void scan_file(const char *full, const char *name, SongArray *arr) {
     song_info_free(&s);  /* push deep-copied s; free its scratch strings */
 }
 
-static void scan_dir(const char *dir_path, SongArray *arr) {
+static void scan_dir(const char *dir_path, SongArray *arr, int depth) {
+    /* Guard against pathological trees (and DT_UNKNOWN symlink cycles on
+       filesystems that cannot report d_type). */
+    if (depth > 32) return;
     DIR *dir = opendir(dir_path);
     if (!dir) return;
 
@@ -115,7 +118,7 @@ static void scan_dir(const char *dir_path, SongArray *arr) {
         if (dt == DT_LNK)
             continue;  /* never follow symlinks (no cycle risk, themes etc.) */
         if (dt == DT_DIR) {
-            scan_dir(full, arr);
+            scan_dir(full, arr, depth + 1);
         } else if (dt == DT_REG && has_music_ext(entry->d_name)) {
             scan_file(full, entry->d_name, arr);
         } else if (dt == DT_UNKNOWN) {
@@ -123,7 +126,7 @@ static void scan_dir(const char *dir_path, SongArray *arr) {
             struct stat st;
             if (stat_utf8(full, &st) != 0) continue;
             if (S_ISDIR(st.st_mode)) {
-                scan_dir(full, arr);
+                scan_dir(full, arr, depth + 1);
             } else if (S_ISREG(st.st_mode) && has_music_ext(entry->d_name)) {
                 scan_file(full, entry->d_name, arr);
             }
@@ -132,11 +135,23 @@ static void scan_dir(const char *dir_path, SongArray *arr) {
     closedir(dir);
 }
 
+static void song_array_free(SongArray *a) {
+    for (int i = 0; i < a->count; i++)
+        song_info_free(&a->items[i]);
+    free(a->items);
+    a->items    = NULL;
+    a->count    = 0;
+    a->capacity = 0;
+}
+
 /* ── Global song cache ────────────────────────────────
  * Scans configured dirs once, then serves searches from cache.
  * If no dirs are configured, the cache stays empty. */
 static SongArray g_all_songs = {0};
 static bool      g_scanned = false;
+/* Bumped whenever the cache is invalidated; a scanner that started under
+   an older generation must not publish its (stale) result. */
+static unsigned  g_scan_gen = 0;
 /* Guard the cache: download completion (background thread) rescans the
    dirs while the UI thread may be reading g_all_songs. */
 static pthread_mutex_t g_cache_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -154,29 +169,58 @@ static bool song_matches(const SongInfo *s, const char *keyword) {
            strcasestr(fname, keyword);
 }
 
-/* Scan configured dirs into the global cache. Idempotent. */
+/* Scan configured dirs into the global cache. Idempotent.
+ *
+ * The scan (which decodes every file for its duration) runs WITHOUT the
+ * cache lock, so UI searches never block on a download-triggered rescan;
+ * only the final swap is locked. */
 static void ensure_cache(void) {
-    pthread_mutex_lock(&g_cache_mutex);
-    if (g_scanned) { pthread_mutex_unlock(&g_cache_mutex); return; }
-    Config *cfg = config_global();
-    int ndirs = cfg ? config_get_array_size(cfg, "music_sources.local.dirs") : 0;
-    if (ndirs <= 0) {
-        LOG_WARN("No music_sources.local.dirs configured — local cache empty. "
-                 "Configure dirs in data/config.json to enable local music.");
-    } else {
-        for (int i = 0; i < ndirs; i++) {
-            char key[64];
-            snprintf(key, sizeof(key), "music_sources.local.dirs[%d]", i);
-            const char *raw = config_get_str(cfg, key, NULL);
-            if (!raw) continue;
-            char *dir = path_expand(raw);
-            scan_dir(dir, &g_all_songs);
-            free(dir);
+    for (;;) {
+        pthread_mutex_lock(&g_cache_mutex);
+        if (g_scanned) { pthread_mutex_unlock(&g_cache_mutex); return; }
+        unsigned gen = g_scan_gen;
+        pthread_mutex_unlock(&g_cache_mutex);
+
+        SongArray fresh;
+        song_array_init(&fresh);
+        Config *cfg = config_global();
+        int ndirs = cfg ? config_get_array_size(cfg, "music_sources.local.dirs") : 0;
+        if (ndirs <= 0) {
+            LOG_WARN("No music_sources.local.dirs configured — local cache empty. "
+                     "Configure dirs in data/config.json to enable local music.");
+        } else {
+            for (int i = 0; i < ndirs; i++) {
+                char key[64];
+                snprintf(key, sizeof(key), "music_sources.local.dirs[%d]", i);
+                const char *raw = config_get_str(cfg, key, NULL);
+                if (!raw) continue;
+                char *dir = path_expand(raw);
+                if (dir) {
+                    scan_dir(dir, &fresh, 0);
+                    free(dir);
+                }
+            }
         }
+        LOG_INFO("Local source cache: %d songs scanned", fresh.count);
+
+        pthread_mutex_lock(&g_cache_mutex);
+        if (g_scanned) {
+            /* another thread finished first */
+            pthread_mutex_unlock(&g_cache_mutex);
+            song_array_free(&fresh);
+            return;
+        }
+        if (gen != g_scan_gen) {
+            /* dirs changed while scanning — this result is stale, redo */
+            pthread_mutex_unlock(&g_cache_mutex);
+            song_array_free(&fresh);
+            continue;
+        }
+        g_all_songs = fresh;
+        g_scanned = true;
+        pthread_mutex_unlock(&g_cache_mutex);
+        return;
     }
-    LOG_INFO("Local source cache: %d songs scanned", g_all_songs.count);
-    g_scanned = true;
-    pthread_mutex_unlock(&g_cache_mutex);
 }
 
 /* Filter the global cache by keyword, return matching songs. */
@@ -210,13 +254,9 @@ static int local_init(void) {
 
 static void local_shutdown(void) {
     pthread_mutex_lock(&g_cache_mutex);
-    for (int i = 0; i < g_all_songs.count; i++)
-        song_info_free(&g_all_songs.items[i]);
-    free(g_all_songs.items);
-    g_all_songs.items    = NULL;
-    g_all_songs.count    = 0;
-    g_all_songs.capacity = 0;
+    song_array_free(&g_all_songs);
     g_scanned = false;
+    g_scan_gen++;
     pthread_mutex_unlock(&g_cache_mutex);
     LOG_INFO("Local music source shutdown");
 }

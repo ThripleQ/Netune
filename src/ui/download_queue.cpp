@@ -46,6 +46,11 @@ void DownloadQueue::stop() {
     {
         std::lock_guard<std::mutex> lk(m_);
         stop_ = true;
+        /* Abort the transfer that is already running; queued items are
+           dropped by worker_loop, and a 120s curl timeout would otherwise
+           keep shutdown blocked after the window is already gone. */
+        if (netease_ext() && netease_ext()->download_cancel)
+            netease_ext()->download_cancel();
         cv_.notify_all();
     }
     if (worker_.joinable()) worker_.join();
@@ -105,6 +110,7 @@ void DownloadQueue::prune() {
 void DownloadQueue::worker_loop() {
     std::unique_lock<std::mutex> lk(m_);
     for (;;) {
+        if (stop_) return;   /* do not start new downloads during shutdown */
         auto it = std::find_if(items_.begin(), items_.end(),
                                [](const DlItem &i) {
                                    return i.status == DlStatus::Queued;
@@ -143,7 +149,12 @@ void DownloadQueue::worker_loop() {
            could surface as a std::system_error("Operation not permitted")
            from the mutex). */
         prune();
+        bool stopping = stop_;
         lk.unlock();
+
+        /* Shutdown raced the transfer: do not touch sources/config after
+           music_source_manager_shutdown() has already run. */
+        if (stopping) return;
 
         if (ok) {
             LOG_INFO("DOWNLOAD ok: %s (%s)", path,

@@ -67,10 +67,33 @@ install_go() {
         esac
 
         local tarball="go${target_version}.${os}-${arch}.tar.gz"
-        local url="https://go.dev/dl/${tarball}"
         local tmpdir
         tmpdir=$(mktemp -d)
         local install_dir="/usr/local"
+
+        # Never rm -rf anything but the fixed Go install location.
+        case "$install_dir" in
+            /usr/local) ;;
+            *) echo "ERROR: refusing to install Go to '$install_dir'"; rm -rf "$tmpdir"; return 1 ;;
+        esac
+
+        # Fetch the published SHA-256 for this tarball; an unverified
+        # toolchain from a mirror is exactly what an installer must not run.
+        local want_sha=""
+        if command -v curl &>/dev/null; then
+            local meta
+            meta=$(curl -fsSL --max-time 20 "https://go.dev/dl/?mode=json" || true)
+            if [ -n "$meta" ]; then
+                want_sha=$(printf '%s' "$meta" | tr -d '\n' |
+                    grep -o "\"filename\":[[:space:]]*\"${tarball}\"[^}]*\"sha256\":[[:space:]]*\"[a-f0-9]*\"" |
+                    grep -o '[a-f0-9]\{64\}' | head -n1)
+            fi
+        fi
+        if [ -z "$want_sha" ]; then
+            echo "ERROR: could not obtain the Go checksum; aborting rather than installing an unverified toolchain."
+            rm -rf "$tmpdir"
+            return 1
+        fi
 
         local urls=(
             "https://go.dev/dl/${tarball}"
@@ -103,7 +126,20 @@ install_go() {
             return 1
         fi
 
-         if [ -d "${install_dir}/go" ]; then
+        local got_sha
+        if command -v sha256sum &>/dev/null; then
+            got_sha=$(sha256sum "${tmpdir}/${tarball}" | awk '{print $1}')
+        else
+            got_sha=$(shasum -a 256 "${tmpdir}/${tarball}" | awk '{print $1}')
+        fi
+        if [ "$got_sha" != "$want_sha" ]; then
+            echo "ERROR: Go tarball checksum mismatch (expected $want_sha, got $got_sha)."
+            rm -rf "${tmpdir}"
+            return 1
+        fi
+        echo "Checksum verified."
+
+        if [ -d "${install_dir}/go" ]; then
             echo "Removing existing ${install_dir}/go ..."
             sudo rm -rf "${install_dir}/go"
         fi
@@ -183,7 +219,8 @@ echo "==> Installing to ~/.local/bin/..."
 mkdir -p ~/.local/bin
 cp build/netune ~/.local/bin/
 [ -f build/netease-cli ] && cp build/netease-cli ~/.local/bin/
-cp -r data ~/.local/bin/data/
+# Themes/keybindings/layouts are generated under ~/.config/netune/data on
+# first launch; there is no repo-side data/ tree to copy.
 
 echo ""
 echo "Done! Run: netune"

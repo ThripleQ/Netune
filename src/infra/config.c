@@ -4,6 +4,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 #include "compat/utf8.h"
 
 
@@ -25,6 +31,10 @@ struct Config {
     char       **keys;
     size_t       key_count;
     size_t       key_cap;
+    /* Guards doc/mdoc/keys. Reads and writes arrive from the UI thread
+       (volume, settings) and worker threads (download dirs, quality),
+       and yyjson mutation is not thread-safe. */
+    pthread_mutex_t lock;
 };
 
 Config* config_load(const char *path) {
@@ -34,18 +44,38 @@ Config* config_load(const char *path) {
         return NULL;
     }
 
-    fseek(fp, 0, SEEK_END);
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        LOG_ERROR("Cannot seek config file: %s", path);
+        fclose(fp);
+        return NULL;
+    }
     long size = ftell(fp);
+    if (size < 0) {
+        LOG_ERROR("Cannot size config file: %s", path);
+        fclose(fp);
+        return NULL;
+    }
+    /* Refuse absurd sizes instead of attempting a near-SIZE_MAX read. */
+    if (size > 16 * 1024 * 1024) {
+        LOG_ERROR("Config file too large: %s (%ld bytes)", path, size);
+        fclose(fp);
+        return NULL;
+    }
     fseek(fp, 0, SEEK_SET);
 
-    char *buf = (char*)malloc(size + 1);
+    char *buf = (char*)malloc((size_t)size + 1);
     if (!buf) { fclose(fp); return NULL; }
-    fread(buf, 1, size, fp);
-    buf[size] = '\0';
+    size_t got = fread(buf, 1, (size_t)size, fp);
     fclose(fp);
+    if (got != (size_t)size) {
+        LOG_ERROR("Short read on config file: %s (%zu/%ld)", path, got, size);
+        free(buf);
+        return NULL;
+    }
+    buf[size] = '\0';
 
     yyjson_read_err err;
-    yyjson_doc *doc = yyjson_read_opts(buf, size, YYJSON_READ_ALLOW_COMMENTS, NULL, &err);
+    yyjson_doc *doc = yyjson_read_opts(buf, (size_t)size, YYJSON_READ_ALLOW_COMMENTS, NULL, &err);
     free(buf);
 
     if (!doc) {
@@ -54,9 +84,16 @@ Config* config_load(const char *path) {
     }
 
     Config *cfg = (Config*)calloc(1, sizeof(Config));
+    if (!cfg) { yyjson_doc_free(doc); return NULL; }
     cfg->doc  = doc;
     cfg->root = yyjson_doc_get_root(doc);
     cfg->path = strdup(path);
+    if (!cfg->path) {
+        yyjson_doc_free(doc);
+        free(cfg);
+        return NULL;
+    }
+    pthread_mutex_init(&cfg->lock, NULL);
 
     LOG_INFO("Config loaded: %s", path);
     return cfg;
@@ -69,6 +106,7 @@ void config_free(Config *cfg) {
     free(cfg->keys);
     free(cfg->path);
     yyjson_doc_free(cfg->doc);
+    pthread_mutex_destroy(&cfg->lock);
     free(cfg);
 }
 
@@ -80,7 +118,8 @@ static yyjson_val* resolve(Config *cfg, const char *key) {
 
     char *k = strdup(key);
     if (!k) return NULL;
-    char *tok = strtok(k, ".");
+    char *save = NULL;
+    char *tok = strtok_r(k, ".", &save);
     while (tok && v) {
         /* check for array index: key[idx] */
         int idx = -1;
@@ -100,7 +139,7 @@ static yyjson_val* resolve(Config *cfg, const char *key) {
         if (v && idx >= 0 && yyjson_is_arr(v))
             v = yyjson_arr_get(v, (size_t)idx);
 
-        tok = strtok(NULL, ".");
+        tok = strtok_r(NULL, ".", &save);
     }
     free(k);
     return v;
@@ -112,10 +151,19 @@ static yyjson_mut_val* resolve_mut_read(Config *cfg, const char *key) {
     yyjson_mut_val *v = yyjson_mut_doc_get_root(cfg->mdoc);
     char *k = strdup(key);
     if (!k) return NULL;
-    char *tok = strtok(k, ".");
+    char *save = NULL;
+    char *tok = strtok_r(k, ".", &save);
     while (tok && v) {
+        int idx = -1;
+        char *bracket = strchr(tok, '[');
+        if (bracket) {
+            *bracket = '\0';
+            idx = atoi(bracket + 1);
+        }
         v = yyjson_mut_is_obj(v) ? yyjson_mut_obj_get(v, tok) : NULL;
-        tok = strtok(NULL, ".");
+        if (v && idx >= 0 && yyjson_mut_is_arr(v))
+            v = yyjson_mut_arr_get(v, (size_t)idx);
+        tok = strtok_r(NULL, ".", &save);
     }
     free(k);
     return v;
@@ -123,50 +171,85 @@ static yyjson_mut_val* resolve_mut_read(Config *cfg, const char *key) {
 
 const char* config_get_str(Config *cfg, const char *key, const char *fallback) {
     if (!cfg) return fallback;
+    pthread_mutex_lock(&cfg->lock);
+    const char *out = fallback;
     yyjson_mut_val *mv = resolve_mut_read(cfg, key);
-    if (mv && yyjson_mut_is_str(mv)) return yyjson_mut_get_str(mv);
-    yyjson_val *v = resolve(cfg, key);
-    if (!v || !yyjson_is_str(v)) return fallback;
-    return yyjson_get_str(v);
+    if (mv && yyjson_mut_is_str(mv)) {
+        out = yyjson_mut_get_str(mv);
+    } else {
+        yyjson_val *v = resolve(cfg, key);
+        if (v && yyjson_is_str(v)) out = yyjson_get_str(v);
+    }
+    pthread_mutex_unlock(&cfg->lock);
+    return out;
 }
 
 int config_get_int(Config *cfg, const char *key, int fallback) {
     if (!cfg) return fallback;
+    pthread_mutex_lock(&cfg->lock);
+    int out = fallback;
     yyjson_mut_val *mv = resolve_mut_read(cfg, key);
-    if (mv && yyjson_mut_is_int(mv)) return (int)yyjson_mut_get_int(mv);
-    yyjson_val *v = resolve(cfg, key);
-    if (!v || !yyjson_is_int(v)) return fallback;
-    return (int)yyjson_get_int(v);
+    if (mv && yyjson_mut_is_int(mv)) {
+        out = (int)yyjson_mut_get_int(mv);
+    } else {
+        yyjson_val *v = resolve(cfg, key);
+        if (v && yyjson_is_int(v)) out = (int)yyjson_get_int(v);
+    }
+    pthread_mutex_unlock(&cfg->lock);
+    return out;
 }
 
 bool config_get_bool(Config *cfg, const char *key, bool fallback) {
     if (!cfg) return fallback;
+    pthread_mutex_lock(&cfg->lock);
+    bool out = fallback;
     yyjson_mut_val *mv = resolve_mut_read(cfg, key);
-    if (mv && yyjson_mut_is_bool(mv)) return yyjson_mut_get_bool(mv);
-    yyjson_val *v = resolve(cfg, key);
-    if (!v || !yyjson_is_bool(v)) return fallback;
-    return yyjson_get_bool(v);
+    if (mv && yyjson_mut_is_bool(mv)) {
+        out = yyjson_mut_get_bool(mv);
+    } else {
+        yyjson_val *v = resolve(cfg, key);
+        if (v && yyjson_is_bool(v)) out = yyjson_get_bool(v);
+    }
+    pthread_mutex_unlock(&cfg->lock);
+    return out;
 }
 
 double config_get_double(Config *cfg, const char *key, double fallback) {
     if (!cfg) return fallback;
+    pthread_mutex_lock(&cfg->lock);
+    double out = fallback;
     yyjson_mut_val *mv = resolve_mut_read(cfg, key);
-    if (mv && yyjson_mut_is_num(mv)) return yyjson_mut_get_num(mv);
-    yyjson_val *v = resolve(cfg, key);
-    if (!v || !(yyjson_is_num(v))) return fallback;
-    return yyjson_get_num(v);
+    if (mv && yyjson_mut_is_num(mv)) {
+        out = yyjson_mut_get_num(mv);
+    } else {
+        yyjson_val *v = resolve(cfg, key);
+        if (v && yyjson_is_num(v)) out = yyjson_get_num(v);
+    }
+    pthread_mutex_unlock(&cfg->lock);
+    return out;
 }
 
 int config_get_array_size(Config *cfg, const char *key) {
     if (!cfg) return 0;
-    yyjson_val *v = resolve(cfg, key);
-    if (!v || !yyjson_is_arr(v)) return 0;
-    return (int)yyjson_arr_size(v);
+    pthread_mutex_lock(&cfg->lock);
+    int out = 0;
+    yyjson_mut_val *mv = resolve_mut_read(cfg, key);
+    if (mv && yyjson_mut_is_arr(mv)) {
+        out = (int)yyjson_mut_arr_size(mv);
+    } else {
+        yyjson_val *v = resolve(cfg, key);
+        if (v && yyjson_is_arr(v)) out = (int)yyjson_arr_size(v);
+    }
+    pthread_mutex_unlock(&cfg->lock);
+    return out;
 }
 
 bool config_has(Config *cfg, const char *key) {
     if (!cfg || !key) return false;
-    return resolve(cfg, key) != NULL;
+    pthread_mutex_lock(&cfg->lock);
+    bool out = resolve(cfg, key) != NULL;
+    pthread_mutex_unlock(&cfg->lock);
+    return out;
 }
 
 /* ── Mutable access (set + persist) ─────────────────── */
@@ -211,7 +294,8 @@ static yyjson_mut_val* resolve_mut_path(Config *cfg, yyjson_mut_doc *mdoc,
     if (!k) return NULL;
 
     yyjson_mut_val *v = root;
-    char *tok = strtok(k, ".");
+    char *save = NULL;
+    char *tok = strtok_r(k, ".", &save);
     char *prev = NULL;
     while (tok) {
         if (!yyjson_mut_is_obj(v)) { free(k); return NULL; }
@@ -226,7 +310,7 @@ static yyjson_mut_val* resolve_mut_path(Config *cfg, yyjson_mut_doc *mdoc,
             }
         }
         prev = tok;
-        tok = strtok(NULL, ".");
+        tok = strtok_r(NULL, ".", &save);
         if (tok) {
             v = next;
         } else {
@@ -242,62 +326,80 @@ static yyjson_mut_val* resolve_mut_path(Config *cfg, yyjson_mut_doc *mdoc,
 
 bool config_set_int(Config *cfg, const char *key, int value) {
     if (!cfg) return false;
-    yyjson_mut_doc *mdoc = config_mut_doc(cfg);
-    if (!mdoc) return false;
-    yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);
-    if (!root) return false;
+    pthread_mutex_lock(&cfg->lock);
+    bool ok = false;
+    do {
+        yyjson_mut_doc *mdoc = config_mut_doc(cfg);
+        if (!mdoc) break;
+        yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);
+        if (!root) break;
 
-    const char *leaf_key = NULL;
-    yyjson_mut_val *leaf = NULL;
-    yyjson_mut_val *parent = resolve_mut_path(cfg, mdoc, root, key,
-                                              &leaf_key, &leaf);
-    if (!parent || !leaf_key) return false;
+        const char *leaf_key = NULL;
+        yyjson_mut_val *leaf = NULL;
+        yyjson_mut_val *parent = resolve_mut_path(cfg, mdoc, root, key,
+                                                  &leaf_key, &leaf);
+        if (!parent || !leaf_key) break;
 
-    yyjson_mut_set_int(leaf, value);
-    return true;
+        yyjson_mut_set_int(leaf, value);
+        ok = true;
+    } while (0);
+    pthread_mutex_unlock(&cfg->lock);
+    return ok;
 }
 
 bool config_set_bool(Config *cfg, const char *key, bool value) {
     if (!cfg) return false;
-    yyjson_mut_doc *mdoc = config_mut_doc(cfg);
-    if (!mdoc) return false;
-    yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);
-    if (!root) return false;
+    pthread_mutex_lock(&cfg->lock);
+    bool ok = false;
+    do {
+        yyjson_mut_doc *mdoc = config_mut_doc(cfg);
+        if (!mdoc) break;
+        yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);
+        if (!root) break;
 
-    const char *leaf_key = NULL;
-    yyjson_mut_val *leaf = NULL;
-    yyjson_mut_val *parent = resolve_mut_path(cfg, mdoc, root, key,
-                                              &leaf_key, &leaf);
-    if (!parent || !leaf_key) return false;
+        const char *leaf_key = NULL;
+        yyjson_mut_val *leaf = NULL;
+        yyjson_mut_val *parent = resolve_mut_path(cfg, mdoc, root, key,
+                                                  &leaf_key, &leaf);
+        if (!parent || !leaf_key) break;
 
-    yyjson_mut_set_bool(leaf, value);
-    return true;
+        yyjson_mut_set_bool(leaf, value);
+        ok = true;
+    } while (0);
+    pthread_mutex_unlock(&cfg->lock);
+    return ok;
 }
 
 bool config_set_str(Config *cfg, const char *key, const char *value) {
     if (!cfg) return false;
-    yyjson_mut_doc *mdoc = config_mut_doc(cfg);
-    if (!mdoc) return false;
-    yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);
-    if (!root) return false;
+    pthread_mutex_lock(&cfg->lock);
+    bool ok = false;
+    do {
+        yyjson_mut_doc *mdoc = config_mut_doc(cfg);
+        if (!mdoc) break;
+        yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);
+        if (!root) break;
 
-    const char *leaf_key = NULL;
-    yyjson_mut_val *leaf = NULL;
-    yyjson_mut_val *parent = resolve_mut_path(cfg, mdoc, root, key,
-                                              &leaf_key, &leaf);
-    if (!parent || !leaf_key) return false;
+        const char *leaf_key = NULL;
+        yyjson_mut_val *leaf = NULL;
+        yyjson_mut_val *parent = resolve_mut_path(cfg, mdoc, root, key,
+                                                  &leaf_key, &leaf);
+        if (!parent || !leaf_key) break;
 
-    /* yyjson_mut_set_str only stores the pointer without copying.  Callers
-       may pass transient buffers (std::string::c_str() etc), so copy the
-       string into the doc arena instead of keeping a dangling reference.
-       The leaf node keeps its own tag/next chain — only payload (tag+uni)
-       is replaced, since the string data must outlive the caller's buffer. */
-    size_t len = value ? strlen(value) : 0;
-    yyjson_mut_val *nv = yyjson_mut_strncpy(mdoc, value, len);
-    if (!nv) return false;
-    leaf->tag = nv->tag;
-    leaf->uni = nv->uni;
-    return true;
+        /* yyjson_mut_set_str only stores the pointer without copying.  Callers
+           may pass transient buffers (std::string::c_str() etc), so copy the
+           string into the doc arena instead of keeping a dangling reference.
+           The leaf node keeps its own tag/next chain — only payload (tag+uni)
+           is replaced, since the string data must outlive the caller's buffer. */
+        size_t len = value ? strlen(value) : 0;
+        yyjson_mut_val *nv = yyjson_mut_strncpy(mdoc, value, len);
+        if (!nv) break;
+        leaf->tag = nv->tag;
+        leaf->uni = nv->uni;
+        ok = true;
+    } while (0);
+    pthread_mutex_unlock(&cfg->lock);
+    return ok;
 }
 
 /* ── Array access ───────────────────────────────────── */
@@ -313,9 +415,10 @@ static yyjson_mut_val* resolve_mut_arr(Config *cfg, yyjson_mut_doc *mdoc,
     char *k = strdup(key);
     if (!k) return NULL;
     yyjson_mut_val *v = root;
-    char *tok = strtok(k, ".");
+    char *save = NULL;
+    char *tok = strtok_r(k, ".", &save);
     while (tok) {
-        char *next = strtok(NULL, ".");
+        char *next = strtok_r(NULL, ".", &save);
         if (!yyjson_mut_is_obj(v)) { free(k); return NULL; }
         yyjson_mut_val *node = yyjson_mut_obj_get(v, tok);
         if (!node) {
@@ -338,70 +441,103 @@ static yyjson_mut_val* resolve_mut_arr(Config *cfg, yyjson_mut_doc *mdoc,
 
 bool config_array_push_str(Config *cfg, const char *key, const char *value) {
     if (!cfg || !value) return false;
-    yyjson_mut_doc *mdoc = config_mut_doc(cfg);
-    if (!mdoc) return false;
-    yyjson_mut_val *arr = resolve_mut_arr(cfg, mdoc, key);
-    if (!arr) return false;
-    yyjson_mut_val *strv = yyjson_mut_strncpy(mdoc, value, strlen(value));
-    if (!strv) return false;
-    return yyjson_mut_arr_add_val(arr, strv);
+    pthread_mutex_lock(&cfg->lock);
+    bool ok = false;
+    do {
+        yyjson_mut_doc *mdoc = config_mut_doc(cfg);
+        if (!mdoc) break;
+        yyjson_mut_val *arr = resolve_mut_arr(cfg, mdoc, key);
+        if (!arr) break;
+        yyjson_mut_val *strv = yyjson_mut_strncpy(mdoc, value, strlen(value));
+        if (!strv) break;
+        ok = yyjson_mut_arr_add_val(arr, strv);
+    } while (0);
+    pthread_mutex_unlock(&cfg->lock);
+    return ok;
 }
 
 bool config_array_remove(Config *cfg, const char *key, int idx) {
     if (!cfg || idx < 0) return false;
-    yyjson_mut_doc *mdoc = config_mut_doc(cfg);
-    if (!mdoc) return false;
-    yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);
-    if (!root) return false;
-    yyjson_mut_val *arr = NULL;
-    char *k = strdup(key);
-    if (!k) return false;
-    yyjson_mut_val *v = root;
-    char *tok = strtok(k, ".");
-    while (tok) {
-        if (!yyjson_mut_is_obj(v)) { free(k); return false; }
-        v = yyjson_mut_obj_get(v, tok);
-        if (!v) { free(k); return false; }
-        tok = strtok(NULL, ".");
-    }
-    free(k);
-    arr = yyjson_mut_is_arr(v) ? v : NULL;
-    if (!arr) return false;
-    size_t n = yyjson_mut_arr_size(arr);
-    if ((size_t)idx >= n) return false;
-    return yyjson_mut_arr_remove(arr, (size_t)idx) != NULL;
+    pthread_mutex_lock(&cfg->lock);
+    bool ok = false;
+    do {
+        yyjson_mut_doc *mdoc = config_mut_doc(cfg);
+        if (!mdoc) break;
+        yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);
+        if (!root) break;
+        char *k = strdup(key);
+        if (!k) break;
+        yyjson_mut_val *v = root;
+        char *save = NULL;
+        char *tok = strtok_r(k, ".", &save);
+        while (tok) {
+            if (!yyjson_mut_is_obj(v)) { v = NULL; break; }
+            v = yyjson_mut_obj_get(v, tok);
+            if (!v) break;
+            tok = strtok_r(NULL, ".", &save);
+        }
+        free(k);
+        yyjson_mut_val *arr = (v && yyjson_mut_is_arr(v)) ? v : NULL;
+        if (!arr) break;
+        size_t n = yyjson_mut_arr_size(arr);
+        if ((size_t)idx >= n) break;
+        ok = yyjson_mut_arr_remove(arr, (size_t)idx) != NULL;
+    } while (0);
+    pthread_mutex_unlock(&cfg->lock);
+    return ok;
 }
 
 bool config_save(Config *cfg) {
     if (!cfg || !cfg->path) return false;
-    yyjson_mut_doc *mdoc = config_mut_doc(cfg);
-    if (!mdoc) return false;
-    yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);
-    if (!root) return false;
-
-    /* Atomic write (tmp + rename): a direct "wb" overwrite can leave a
-       half-written config.json if the process is killed mid-write, which
-       then fails to parse on the next start and silently resets EVERY user
-       setting to defaults. rename() within the same directory is atomic, so
-       the config is always either the old complete version or the new
-       complete one — a crash leaves at worst a stray .tmp. */
-    char tmp[1280];
-    snprintf(tmp, sizeof(tmp), "%s.tmp", cfg->path);
-    FILE *fp = fopen_utf8(tmp, "wb");
-    if (!fp) {
-        LOG_WARN("Cannot write config file: %s", cfg->path);
-        return false;
-    }
+    pthread_mutex_lock(&cfg->lock);
+    bool ok = false;
     yyjson_write_err werr = {0};
-    bool ok = yyjson_mut_val_write_fp(fp, root, YYJSON_WRITE_PRETTY,
-                                      NULL, &werr);
-    if (ok) fflush(fp);
-    if (fclose(fp) != 0) ok = false;
-    if (ok) {
-        if (rename_utf8(tmp, cfg->path) != 0) { remove_utf8(tmp); ok = false; }
-    } else {
-        remove_utf8(tmp);
-    }
+    do {
+        yyjson_mut_doc *mdoc = config_mut_doc(cfg);
+        if (!mdoc) break;
+        yyjson_mut_val *root = yyjson_mut_doc_get_root(mdoc);
+        if (!root) break;
+
+        /* Atomic write (tmp + rename): a direct "wb" overwrite can leave a
+           half-written config.json if the process is killed mid-write, which
+           then fails to parse on the next start and silently resets EVERY user
+           setting to defaults. rename() within the same directory is atomic, so
+           the config is always either the old complete version or the new
+           complete one — a crash leaves at worst a stray .tmp.
+           The temp name carries the pid so netune and netune-config cannot
+           interleave writes into the same scratch file. */
+        char tmp[1400];
+#ifdef _WIN32
+        int tn = snprintf(tmp, sizeof(tmp), "%s.tmp", cfg->path);
+#else
+        int tn = snprintf(tmp, sizeof(tmp), "%s.tmp.%ld", cfg->path,
+                          (long)getpid());
+#endif
+        if (tn < 0 || tn >= (int)sizeof(tmp)) {
+            LOG_WARN("Config path too long: %s", cfg->path);
+            break;
+        }
+        FILE *fp = fopen_utf8(tmp, "wb");
+        if (!fp) {
+            LOG_WARN("Cannot write config file: %s", cfg->path);
+            break;
+        }
+        ok = yyjson_mut_val_write_fp(fp, root, YYJSON_WRITE_PRETTY,
+                                     NULL, &werr);
+        if (ok && fflush(fp) != 0) ok = false;
+#ifdef _WIN32
+        if (ok && _commit(_fileno(fp)) != 0) ok = false;
+#else
+        if (ok && fsync(fileno(fp)) != 0) ok = false;
+#endif
+        if (fclose(fp) != 0) ok = false;
+        if (ok) {
+            if (rename_utf8(tmp, cfg->path) != 0) { remove_utf8(tmp); ok = false; }
+        } else {
+            remove_utf8(tmp);
+        }
+    } while (0);
+    pthread_mutex_unlock(&cfg->lock);
     if (!ok) LOG_WARN("Failed to serialize config to: %s (code=%d %s)",
                        cfg->path, werr.code, werr.msg ? werr.msg : "");
     return ok;

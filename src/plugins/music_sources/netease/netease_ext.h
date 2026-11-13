@@ -113,6 +113,8 @@ typedef struct NeteaseExt {
                            const char *title, const char *artist,
                            char *used_level, size_t used_sz,
                            netease_download_progress prog, void *ud);
+    /* Abort an in-flight download_song() (best effort). */
+    void (*download_cancel)(void);
     int  (*check_quality)(const char *song_id, const char *level, int *granted);
     /* official download endpoint URL probe — the authority for "can I
        download this tier": 0 = a real url is served (code 200), -1 = denied

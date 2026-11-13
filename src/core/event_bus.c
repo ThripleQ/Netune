@@ -45,10 +45,9 @@ int event_bus_init(void) {
 }
 
 void event_bus_shutdown(void) {
-    g_running = false;
-
-    /* drain queue */
     pthread_mutex_lock(&g_queue_mutex);
+    g_running = false;
+    /* drain queue */
     EventNode *node = g_queue_head;
     while (node) {
         EventNode *next = node->next;
@@ -58,6 +57,12 @@ void event_bus_shutdown(void) {
     }
     g_queue_head = g_queue_tail = NULL;
     pthread_mutex_unlock(&g_queue_mutex);
+
+    /* Nobody may dispatch after this point; drop stale subscriptions so a
+       later init starts clean. */
+    pthread_mutex_lock(&g_sub_mutex);
+    memset(g_subscribers, 0, sizeof(g_subscribers));
+    pthread_mutex_unlock(&g_sub_mutex);
 
     LOG_INFO("Event bus shutdown");
 }
@@ -105,6 +110,14 @@ int event_bus_publish(EventType type, void *data, size_t data_size) {
     }
 
     pthread_mutex_lock(&g_queue_mutex);
+    /* Serialize the running check with shutdown's drain: a publisher that
+       checked before shutdown must not append to the queue afterwards. */
+    if (!g_running) {
+        pthread_mutex_unlock(&g_queue_mutex);
+        free(node->event.data);
+        free(node);
+        return -1;
+    }
     if (!g_queue_tail) {
         g_queue_head = g_queue_tail = node;
     } else {
@@ -133,12 +146,17 @@ void event_bus_poll(void) {
 
         EventType type = node->event.type;
 
+        /* Snapshot the subscriber list, then dispatch without the registry
+           lock: a callback is allowed to subscribe/unsubscribe. */
+        SubscriberList snapshot;
         pthread_mutex_lock(&g_sub_mutex);
-        SubscriberList *list = &g_subscribers[type];
-        for (int i = 0; i < list->count; i++) {
-            list->subs[i].callback(&node->event, list->subs[i].user_data);
-        }
+        snapshot = g_subscribers[type];
         pthread_mutex_unlock(&g_sub_mutex);
+
+        for (int i = 0; i < snapshot.count; i++) {
+            snapshot.subs[i].callback(&node->event,
+                                      snapshot.subs[i].user_data);
+        }
 
         free(node->event.data);
         free(node);

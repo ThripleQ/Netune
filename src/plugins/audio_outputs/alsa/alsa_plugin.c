@@ -1,6 +1,7 @@
 #include "core/audio_output.h"
 #include "infra/log.h"
 #include <stdlib.h>
+#include <time.h>
 #include <alsa/asoundlib.h>
 
 static snd_pcm_t *g_pcm = NULL;
@@ -59,13 +60,19 @@ static int alsa_init(const AudioConfig *cfg) {
 
     snd_pcm_hw_params_alloca(&hw);
     snd_pcm_hw_params_any(g_pcm, hw);
-    snd_pcm_hw_params_set_access(g_pcm, hw, SND_PCM_ACCESS_RW_INTERLEAVED);
-    snd_pcm_hw_params_set_format(g_pcm, hw, SND_PCM_FORMAT_S16_LE);
+    if (snd_pcm_hw_params_set_access(g_pcm, hw, SND_PCM_ACCESS_RW_INTERLEAVED) < 0 ||
+        snd_pcm_hw_params_set_format(g_pcm, hw, SND_PCM_FORMAT_S16_LE) < 0) {
+        LOG_ERROR("ALSA: unsupported access/format");
+        snd_pcm_close(g_pcm); g_pcm = NULL;
+        return -1;
+    }
 
     unsigned int rate = (unsigned int)cfg->sample_rate;
     unsigned int ch   = (unsigned int)cfg->channels;
-    snd_pcm_hw_params_set_rate_near(g_pcm, hw, &rate, NULL);
-    snd_pcm_hw_params_set_channels_near(g_pcm, hw, &ch);
+    int rrc = snd_pcm_hw_params_set_rate_near(g_pcm, hw, &rate, NULL);
+    if (rrc < 0) { LOG_ERROR("ALSA: no usable rate: %s", snd_strerror(rrc)); snd_pcm_close(g_pcm); g_pcm = NULL; return -1; }
+    rrc = snd_pcm_hw_params_set_channels_near(g_pcm, hw, &ch);
+    if (rrc < 0) { LOG_ERROR("ALSA: no usable channel count: %s", snd_strerror(rrc)); snd_pcm_close(g_pcm); g_pcm = NULL; return -1; }
 
     /* Small buffer: keeps drain-on-teardown short (~93ms @ 44.1kHz) so
        track switches don't click AND don't stall on the drain. */
@@ -90,13 +97,47 @@ static void alsa_shutdown(void) {
 }
 
 static int alsa_write(const uint8_t *data, size_t bytes) {
-    if (!g_pcm) return -1;
-    snd_pcm_uframes_t frames = (snd_pcm_uframes_t)(bytes / (g_channels * 2));
-    int rc = snd_pcm_writei(g_pcm, data, frames);
-    if (rc == -EPIPE) { snd_pcm_prepare(g_pcm); rc = (int)snd_pcm_writei(g_pcm, data, frames); }
-    else if (rc == -ESTRPIPE) { while (snd_pcm_resume(g_pcm) == -EAGAIN); rc = (int)snd_pcm_writei(g_pcm, data, frames); }
-    if (rc < 0) { LOG_ERROR("ALSA write error: %s", snd_strerror(rc)); return rc; }
-    return rc;
+    if (!g_pcm || g_channels <= 0) return -1;
+    const size_t frame_bytes = (size_t)g_channels * 2;
+    snd_pcm_uframes_t total = (snd_pcm_uframes_t)(bytes / frame_bytes);
+    snd_pcm_uframes_t done = 0;
+    unsigned suspends = 0;
+
+    /* snd_pcm_writei may accept fewer frames than asked (or none while an
+       underrun/pause is being recovered). Dropping the remainder here would
+       put audible gaps in the stream, so keep writing until it is drained. */
+    while (done < total) {
+        snd_pcm_sframes_t rc = snd_pcm_writei(
+            g_pcm, data + done * frame_bytes, total - done);
+        if (rc == -EPIPE) {
+            snd_pcm_prepare(g_pcm);
+            suspends = 0;
+            continue;
+        }
+        if (rc == -ESTRPIPE) {
+            int r = snd_pcm_resume(g_pcm);
+            if (r == -EAGAIN) {
+                /* Device is still suspended; wait instead of busy-spinning. */
+                if (++suspends > 100) {
+                    LOG_WARN("ALSA resume stuck; re-preparing");
+                    snd_pcm_prepare(g_pcm);
+                } else {
+                    struct timespec ts = {0, 10 * 1000 * 1000};
+                    nanosleep(&ts, NULL);
+                }
+                continue;
+            }
+            if (r < 0) snd_pcm_prepare(g_pcm);
+            suspends = 0;
+            continue;
+        }
+        if (rc < 0) {
+            LOG_ERROR("ALSA write error: %s", snd_strerror((int)rc));
+            return done > 0 ? (int)done : (int)rc;
+        }
+        done += (snd_pcm_uframes_t)rc;
+    }
+    return (int)done;
 }
 
 static int alsa_start(void) { return g_pcm ? (snd_pcm_start(g_pcm) == 0 ? 0 : -1) : -1; }
@@ -116,6 +157,7 @@ static int alsa_set_volume(int vol) {
 
 static int alsa_get_volume(void) {
     if (mixer_init() < 0 || !g_mixer_elem) return -1;
+    if (g_mixer_max <= g_mixer_min) return -1;
     long hw_vol;
     if (snd_mixer_selem_get_playback_volume(g_mixer_elem, SND_MIXER_SCHN_MONO, &hw_vol) < 0)
         return -1;
@@ -126,9 +168,10 @@ static int alsa_get_volume(void) {
 }
 
 static int alsa_get_delay_us(uint64_t *delay_us) {
-    if (!g_pcm || !delay_us) return -1;
+    if (!g_pcm || !delay_us || g_sample_rate <= 0) return -1;
     snd_pcm_sframes_t delay;
     if (snd_pcm_delay(g_pcm, &delay) < 0) return -1;
+    if (delay < 0) delay = 0;
     *delay_us = (uint64_t)delay * 1000000 / g_sample_rate;
     return 0;
 }
