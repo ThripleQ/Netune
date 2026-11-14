@@ -237,6 +237,13 @@ static int         g_login_poll_tick = 0;
    background when the QR screen opens; the render loop places it over
    the login layout when ready. */
 static CoverData    g_login_qr = {0};
+
+/* Consecutive "unplayable track" skips; cleared as soon as audio really
+   progresses. Without this, Track loop retries the same dead song
+   forever, and Playlist/Shuffle wrap around the whole queue endlessly
+   (e.g. a search result full of VIP-only songs while logged out). */
+static int          g_unplayable_streak = 0;
+
 static std::atomic<int>      g_login_qr_ready{0};
 static std::atomic<uint64_t> g_login_qr_stamp{0};
 /* Async QR poll: every netease-cli call can block for seconds, so polling
@@ -1346,6 +1353,7 @@ static void ev_progress(const BusEvent *ev, void *data) {
     auto &store = StateStore::instance();
     if (store.state().playback_state == PlaybackState::Stopped)
         return;
+    g_unplayable_streak = 0;  /* audio flows: the queue recovered */
     if (ev->data_size == sizeof(int[4])) {
         int *p = (int*)ev->data;
         double prog = (p[1] > 0) ? (double)p[0] / p[1] : 0.0;
@@ -1388,6 +1396,7 @@ static void ev_playback_resume(const BusEvent *ev, void *data) {
 }
 static void ev_playback_stop(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
+    g_unplayable_streak = 0;
     StateStore::instance().set_playback_state(PlaybackState::Stopped);
     StateStore::instance().set_current_song(SongInfo{});
     StateStore::instance().set_current_quality("");
@@ -1396,7 +1405,12 @@ static void ev_playback_stop(const BusEvent *ev, void *data) {
     StateStore::instance().set_lyric_mode(false);
 }
 static void ev_playback_error(const BusEvent *ev, void *data) {
-    (void)ev; (void)data; LOG_WARN("Playback error"); StateStore::instance().set_playback_state(PlaybackState::Stopped); StateStore::instance().set_progress(0,0,0);
+    (void)ev; (void)data;
+    LOG_WARN("Playback error");
+    g_unplayable_streak = 0;
+    StateStore::instance().set_playback_state(PlaybackState::Stopped);
+    StateStore::instance().set_progress(0,0,0);
+    StateStore::instance().set_app_notice("\u64AD\u653E\u5931\u8D25", 2);
 }
 /* ── Play the queue song at `idx` (shared by finish/next/prev) ──
    Returns true if playback was started. Assumes idx is a valid
@@ -1484,14 +1498,40 @@ static void ev_playback_finish(const BusEvent *ev, void *data) {
     play_queue_index(next);
 }
 
+static void stop_unplayable(void) {
+    auto &store = StateStore::instance();
+    const char *t = store.state().current_song.title;
+    std::string title = (t && t[0]) ? t : "";
+    store.set_playback_state(PlaybackState::Stopped);
+    store.set_app_notice(
+        (title.empty() ? std::string("\u65E0\u6CD5\u64AD\u653E\u6B64\u6B4C\u66F2")
+                       : "\u65E0\u6CD5\u64AD\u653E\uFF1A" + title) +
+            " \uFF08\u65E0\u7248\u6743\uFF0C\u6216\u9700\u8981\u767B\u5F55/"
+            "\u4F1A\u5458\uFF09",
+        2);
+}
+
 /* A track could not be played (no copyright / no stream URL) — auto
    advance to the next track so listening isn't interrupted. */
 static void ev_playback_skip(const BusEvent *ev, void *data) {
     (void)ev; (void)data;
     auto &store = StateStore::instance();
+    const AppState &cur = store.state();
+    int qn = (int)cur.playback_queue.size();
+    g_unplayable_streak++;
+    /* Track loop replays the same index; loop modes wrap around the
+       queue. After one full pass of dead tracks there is nothing left
+       to try — stop and tell the user instead of spinning. */
+    if (cur.loop_mode == LoopMode::Track ||
+        (qn > 0 && g_unplayable_streak >= qn)) {
+        g_unplayable_streak = 0;
+        stop_unplayable();
+        return;
+    }
     int next = store.queue_advance();
     if (next < 0) {
-        store.set_playback_state(PlaybackState::Stopped);
+        g_unplayable_streak = 0;
+        stop_unplayable();
         return;
     }
     const SongInfo *song = store.queue_current();
@@ -2183,8 +2223,9 @@ int run_app(int argc, char **argv) {
                     "Scanned. Confirm in Netease Music App...", s.login_qr);
                 StateStore::instance().set_login_net_error(0);
             } else {
-                /* -1: poll failed (network/cli) — show it, keep retrying */
-                StateStore::instance().set_login_net_error(1);
+                /* rc 1 = code 801 (still waiting for a scan) — normal.
+                   Only -1 (request/parse failed) is a real error. */
+                StateStore::instance().set_login_net_error(rc < 0 ? 1 : 0);
             }
         }
         if (s.login_state == 2 &&
@@ -2258,8 +2299,15 @@ int run_app(int argc, char **argv) {
             else if (s.app_notice_kind == 2) txt = theme_error(txt);
             else if (s.app_notice_kind == 3) txt = theme_warning(txt);
             else                             txt = txt | dim;
+            /* Sized to the full height the filler works, but inside a
+               dbox the odd LESS_THAN 2 clamp pinned the row to the TOP.
+               Pin the container to screen_height-1 so the notice lands
+               on the row above the status bar. */
+            int nh = s.screen_height - 1;
+            if (nh < 1) nh = 1;
             auto notice = vbox({filler(),
-                hbox({filler(), txt, filler()})}) | size(HEIGHT, LESS_THAN, 2);
+                hbox({filler(), txt, filler()})})
+                | size(HEIGHT, EQUAL, nh) | flex;
             return dbox({main, notice});
         }
 

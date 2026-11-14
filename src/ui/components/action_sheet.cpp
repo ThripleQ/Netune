@@ -267,6 +267,8 @@ Element render_action_sheet(const AppState &s) {
        corner meets the list's border corner seamlessly. */
     int n = s.screen_height - 4;
     if (n < 3) n = 3;
+    /* flex is required: as a dbox child this vbox otherwise collapses to
+       zero width (the nested hbox's filler has no intrinsic width). */
     return vbox({filler(), hbox({filler(), box})})
-        | size(HEIGHT, LESS_THAN, n);
+        | size(HEIGHT, LESS_THAN, n) | flex;
 }

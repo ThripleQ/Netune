@@ -13,6 +13,9 @@
 #include <string.h>
 #include <time.h>
 
+#include <cctype>
+#include <cstdint>
+#include <cstdio>
 #include <string>
 
 #include "core/event_bus.h"
@@ -126,11 +129,30 @@ static void append_variant_artist(DBusMessageIter *dict, const std::string &arti
 }
 
 /* ── Build Metadata a{sv} ──────────────────────────── */
+/* mpris:trackid must be a valid D-Bus object path. Netease ids are plain
+   numbers, but local sources use file paths as ids — those contain '/',
+   spaces and dots, which libdbus rejects (and players choke on). Map
+   anything that is not a plain path element to a stable FNV-1a digest. */
+static std::string trackid_path(const std::string &id) {
+    bool plain = !id.empty();
+    for (unsigned char c : id) {
+        if (!(std::isalnum(c) || c == '_')) { plain = false; break; }
+    }
+    if (plain) return "/netune/" + id;
+
+    uint64_t h = 1469598103934665603ULL;
+    for (unsigned char c : id) { h ^= c; h *= 1099511628211ULL; }
+    char buf[40];
+    snprintf(buf, sizeof buf, "/netune/track_%016llx",
+             (unsigned long long)h);
+    return buf;
+}
+
 static void fill_metadata(DBusMessageIter *dict) {
     pthread_mutex_lock(&g_mutex);
 
     if (!g_track_id.empty()) {
-        std::string trackid = "/netune/" + g_track_id;
+        std::string trackid = trackid_path(g_track_id);
         append_variant_string(dict, "mpris:trackid", trackid);
     }
     if (!g_title.empty())
@@ -190,6 +212,7 @@ static void handle_get_all(DBusMessage *msg) {
     const char *loop = (g_loop_mode == 1) ? "Track" :
                        (g_loop_mode == 2) ? "Playlist" : "None";
     append_variant_string(&dict, "LoopStatus", loop);
+    int64_t position_us = position_us_locked();
     pthread_mutex_unlock(&g_mutex);
 
     dbus_bool_t btrue = TRUE;
@@ -204,9 +227,7 @@ static void handle_get_all(DBusMessage *msg) {
     double volume = g_muted ? 0.0 : (double)g_volume_pct / 100.0;
     pthread_mutex_unlock(&g_mutex);
     append_variant_double(&dict, "Volume", volume);
-    pthread_mutex_lock(&g_mutex);
-    append_variant_int64(&dict, "Position", g_position_us);
-    pthread_mutex_unlock(&g_mutex);
+    append_variant_int64(&dict, "Position", position_us);
     append_variant_double(&dict, "MinimumRate", rate);
     append_variant_double(&dict, "MaximumRate", rate);
     append_variant_bool(&dict, "CanGoNext", btrue);
@@ -284,6 +305,50 @@ static void handle_get(DBusMessage *msg) {
         dbus_message_iter_open_container(&out, DBUS_TYPE_VARIANT,
                                          DBUS_TYPE_STRING_AS_STRING, &variant);
         dbus_message_iter_append_basic(&variant, DBUS_TYPE_STRING, &v);
+        found = true;
+    } else if (strcmp(prop, "Metadata") == 0) {
+        dbus_message_iter_open_container(&out, DBUS_TYPE_VARIANT,
+            DBUS_TYPE_ARRAY_AS_STRING
+            DBUS_DICT_ENTRY_BEGIN_CHAR_AS_STRING
+            DBUS_TYPE_STRING_AS_STRING
+            DBUS_TYPE_VARIANT_AS_STRING
+            DBUS_DICT_ENTRY_END_CHAR_AS_STRING, &variant);
+        DBusMessageIter dict;
+        dbus_message_iter_open_container(&variant, DBUS_TYPE_ARRAY,
+            DBUS_DICT_ENTRY_BEGIN_CHAR_AS_STRING
+            DBUS_TYPE_STRING_AS_STRING
+            DBUS_TYPE_VARIANT_AS_STRING
+            DBUS_DICT_ENTRY_END_CHAR_AS_STRING, &dict);
+        fill_metadata(&dict);
+        dbus_message_iter_close_container(&variant, &dict);
+        found = true;
+    } else if (strcmp(prop, "Rate") == 0 ||
+               strcmp(prop, "MinimumRate") == 0 ||
+               strcmp(prop, "MaximumRate") == 0) {
+        double v = 1.0;
+        dbus_message_iter_open_container(&out, DBUS_TYPE_VARIANT,
+                                         DBUS_TYPE_DOUBLE_AS_STRING, &variant);
+        dbus_message_iter_append_basic(&variant, DBUS_TYPE_DOUBLE, &v);
+        found = true;
+    } else if (strcmp(prop, "CanGoNext") == 0 ||
+               strcmp(prop, "CanGoPrevious") == 0 ||
+               strcmp(prop, "CanPlay") == 0 ||
+               strcmp(prop, "CanPause") == 0 ||
+               strcmp(prop, "CanSeek") == 0 ||
+               strcmp(prop, "CanControl") == 0) {
+        dbus_bool_t b = TRUE;
+        dbus_message_iter_open_container(&out, DBUS_TYPE_VARIANT,
+                                         DBUS_TYPE_BOOLEAN_AS_STRING, &variant);
+        dbus_message_iter_append_basic(&variant, DBUS_TYPE_BOOLEAN, &b);
+        found = true;
+    } else if (strcmp(prop, "SupportedUriSchemes") == 0 ||
+               strcmp(prop, "SupportedMimeTypes") == 0) {
+        dbus_message_iter_open_container(&out, DBUS_TYPE_VARIANT,
+            DBUS_TYPE_ARRAY_AS_STRING DBUS_TYPE_STRING_AS_STRING, &variant);
+        DBusMessageIter arr;
+        dbus_message_iter_open_container(&variant, DBUS_TYPE_ARRAY,
+                                         DBUS_TYPE_STRING_AS_STRING, &arr);
+        dbus_message_iter_close_container(&variant, &arr);
         found = true;
     } else if (strcmp(prop, "Volume") == 0) {
         double v = muted ? 0.0 : (double)volume_pct / 100.0;

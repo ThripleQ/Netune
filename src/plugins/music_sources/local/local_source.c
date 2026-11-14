@@ -135,6 +135,21 @@ static void scan_dir(const char *dir_path, SongArray *arr, int depth) {
     closedir(dir);
 }
 
+/* readdir order is filesystem-dependent (looked shuffled: 05,04,03,
+   02,01,06). Sort by title, then full path, so the library is stable
+   across scans. */
+static int song_cmp(const void *pa, const void *pb) {
+    const SongInfo *a = (const SongInfo *)pa;
+    const SongInfo *b = (const SongInfo *)pb;
+    const char *at = (a->title && a->title[0]) ? a->title
+                    : path_basename(a->id);
+    const char *bt = (b->title && b->title[0]) ? b->title
+                    : path_basename(b->id);
+    int c = strcasecmp(at ? at : "", bt ? bt : "");
+    if (c) return c;
+    return strcasecmp(a->id ? a->id : "", b->id ? b->id : "");
+}
+
 static void song_array_free(SongArray *a) {
     for (int i = 0; i < a->count; i++)
         song_info_free(&a->items[i]);
@@ -201,6 +216,9 @@ static void ensure_cache(void) {
                 }
             }
         }
+        if (fresh.count > 1)
+            qsort(fresh.items, (size_t)fresh.count, sizeof(SongInfo),
+                  song_cmp);
         LOG_INFO("Local source cache: %d songs scanned", fresh.count);
 
         pthread_mutex_lock(&g_cache_mutex);
