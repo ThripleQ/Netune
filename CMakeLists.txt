@@ -570,7 +570,7 @@ else()
   # a pinned commit would stop resolving the moment main moves past it, so
   # the pin is only safe with a full clone. The repository is ~2.4 MB, so
   # the extra history costs little.
-  set(NETUNE_LIBNETEASE_TAG d1f526b21faad93ddc107627abf3f2b0c6cf23e5)  # main @ 2026-10-24
+  set(NETUNE_LIBNETEASE_TAG c75b2c63aa298bf262346e417c8c7eedf4ad14f2)  # main @ 2026-11-14
   message(STATUS "netease-cli: building libnetease (C) port @ ${NETUNE_LIBNETEASE_TAG}")
   FetchContent_Declare(libnetease
     GIT_REPOSITORY https://github.com/ThripleQ/libnetease.git

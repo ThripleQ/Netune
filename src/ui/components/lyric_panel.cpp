@@ -13,7 +13,12 @@
 #include <cstdint>
 using namespace ftxui;
 
-static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
+/* Active line rests in the upper-middle of the view (karaoke convention),
+   not at the exact vertical center. */
+static constexpr float LYRIC_FOCUS_POS = 0.35f;
+
+static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w,
+                             int view_h) {
     if (!ly || ly->count == 0)
         return text("  No lyrics") | dim | center;
 
@@ -74,7 +79,18 @@ static Element render_lyrics(const Lyrics *ly, int play_time_ms, int col_w) {
         }
     }
 
-    return vbox(std::move(lines)) | yframe;
+    /* yframe centers the focused box; bias the focus point so the active
+       line lands at LYRIC_FOCUS_POS of the viewport instead. The active
+       entry is a 2-row vbox (text + karaoke bar), hence count + 1 rows. */
+    float y_rel = 0.5f;
+    if (view_h > 0) {
+        float point_y = (float)base + (float)view_h * (0.5f - LYRIC_FOCUS_POS);
+        y_rel = point_y / (float)(ly->count + 1);
+        if (y_rel < 0.0f) y_rel = 0.0f;
+        if (y_rel > 1.0f) y_rel = 1.0f;
+    }
+
+    return vbox(std::move(lines)) | focusPositionRelative(0.5f, y_rel) | yframe;
 }
 
 /* ── Cover ───────────────────────────────────────────────── */
@@ -281,7 +297,7 @@ Element render_lyrics_only(const AppState &s) {
     int lw = total - cw - 1;
     if (lw < 20) lw = 20;
     int h = cover_panel_height(s);
-    return render_lyrics(s.lyrics, s.current_time_ms, lw) |
+    return render_lyrics(s.lyrics, s.current_time_ms, lw, h) |
            size(WIDTH, EQUAL, lw) | size(HEIGHT, EQUAL, h);
 }
 
